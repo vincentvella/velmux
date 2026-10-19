@@ -108,14 +108,22 @@ pub struct Plan {
 #[derive(Debug)]
 pub struct PlanView {
     pub label: String,
-    pub base: PathBuf,
-    pub slot: Option<String>,
-    /// The location's root folder (base checkout or slot).
+    pub target: Target,
+    /// The location's root folder (base checkout, slot, or plain folder).
     pub root: PathBuf,
     /// Leaves are herdr pane ids, remapped when the panes are created.
     pub layout: Layout,
     pub zoomed: Option<u64>,
     pub panes: Vec<PlanPane>,
+}
+
+/// Where an imported workspace lands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    /// A git repo's base checkout or one of its slots.
+    Repo { base: PathBuf, slot: Option<String> },
+    /// A folder outside any repo, grouped under "unclassified" by `id`.
+    Folder { id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +162,7 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
     let snapshot: Snapshot = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     let mut plan = Plan { views: Vec::new(), skipped: Vec::new() };
     let mut seen: Vec<(PathBuf, Option<String>)> = Vec::new();
+    let mut folder_ids: Vec<String> = Vec::new();
 
     for (n, ws) in snapshot.workspaces.into_iter().enumerate() {
         let Workspace { custom_name, identity_cwd, worktree_space, mut tabs, active_tab, layout, panes, zoomed, focused } = ws;
@@ -176,27 +185,49 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
             plan.skipped.push((label, "no folder".into()));
             continue;
         };
-        let Ok(pool) = Pool::discover(env.clone(), &anchor) else {
-            plan.skipped.push((label, format!("{} is not in a git repo", anchor.display())));
-            continue;
-        };
-        let slot = pool.slot_of(&anchor).ok().flatten();
-        let key = (pool.base.clone(), slot.clone());
-        if seen.contains(&key) {
-            plan.skipped.push((label, "another herdr workspace already maps to this location".into()));
-            continue;
-        }
-        seen.push(key);
-        let root = match &slot {
-            Some(id) => pool.status()?.into_iter().find(|s| &s.id == id).map(|s| s.path).unwrap_or_else(|| pool.base.clone()),
-            None => pool.base.clone(),
+        let (target, root) = match Pool::discover(env.clone(), &anchor) {
+            Ok(pool) => {
+                let slot = pool.slot_of(&anchor).ok().flatten();
+                let key = (pool.base.clone(), slot.clone());
+                if seen.contains(&key) {
+                    plan.skipped.push((label, "another herdr workspace already maps to this location".into()));
+                    continue;
+                }
+                seen.push(key);
+                let root = match &slot {
+                    Some(id) => pool.status()?.into_iter().find(|s| &s.id == id).map(|s| s.path).unwrap_or_else(|| pool.base.clone()),
+                    None => pool.base.clone(),
+                };
+                (Target::Repo { base: pool.base.clone(), slot }, root)
+            }
+            Err(_) if anchor.is_dir() => {
+                // Not a repo: keep it, grouped under "unclassified" by a unique name.
+                let mut id = label.clone();
+                let mut n = 2;
+                while folder_ids.contains(&id) {
+                    id = format!("{label}-{n}");
+                    n += 1;
+                }
+                folder_ids.push(id.clone());
+                (Target::Folder { id }, anchor.clone())
+            }
+            Err(_) => {
+                plan.skipped.push((label, format!("{} no longer exists", anchor.display())));
+                continue;
+            }
         };
 
         let leaves = leaves(&tab.layout);
-        let panes = leaves
+        let mut panes = leaves
             .iter()
             .filter_map(|id| tab.panes.get(id).map(|p| plan_pane(*id as u64, p, &root)))
             .collect::<Vec<_>>();
+        for p in &mut panes {
+            if p.resume.as_ref().is_some_and(|id| !claude::session_exists(&env.claude_dir, id)) {
+                p.resume = None;
+                p.note = Some("recorded Claude session no longer exists; starts fresh".into());
+            }
+        }
         if panes.is_empty() {
             plan.skipped.push((label, "no panes".into()));
             continue;
@@ -205,7 +236,7 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
         if extra_tabs > 0 {
             plan.skipped.push((label.clone(), format!("{extra_tabs} other tab(s); velmux has one layout per location")));
         }
-        plan.views.push(PlanView { label, base: pool.base.clone(), slot, root, layout: convert(&tab.layout), zoomed, panes });
+        plan.views.push(PlanView { label, target, root, layout: convert(&tab.layout), zoomed, panes });
     }
     if with_latest_claude {
         add_latest_claude(&mut plan, env);
@@ -215,17 +246,32 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
 
 fn add_latest_claude(plan: &mut Plan, env: &Env) {
     let mut taken: Vec<String> = plan.views.iter().flat_map(|v| &v.panes).filter_map(|p| p.resume.clone()).collect();
+    let before = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
     for v in &mut plan.views {
-        if v.panes.iter().any(|p| p.kind == Kind::Agent && p.command.is_none()) {
+        if v.panes.iter().any(|p| p.kind == Kind::Agent && p.command.is_none() && p.resume.is_some()) {
             continue;
         }
-        let Some(found) = claude::newest_under(&env.claude_dir, &v.root, &taken) else { continue };
+        let search = claude::Search {
+            root: &v.root,
+            // A plain folder like `~` contains everything; only take conversations held there.
+            subfolders: matches!(v.target, Target::Repo { .. }),
+            before,
+            exclude: &taken,
+        };
+        let Some(found) = claude::newest_under(&env.claude_dir, &search) else { continue };
         taken.push(found.id.clone());
+        let title: String = found.title.clone().unwrap_or_default().chars().take(48).collect();
+        let ago = age(found.modified);
+        // A Claude pane with nothing to resume picks the conversation up itself.
+        if let Some(p) = v.panes.iter_mut().find(|p| p.kind == Kind::Agent && p.command.is_none()) {
+            p.resume = Some(found.id);
+            p.note = Some(format!("resumes latest Claude: \"{title}\" ({ago} ago)"));
+            continue;
+        }
         let id = v.layout.leaves().into_iter().max().unwrap_or(0) + 1;
         let old = std::mem::replace(&mut v.layout, Layout::Leaf(0));
         v.layout = Layout::Split { dir: Dir::Right, ratio: 0.5, a: Box::new(old), b: Box::new(Layout::Leaf(id)) };
-        let title: String = found.title.unwrap_or_default().chars().take(48).collect();
-        let note = format!("latest Claude: \"{title}\" ({} ago)", age(found.modified));
+        let note = format!("adds latest Claude: \"{title}\" ({ago} ago)");
         v.panes.push(PlanPane {
             id,
             kind: Kind::Agent,
@@ -316,17 +362,23 @@ impl Plan {
     pub fn describe(&self) -> String {
         let mut out = String::new();
         for v in &self.views {
-            let place = v.slot.as_deref().unwrap_or("base");
+            let place = match &v.target {
+                Target::Repo { base, slot } => format!(
+                    "{} › {}",
+                    base.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
+                    slot.as_deref().unwrap_or("base")
+                ),
+                Target::Folder { id } => format!("unclassified › {id} ({})", v.root.display()),
+            };
             let agents = v.panes.iter().filter(|p| p.kind == Kind::Agent).count();
             let resumes = v.panes.iter().filter(|p| p.resume.is_some()).count();
             out.push_str(&format!(
-                "  + {} → {} › {place}: {} pane(s), {agents} agent(s), {resumes} Claude resume(s)\n",
+                "  + {} → {place}: {} pane(s), {agents} agent(s), {resumes} Claude resume(s)\n",
                 v.label,
-                v.base.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
                 v.panes.len()
             ));
             for note in v.panes.iter().filter_map(|p| p.note.as_ref()) {
-                out.push_str(&format!("      ↳ adds {note}\n"));
+                out.push_str(&format!("      ↳ {note}\n"));
             }
         }
         for (label, why) in &self.skipped {
@@ -392,11 +444,19 @@ mod tests {
         let file = root.join("session.json");
         std::fs::write(&file, session.to_string()).unwrap();
         let env = Env { global_config: root.join("none.toml"), claude_dir: root.join("claude") };
+        // herdr's recorded session must still exist for it to be resumed.
+        let pdir = claude::project_dir(&env.claude_dir, &repo);
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(pdir.join("abc-123.jsonl"), "{}\n").unwrap();
 
         let plan = plan(&file, &env, false).unwrap();
-        assert_eq!(plan.views.len(), 1, "{plan:?}");
+        assert_eq!(plan.views.len(), 2, "{plan:?}");
         let v = &plan.views[0];
-        assert_eq!((v.label.as_str(), v.base.as_path(), v.slot.as_deref()), ("App", repo.as_path(), None));
+        assert_eq!(v.label, "App");
+        assert_eq!(v.target, Target::Repo { base: repo.clone(), slot: None });
+        // The folder outside any repo is kept, as unclassified.
+        assert_eq!(plan.views[1].target, Target::Folder { id: "notes".into() });
+        assert_eq!(plan.views[1].root, plain);
         assert_eq!(v.zoomed, Some(2));
         let Layout::Split { dir: Dir::Right, ratio, b, .. } = &v.layout else { panic!("{:?}", v.layout) };
         assert!((ratio - 0.6).abs() < 1e-6);
@@ -408,10 +468,50 @@ mod tests {
         assert_eq!((p[&3].kind, p[&3].command.as_deref()), (Kind::Agent, Some(r"codex resume 'it'\''s'")));
 
         let reasons: Vec<&str> = plan.skipped.iter().map(|(_, r)| r.as_str()).collect();
-        assert_eq!(reasons.len(), 4, "{reasons:?}");
+        assert_eq!(reasons.len(), 3, "{reasons:?}");
         assert!(reasons[0].contains("other tab"));
-        assert!(reasons[1].contains("not in a git repo"));
-        assert!(reasons[2].contains("already maps") && reasons[3].contains("already maps"), "{reasons:?}");
+        assert!(reasons[1].contains("already maps") && reasons[2].contains("already maps"), "{reasons:?}");
+    }
+
+    #[test]
+    fn unclassified_folders_resume_only_their_own_conversations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let deep = home.join("Downloads/thing");
+        std::fs::create_dir_all(&deep).unwrap();
+        let env = Env { global_config: root.join("none.toml"), claude_dir: root.join("claude") };
+        let convo = |cwd: &Path, id: &str, prompt: &str| {
+            let dir = claude::project_dir(&env.claude_dir, cwd);
+            std::fs::create_dir_all(&dir).unwrap();
+            let line = serde_json::json!({"type": "user", "cwd": cwd, "message": {"content": prompt}});
+            std::fs::write(dir.join(format!("{id}.jsonl")), format!("{line}\n")).unwrap();
+            // Old enough not to count as an open conversation.
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            std::fs::File::options().write(true).open(dir.join(format!("{id}.jsonl"))).unwrap().set_modified(old).unwrap();
+        };
+        convo(&home, "home-1", "plan my week");
+        convo(&deep, "deep-1", "something nested");
+        // Two herdr workspaces at the same non-repo folder, one with a stale Claude pane.
+        let session = serde_json::json!({"workspaces": [
+            {"custom_name": "Notes", "identity_cwd": home, "tabs": [{"layout": {"Pane": 1},
+                "panes": {"1": {"cwd": home, "agent_name": "claude",
+                    "agent_session": {"source": "s", "agent": "claude", "kind": "Id", "value": "gone"}}}, "zoomed": false}]},
+            {"custom_name": "Notes", "identity_cwd": home, "tabs": [{"layout": {"Pane": 1},
+                "panes": {"1": {"cwd": home}}, "zoomed": false}]}
+        ]});
+        let file = root.join("session.json");
+        std::fs::write(&file, session.to_string()).unwrap();
+
+        let plan = plan(&file, &env, true).unwrap();
+        let ids: Vec<_> = plan.views.iter().map(|v| v.target.clone()).collect();
+        assert_eq!(ids, [Target::Folder { id: "Notes".into() }, Target::Folder { id: "Notes-2".into() }]);
+        // The stale pane picks up the folder's own conversation, never the nested one.
+        let first = &plan.views[0].panes[0];
+        assert_eq!((first.resume.as_deref(), plan.views[0].panes.len()), (Some("home-1"), 1));
+        // The second workspace finds nothing left at exactly `home`.
+        assert_eq!(plan.views[1].panes.len(), 1);
+        assert_eq!(plan.views[1].panes[0].resume, None);
     }
 
     #[test]
@@ -427,6 +527,8 @@ mod tests {
         std::fs::create_dir_all(&pdir).unwrap();
         let line = serde_json::json!({"type": "user", "cwd": web, "message": {"content": "ship the web build"}});
         std::fs::write(pdir.join("sess-1.jsonl"), format!("{line}\n")).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(pdir.join("sess-1.jsonl")).unwrap().set_modified(old).unwrap();
         let session = serde_json::json!({"workspaces": [{"identity_cwd": repo, "tabs": [{
             "layout": {"Pane": 1}, "panes": {"1": {"cwd": repo}}, "zoomed": false}]}]});
         let file = root.join("session.json");

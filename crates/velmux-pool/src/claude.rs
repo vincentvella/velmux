@@ -91,6 +91,14 @@ pub fn latest_session(
     best.map(|(_, id)| id)
 }
 
+/// Whether a transcript for session `id` exists in any project dir (Claude
+/// resumes by id from anywhere).
+pub fn session_exists(claude_dir: &Path, id: &str) -> bool {
+    let Ok(dirs) = std::fs::read_dir(claude_dir.join("projects")) else { return false };
+    let file = format!("{id}.jsonl");
+    dirs.flatten().any(|d| d.path().join(&file).is_file())
+}
+
 /// A conversation found on disk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -102,31 +110,45 @@ pub struct Found {
     pub title: Option<String>,
 }
 
-/// The newest conversation that ran in `root` or any folder under it. Project
-/// dirs are matched by sanitized-name prefix, then each transcript's recorded cwd
-/// must really be inside `root` (so `/w/app-old` never counts for `/w/app`).
+/// Where [`newest_under`] looks.
+pub struct Search<'a> {
+    pub root: &'a Path,
+    /// Also folders under `root` (repos), or exactly `root` (plain folders like `~`,
+    /// where "under" would mean every conversation you've had).
+    pub subfolders: bool,
+    /// Only transcripts last written before this, so conversations that are open
+    /// right now are never resumed a second time.
+    pub before: SystemTime,
+    pub exclude: &'a [String],
+}
+
+/// The newest conversation that ran in `root` (or under it). Project dirs are
+/// matched by sanitized-name prefix, then each transcript's recorded cwd must
+/// really be inside `root` (so `/w/app-old` never counts for `/w/app`).
 /// Sidechain and empty transcripts are ignored, as are sessions in `exclude`.
-pub fn newest_under(claude_dir: &Path, root: &Path, exclude: &[String]) -> Option<Found> {
+pub fn newest_under(claude_dir: &Path, q: &Search) -> Option<Found> {
+    let root = q.root;
     let name = sanitize(root);
     let sub_prefix = format!("{name}-");
     let mut best: Option<Found> = None;
     for pdir in std::fs::read_dir(claude_dir.join("projects")).ok()?.flatten() {
         let dir_name = pdir.file_name().to_string_lossy().into_owned();
-        if dir_name != name && !dir_name.starts_with(&sub_prefix) {
+        if dir_name != name && !(q.subfolders && dir_name.starts_with(&sub_prefix)) {
             continue;
         }
         let Ok(entries) = std::fs::read_dir(pdir.path()) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
-            if path.extension().is_none_or(|e| e != "jsonl") || id.starts_with("agent-") || exclude.contains(&id) {
+            if path.extension().is_none_or(|e| e != "jsonl") || id.starts_with("agent-") || q.exclude.contains(&id) {
                 continue;
             }
             let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else { continue };
-            if best.as_ref().is_some_and(|b| b.modified >= modified) {
+            if modified >= q.before || best.as_ref().is_some_and(|b| b.modified >= modified) {
                 continue;
             }
-            let Some(cwd) = transcript_cwd(&path).filter(|c| c.starts_with(root)) else { continue };
+            let inside = |c: &PathBuf| if q.subfolders { c.starts_with(root) } else { c == root };
+            let Some(cwd) = transcript_cwd(&path).filter(inside) else { continue };
             let Some(title) = transcript_title(&path) else { continue };
             best = Some(Found { id, cwd, modified, title: Some(title) });
         }
@@ -208,12 +230,20 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         write(Path::new("/w/app-old"), "sibling", &convo("/w/app-old", "not this repo"));
 
-        let found = newest_under(claude, root, &[]).unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        let q = |root, subfolders, exclude| Search { root, subfolders, before: later, exclude };
+        let found = newest_under(claude, &q(root, true, &[])).unwrap();
         assert_eq!((found.id.as_str(), found.cwd.as_path()), ("new", sub));
         assert_eq!(found.title.as_deref(), Some("fix the web build"));
-        let found = newest_under(claude, root, &["new".into()]).unwrap();
+        let skip_new = vec!["new".to_string()];
+        let found = newest_under(claude, &q(root, true, &skip_new)).unwrap();
         assert_eq!((found.id.as_str(), found.title.as_deref()), ("old", Some("first question with newline")));
-        assert_eq!(newest_under(claude, Path::new("/w/other"), &[]), None);
+        assert_eq!(newest_under(claude, &q(Path::new("/w/other"), true, &[])), None);
+        // Exact-folder search ignores the subfolder conversation.
+        assert_eq!(newest_under(claude, &q(root, false, &[])).unwrap().id, "old");
+        // Conversations written after `before` (still open) are skipped.
+        let earlier = Search { root, subfolders: true, before: SystemTime::UNIX_EPOCH, exclude: &[] };
+        assert_eq!(newest_under(claude, &earlier), None);
     }
 
     #[test]

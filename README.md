@@ -79,16 +79,21 @@ velmux import-herdr --with-latest-claude  # also pick up Claude history (below)
 ```
 
 Each herdr workspace inside a git repo becomes that repo's base view (or slot,
-if it lives in one), with its active tab's split layout. Panes keep their
-working directory; agent panes come back as agents, and Claude resumes the
-session herdr recorded. Workspaces outside a repo, extra tabs, and locations
-velmux already has panes in are skipped and listed.
+if it lives in one), with its active tab's split layout. Workspaces outside any
+repo land in an **unclassified** group at the bottom of the sidebar, one entry
+per folder (no slots there). Panes keep their working directory; agent panes
+come back as agents, and Claude resumes the session herdr recorded (or starts
+fresh, noted in the summary, if that transcript is gone). Extra tabs and
+locations velmux already has panes in are skipped and listed.
 
 herdr only records a Claude session for panes that were running Claude when it
 saved. `--with-latest-claude` also pulls Claude history: for each imported
 workspace without a Claude pane, it adds one resuming the newest conversation
 that ran anywhere in that repo (subfolders included), split beside the
-imported layout. `--dry-run` shows each one's first prompt and age.
+imported layout. Unclassified folders only take conversations held in exactly
+that folder (so `~` doesn't claim everything), and conversations written to in
+the last two minutes are left alone since they're probably open. `--dry-run`
+shows each one's first prompt and age.
 
 ## CLI
 

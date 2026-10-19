@@ -17,13 +17,26 @@ pub struct Saved {
     pub version: u32,
     /// Base checkouts, in sidebar order.
     pub projects: Vec<PathBuf>,
+    /// Folders in the "unclassified" group (outside any repo).
+    #[serde(default)]
+    pub folders: Vec<SavedFolder>,
     pub views: Vec<SavedView>,
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct SavedFolder {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SavedView {
+    /// Base checkout (empty for unclassified folders).
     pub project: PathBuf,
+    /// Slot id, or the folder id when `folder`.
     pub slot: Option<String>,
+    #[serde(default)]
+    pub folder: bool,
     pub layout: Layout,
     pub panes: Vec<SavedPane>,
 }
