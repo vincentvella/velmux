@@ -1,0 +1,14 @@
+[package]
+name = "velmux-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+velmux-pool = { path = "../velmux-pool" }
+ratatui = "0.30"
+crossterm = "0.29"
+portable-pty = "0.9"
+vt100 = "0.18"
+libc = "0.2"
