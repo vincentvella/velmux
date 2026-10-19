@@ -143,12 +143,12 @@ mod tests {
     #[test]
     fn sanitizes_like_claude_code() {
         assert_eq!(
-            sanitize(Path::new("/Users/vince/.config/nvim")),
-            "-Users-vince--config-nvim"
+            sanitize(Path::new("/Users/me/.config/nvim")),
+            "-Users-me--config-nvim"
         );
         assert_eq!(
-            sanitize(Path::new("/Users/vince/Workspace/.pools/app/slot-1")),
-            "-Users-vince-Workspace--pools-app-slot-1"
+            sanitize(Path::new("/Users/me/Workspace/.pools/app/slot-1")),
+            "-Users-me-Workspace--pools-app-slot-1"
         );
     }
 

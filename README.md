@@ -131,3 +131,8 @@ install_cmd = "bun install"         # override detection
 - `crates/velmux-pool` — library: state (`pool.json` under `flock`), git ops, deps, Claude linking
 - `crates/velmux-cli` — the `velmux` binary
 - `crates/velmux-tui` — server (ptys, vt100, ratatui render) + thin client over a Unix socket
+
+## License
+
+MIT. Agent-state detection rules are adapted from
+[herdr](https://github.com/herdrdev/herdr) (Apache-2.0), used as a reference.
