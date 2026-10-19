@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use velmux_pool::{Env, Pool};
+use velmux_pool::{claude, Env, Pool};
 
 use crate::layout::{Dir, Layout};
 use crate::pane::Kind;
@@ -110,6 +110,8 @@ pub struct PlanView {
     pub label: String,
     pub base: PathBuf,
     pub slot: Option<String>,
+    /// The location's root folder (base checkout or slot).
+    pub root: PathBuf,
     /// Leaves are herdr pane ids, remapped when the panes are created.
     pub layout: Layout,
     pub zoomed: Option<u64>,
@@ -126,6 +128,8 @@ pub struct PlanPane {
     pub resume: Option<String>,
     /// Exact command to run instead of the configured agent (non-Claude agents).
     pub command: Option<String>,
+    /// Why this pane exists, for the summary (e.g. the conversation it resumes).
+    pub note: Option<String>,
 }
 
 /// herdr's session file: `$XDG_CONFIG_HOME/herdr` or `~/.config/herdr`, or a named
@@ -142,7 +146,10 @@ pub fn default_path(session: Option<&str>) -> Result<PathBuf> {
     Ok(dir.join("session.json"))
 }
 
-pub fn plan(path: &Path, env: &Env) -> Result<Plan> {
+/// `with_latest_claude`: for workspaces without a Claude pane, add one resuming
+/// the newest conversation that ran in that repo (herdr only records sessions
+/// for panes that were running Claude when it saved).
+pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let snapshot: Snapshot = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     let mut plan = Plan { views: Vec::new(), skipped: Vec::new() };
@@ -198,9 +205,45 @@ pub fn plan(path: &Path, env: &Env) -> Result<Plan> {
         if extra_tabs > 0 {
             plan.skipped.push((label.clone(), format!("{extra_tabs} other tab(s); velmux has one layout per location")));
         }
-        plan.views.push(PlanView { label, base: pool.base.clone(), slot, layout: convert(&tab.layout), zoomed, panes });
+        plan.views.push(PlanView { label, base: pool.base.clone(), slot, root, layout: convert(&tab.layout), zoomed, panes });
+    }
+    if with_latest_claude {
+        add_latest_claude(&mut plan, env);
     }
     Ok(plan)
+}
+
+fn add_latest_claude(plan: &mut Plan, env: &Env) {
+    let mut taken: Vec<String> = plan.views.iter().flat_map(|v| &v.panes).filter_map(|p| p.resume.clone()).collect();
+    for v in &mut plan.views {
+        if v.panes.iter().any(|p| p.kind == Kind::Agent && p.command.is_none()) {
+            continue;
+        }
+        let Some(found) = claude::newest_under(&env.claude_dir, &v.root, &taken) else { continue };
+        taken.push(found.id.clone());
+        let id = v.layout.leaves().into_iter().max().unwrap_or(0) + 1;
+        let old = std::mem::replace(&mut v.layout, Layout::Leaf(0));
+        v.layout = Layout::Split { dir: Dir::Right, ratio: 0.5, a: Box::new(old), b: Box::new(Layout::Leaf(id)) };
+        let title: String = found.title.unwrap_or_default().chars().take(48).collect();
+        let note = format!("latest Claude: \"{title}\" ({} ago)", age(found.modified));
+        v.panes.push(PlanPane {
+            id,
+            kind: Kind::Agent,
+            cwd: (found.cwd != v.root).then_some(found.cwd),
+            resume: Some(found.id),
+            command: None,
+            note: Some(note),
+        });
+    }
+}
+
+fn age(t: std::time::SystemTime) -> String {
+    let secs = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    match secs {
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 48 * 3600 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
+    }
 }
 
 fn plan_pane(id: u64, p: &HPane, root: &Path) -> PlanPane {
@@ -225,7 +268,7 @@ fn plan_pane(id: u64, p: &HPane, root: &Path) -> PlanPane {
         (false, None, Some(a)) => (Kind::Agent, Some(a.to_string())),
         (false, None, None) => (Kind::Shell, None),
     };
-    PlanPane { id, kind, cwd, resume: session.or(resume_flag), command }
+    PlanPane { id, kind, cwd, resume: session.or(resume_flag), command, note: None }
 }
 
 fn leaves(l: &HLayout) -> Vec<u32> {
@@ -282,6 +325,9 @@ impl Plan {
                 v.base.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
                 v.panes.len()
             ));
+            for note in v.panes.iter().filter_map(|p| p.note.as_ref()) {
+                out.push_str(&format!("      ↳ adds {note}\n"));
+            }
         }
         for (label, why) in &self.skipped {
             out.push_str(&format!("  - {label}: {why}\n"));
@@ -347,7 +393,7 @@ mod tests {
         std::fs::write(&file, session.to_string()).unwrap();
         let env = Env { global_config: root.join("none.toml"), claude_dir: root.join("claude") };
 
-        let plan = plan(&file, &env).unwrap();
+        let plan = plan(&file, &env, false).unwrap();
         assert_eq!(plan.views.len(), 1, "{plan:?}");
         let v = &plan.views[0];
         assert_eq!((v.label.as_str(), v.base.as_path(), v.slot.as_deref()), ("App", repo.as_path(), None));
@@ -366,5 +412,33 @@ mod tests {
         assert!(reasons[0].contains("other tab"));
         assert!(reasons[1].contains("not in a git repo"));
         assert!(reasons[2].contains("already maps") && reasons[3].contains("already maps"), "{reasons:?}");
+    }
+
+    #[test]
+    fn with_latest_claude_adds_a_resuming_pane() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let repo = root.join("app");
+        git_repo(&repo);
+        let env = Env { global_config: root.join("none.toml"), claude_dir: root.join("claude") };
+        // A conversation that ran in a subfolder of the repo.
+        let web = repo.join("packages/web");
+        let pdir = claude::project_dir(&env.claude_dir, &web);
+        std::fs::create_dir_all(&pdir).unwrap();
+        let line = serde_json::json!({"type": "user", "cwd": web, "message": {"content": "ship the web build"}});
+        std::fs::write(pdir.join("sess-1.jsonl"), format!("{line}\n")).unwrap();
+        let session = serde_json::json!({"workspaces": [{"identity_cwd": repo, "tabs": [{
+            "layout": {"Pane": 1}, "panes": {"1": {"cwd": repo}}, "zoomed": false}]}]});
+        let file = root.join("session.json");
+        std::fs::write(&file, session.to_string()).unwrap();
+
+        let without = plan(&file, &env, false).unwrap();
+        assert_eq!(without.views[0].panes.len(), 1);
+        let with = plan(&file, &env, true).unwrap();
+        let v = &with.views[0];
+        assert_eq!(v.layout.leaves(), vec![1, 2]);
+        let added = &v.panes[1];
+        assert_eq!((added.kind, added.resume.as_deref(), added.cwd.as_deref()), (Kind::Agent, Some("sess-1"), Some(web.as_path())));
+        assert!(with.describe().contains("ship the web build"), "{}", with.describe());
     }
 }

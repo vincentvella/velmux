@@ -75,6 +75,7 @@ Slots released in the meantime are skipped.
 velmux import-herdr --dry-run      # show what would come over
 velmux import-herdr                # ~/.config/herdr/session.json
 velmux import-herdr --session work # a named herdr session
+velmux import-herdr --with-latest-claude  # also pick up Claude history (below)
 ```
 
 Each herdr workspace inside a git repo becomes that repo's base view (or slot,
@@ -82,6 +83,12 @@ if it lives in one), with its active tab's split layout. Panes keep their
 working directory; agent panes come back as agents, and Claude resumes the
 session herdr recorded. Workspaces outside a repo, extra tabs, and locations
 velmux already has panes in are skipped and listed.
+
+herdr only records a Claude session for panes that were running Claude when it
+saved. `--with-latest-claude` also pulls Claude history: for each imported
+workspace without a Claude pane, it adds one resuming the newest conversation
+that ran anywhere in that repo (subfolders included), split beside the
+imported layout. `--dry-run` shows each one's first prompt and age.
 
 ## CLI
 

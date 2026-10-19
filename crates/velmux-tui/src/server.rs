@@ -300,7 +300,7 @@ impl App {
             Event::Client(stream, first) => self.attach(stream, first),
             Event::Control(mut stream, msg) => {
                 let reply = match msg {
-                    ClientMsg::ImportHerdr { path } => self.import_herdr(&path),
+                    ClientMsg::ImportHerdr { path, with_latest_claude } => self.import_herdr(&path, with_latest_claude),
                     _ => "unsupported request".into(),
                 };
                 let _ = ServerMsg::Reply(reply).write(&mut stream);
@@ -1081,13 +1081,13 @@ impl App {
 
     /// Import a herdr session: one view per mapped workspace, skipping locations
     /// velmux already has panes in. Returns a summary for the caller.
-    fn import_herdr(&mut self, path: &Path) -> String {
-        let plan = match Env::from_process().and_then(|env| herdr::plan(path, &env)) {
+    fn import_herdr(&mut self, path: &Path, with_latest_claude: bool) -> String {
+        let plan = match Env::from_process().and_then(|env| herdr::plan(path, &env, with_latest_claude)) {
             Ok(plan) => plan,
             Err(e) => return format!("import failed: {e:#}"),
         };
         let Plan { views, mut skipped } = plan;
-        let (mut imported, mut panes) = (0, 0);
+        let (mut imported, mut panes, mut resumed) = (0, 0, 0);
         let mut first = None;
         for v in views {
             let project = match self.projects.iter().position(|p| p.pool.base == v.base) {
@@ -1111,6 +1111,7 @@ impl App {
             }
             let mut layout = Some(v.layout);
             let mut ids = HashMap::new();
+            let resumes = v.panes.iter().filter(|p| p.resume.is_some()).count();
             for p in v.panes {
                 let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command };
                 match self.launch(&loc, p.kind, opts) {
@@ -1123,6 +1124,7 @@ impl App {
             let Some(layout) = layout else { continue };
             let zoomed = v.zoomed.and_then(|z| ids.get(&z).copied());
             panes += ids.len();
+            resumed += resumes;
             imported += 1;
             first.get_or_insert((loc.clone(), layout.leaves().first().and_then(|l| ids.get(l).copied())));
             self.views.insert(loc, View { layout: layout.remap(&ids), zoomed });
@@ -1132,7 +1134,10 @@ impl App {
             self.current = Some(loc);
         }
         self.relayout();
-        let mut out = format!("imported {imported} workspace(s), {panes} pane(s) from {}\n", path.display());
+        let mut out = format!(
+            "imported {imported} workspace(s), {panes} pane(s), {resumed} Claude resume(s) from {}\n",
+            path.display()
+        );
         for (label, why) in skipped {
             out.push_str(&format!("  - skipped {label}: {why}\n"));
         }

@@ -62,6 +62,10 @@ enum Cmd {
         /// A named herdr session (`herdr --session NAME`).
         #[arg(long, conflicts_with = "file")]
         session: Option<String>,
+        /// For workspaces without a Claude pane, add one resuming the newest
+        /// Claude conversation from that repo.
+        #[arg(long)]
+        with_latest_claude: bool,
         /// Show what would be imported without changing anything.
         #[arg(long)]
         dry_run: bool,
@@ -87,8 +91,8 @@ fn run() -> Result<()> {
     let cmd = match cli.cmd {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
-        Some(Cmd::ImportHerdr { file, session, dry_run }) => {
-            return velmux_tui::import_herdr(file, session.as_deref(), dry_run)
+        Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
+            return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
         Some(cmd) => cmd,
     };
