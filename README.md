@@ -37,6 +37,16 @@ The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
 | `x` / `d` / `Q` | close pane / detach / stop the server |
 | `<prefix>` | send the prefix key itself to the pane |
 
+### Mouse
+
+On by default (`mouse = false` in the global config turns it off). Click a pane
+to focus it, or a sidebar row to jump there; drag a divider to resize; drag over
+text to select it and copy on release. The wheel scrolls a pane's history
+(opening copy mode, which closes again at the bottom), sends arrow keys to
+full-screen apps such as `less`, and is passed straight through, along with
+clicks, to apps that ask for the mouse (vim with `mouse=a`, full-screen TUIs).
+Hold Shift (Option in iTerm2) for your terminal's native selection.
+
 ### Copy mode
 
 `<prefix> [` (or `<prefix> PgUp`) freezes the focused pane and opens its
@@ -100,6 +110,7 @@ pool_root = "/Users/me/Workspace/.pools" # default: <base parent>/.pools
 editor = "code"
 agent = "claude"                         # command for agent panes
 prefix = "C-b"                           # TUI prefix: C-a, ctrl+space, ^], …
+mouse = true                             # click / drag / wheel in the TUI
 claude_history = true
 ```
 

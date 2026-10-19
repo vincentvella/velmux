@@ -7,13 +7,16 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use velmux_pool::{claude, prefix_key, ClaimOpts, Env, Pool, SlotView, Status};
+use velmux_pool::{claude, tui_settings, ClaimOpts, Env, Pool, SlotView, Status, TuiSettings};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
+use vt100::MouseProtocolMode;
 
 use crate::copy::{self, Action, Copy};
 use crate::layout::{self, Dir, Layout, Toward};
+use crate::mouse::{self, Chunk, MouseEvent};
+use crate::pane::Term;
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::prefix::Prefix;
 use crate::proto::{ClientMsg, ServerMsg};
@@ -49,6 +52,14 @@ pub enum Mode {
     Confirm { label: String, action: Confirm },
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
+}
+
+/// A mouse drag in progress.
+enum Drag {
+    /// Resizing the split behind a divider.
+    Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
+    /// Selecting text; copy mode opens on the first motion, copies on release.
+    Select { pane: u64, origin: (u16, u16), moved: bool },
 }
 
 pub enum Confirm {
@@ -89,6 +100,10 @@ pub struct App {
     pub copy: Option<Copy>,
     /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
     pending_out: Vec<u8>,
+    mouse: bool,
+    /// Unfinished mouse sequence from the previous read.
+    input_carry: Vec<u8>,
+    drag: Option<Drag>,
     full_redraw: bool,
     dirty: bool,
     quit: bool,
@@ -111,18 +126,22 @@ pub fn serve() -> Result<()> {
         }
     });
 
-    let (prefix, warning) = match Env::from_process().and_then(|env| prefix_key(&env)) {
-        Ok(None) => (Prefix::default(), None),
-        Ok(Some(spec)) => match Prefix::parse(&spec) {
-            Ok(p) => (p, None),
-            Err(e) => (Prefix::default(), Some(format!("config: {e:#}; using ctrl+b"))),
-        },
-        Err(e) => (Prefix::default(), Some(format!("config: {e:#}; using ctrl+b"))),
+    let (settings, mut warning) = match Env::from_process().and_then(|env| tui_settings(&env)) {
+        Ok(s) => (s, None),
+        Err(e) => (TuiSettings { prefix: None, mouse: true }, Some(format!("config: {e:#}"))),
+    };
+    let prefix = match settings.prefix.as_deref().map(Prefix::parse) {
+        None => Prefix::default(),
+        Some(Ok(p)) => p,
+        Some(Err(e)) => {
+            warning = Some(format!("config: {e:#}; using ctrl+b"));
+            Prefix::default()
+        }
     };
     if let Some(w) = &warning {
         eprintln!("velmux: {w}");
     }
-    let mut app = App::new(tx, prefix, warning);
+    let mut app = App::new(tx, prefix, settings.mouse, warning);
     app.restore();
     let (mut last_detect, mut last_slots, mut last_render) =
         (Instant::now(), Instant::now(), Instant::now());
@@ -162,7 +181,7 @@ pub fn serve() -> Result<()> {
 }
 
 impl App {
-    fn new(events: Sender<Event>, prefix: Prefix, startup_warning: Option<String>) -> App {
+    fn new(events: Sender<Event>, prefix: Prefix, mouse: bool, startup_warning: Option<String>) -> App {
         App {
             projects: Vec::new(),
             panes: Vec::new(),
@@ -182,6 +201,9 @@ impl App {
             prev: Buffer::empty(Rect::new(0, 0, 80, 24)),
             copy: None,
             pending_out: Vec::new(),
+            mouse,
+            input_carry: Vec::new(),
+            drag: None,
             full_redraw: true,
             dirty: true,
             quit: false,
@@ -331,6 +353,9 @@ impl App {
     fn on_client(&mut self, msg: ClientMsg) {
         match msg {
             ClientMsg::Hello { cols, rows, cwd } => {
+                if self.mouse {
+                    self.pending_out.extend_from_slice(mouse::ENABLE);
+                }
                 self.resize(cols, rows);
                 self.open_cwd(&cwd);
                 if let Some(w) = self.startup_warning.take() {
@@ -508,7 +533,218 @@ impl App {
 
     // ---- input ----
 
-    fn input(&mut self, mut bytes: &[u8]) {
+    fn input(&mut self, bytes: &[u8]) {
+        let mut data = std::mem::take(&mut self.input_carry);
+        data.extend_from_slice(bytes);
+        let (chunks, carry) = mouse::split(&data);
+        let chunks: Vec<Result<MouseEvent, Vec<u8>>> = chunks
+            .into_iter()
+            .map(|c| match c {
+                Chunk::Mouse(ev) => Ok(ev),
+                Chunk::Bytes(b) => Err(b.to_vec()),
+            })
+            .collect();
+        self.input_carry = carry;
+        for chunk in chunks {
+            match chunk {
+                Ok(ev) => self.mouse_event(ev),
+                Err(bytes) => self.keys(&bytes),
+            }
+        }
+    }
+
+    // ---- mouse ----
+
+    fn mouse_event(&mut self, ev: MouseEvent) {
+        self.dirty = true;
+        if let Some(drag) = self.drag.take() {
+            return self.continue_drag(drag, ev);
+        }
+        if !matches!(self.mode, Mode::Normal | Mode::Copy) {
+            return;
+        }
+        let (cols, rows) = self.size;
+        let at = Position::new(ev.x, ev.y);
+        if ev.x < ui::sidebar_width(cols) {
+            if ev.is_press() && ev.is_left() {
+                self.sidebar_click(ev.y);
+            }
+            return;
+        }
+        if ev.y == 0 || ev.y + 1 >= rows {
+            return;
+        }
+        let Some(loc) = self.current_loc() else { return };
+        let (rects, dividers) = self.view_rects(&loc);
+        if ev.is_press() && ev.is_left() {
+            if let Some(d) = dividers.into_iter().find(|d| d.rect.contains(at)) {
+                self.drag = Some(Drag::Divider { loc, path: d.path, span: d.span, dir: d.dir });
+                return;
+            }
+        }
+        let titled = self.titled(&loc);
+        let Some((id, outer)) = rects.into_iter().find(|(_, r)| r.contains(at)) else { return };
+        if (ev.is_press() || ev.wheel().is_some()) && self.focus != Some(id) {
+            if self.copy.is_some() {
+                self.exit_copy();
+            }
+            self.focus = Some(id);
+        }
+        let inner = ui::content_rect(outer, titled);
+        if !inner.contains(at) {
+            return; // title bar: focusing was all
+        }
+        let (lx, ly) = (ev.x - inner.x, ev.y - inner.y);
+        let copying = self.copy.as_ref().is_some_and(|c| c.pane == id);
+        let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
+        let screen = pane.parser.screen();
+        let app_mode = screen.mouse_protocol_mode();
+        if !copying && app_mode != MouseProtocolMode::None {
+            // The app handles the mouse itself (vim with mouse=a, fullscreen TUIs).
+            if let Some(bytes) = mouse::encode(&ev, lx, ly, app_mode, screen.mouse_protocol_encoding()) {
+                pane.write_raw(&bytes);
+            }
+            return;
+        }
+        if let Some(dir) = ev.wheel() {
+            if copying {
+                self.copy_scroll(dir * 3);
+            } else if screen.alternate_screen() {
+                // Full-screen app without mouse support: scroll it with arrow keys.
+                let key: &[u8] = if dir < 0 { b"\x1b[A" } else { b"\x1b[B" };
+                for _ in 0..3 {
+                    pane.write_input(key);
+                }
+            } else if dir < 0 {
+                self.enter_copy(false);
+                if let Some(c) = self.copy.as_mut() {
+                    c.from_mouse = true;
+                }
+                self.copy_scroll(dir * 3);
+            }
+            return;
+        }
+        if ev.is_press() && ev.is_left() {
+            if copying {
+                self.with_copy(|c, p| {
+                    c.anchor = None;
+                    c.cursor = c.at(ly, lx, p);
+                    c.sync(p);
+                });
+            }
+            self.drag = Some(Drag::Select { pane: id, origin: (lx, ly), moved: false });
+        }
+    }
+
+    fn continue_drag(&mut self, drag: Drag, ev: MouseEvent) {
+        match drag {
+            Drag::Divider { loc, path, span, dir } => {
+                if ev.release {
+                    return;
+                }
+                if ev.is_motion() {
+                    let (pos, start, len) = match dir {
+                        Dir::Right => (ev.x, span.x, span.width),
+                        Dir::Down => (ev.y, span.y, span.height),
+                    };
+                    let ratio = (pos.saturating_sub(start)) as f32 / len.saturating_sub(1).max(1) as f32;
+                    if let Some(view) = self.views.get_mut(&loc) {
+                        if view.layout.set_ratio(&path, ratio) {
+                            self.relayout();
+                        }
+                    }
+                }
+                self.drag = Some(Drag::Divider { loc, path, span, dir });
+            }
+            Drag::Select { pane, origin, mut moved } => {
+                if ev.release {
+                    if moved {
+                        self.yank_selection();
+                    }
+                    return;
+                }
+                if ev.is_motion() {
+                    let Some(inner) = self.pane_inner(pane) else { return };
+                    // Dragging past the top or bottom edge scrolls.
+                    let edge = if ev.y < inner.y { -1 } else if ev.y >= inner.bottom() { 1 } else { 0 };
+                    let lx = ev.x.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
+                    let ly = ev.y.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
+                    if !moved {
+                        if self.copy.as_ref().is_none_or(|c| c.pane != pane) {
+                            self.enter_copy(false);
+                        }
+                        self.with_copy(|c, p| c.anchor = Some(c.at(origin.1, origin.0, p)));
+                        moved = true;
+                    }
+                    self.with_copy(|c, p| {
+                        if edge != 0 {
+                            c.scroll(edge, p);
+                        }
+                        c.cursor = c.at(ly, lx, p);
+                        c.sync(p);
+                    });
+                }
+                self.drag = Some(Drag::Select { pane, origin, moved });
+            }
+        }
+    }
+
+    fn pane_inner(&self, id: u64) -> Option<Rect> {
+        let loc = self.pane(id)?.loc.clone();
+        let titled = self.titled(&loc);
+        let (rects, _) = self.view_rects(&loc);
+        rects.into_iter().find(|(p, _)| *p == id).map(|(_, r)| ui::content_rect(r, titled))
+    }
+
+    fn sidebar_click(&mut self, y: u16) {
+        let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else {
+            return;
+        };
+        if self.copy.is_some() {
+            self.exit_copy();
+        }
+        let loc = match row {
+            ui::Row::Pane(i) => {
+                self.focus = Some(self.panes[i].id);
+                self.current = Some(self.panes[i].loc.clone());
+                self.full_redraw = true;
+                return;
+            }
+            ui::Row::Location(loc) => loc,
+            ui::Row::Project(p) => Loc { project: p, slot: None },
+        };
+        self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
+        self.current = Some(loc);
+        self.full_redraw = true;
+    }
+
+    fn with_copy(&mut self, f: impl FnOnce(&mut Copy, &mut vt100::Parser<Term>)) {
+        let Some(id) = self.copy.as_ref().map(|c| c.pane) else { return };
+        if let (Some(c), Some(pane)) = (self.copy.as_mut(), self.panes.iter_mut().find(|p| p.id == id)) {
+            f(c, &mut pane.parser);
+        }
+    }
+
+    fn copy_scroll(&mut self, lines: isize) {
+        self.with_copy(|c, p| c.scroll(lines, p));
+        let back_at_bottom = self.copy.as_ref().is_some_and(|c| c.from_mouse && c.offset == 0 && c.anchor.is_none());
+        if back_at_bottom {
+            self.exit_copy();
+        }
+    }
+
+    fn yank_selection(&mut self) {
+        let mut text = None;
+        self.with_copy(|c, p| text = c.selected_text(p));
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            let lines = text.lines().count().max(1);
+            self.set_clipboard(&text);
+            self.say(format!("copied {lines} line(s)"));
+        }
+        self.exit_copy();
+    }
+
+    fn keys(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let consumed = match self.mode {
                 Mode::Normal => match bytes.iter().position(|&b| b == self.prefix.byte) {

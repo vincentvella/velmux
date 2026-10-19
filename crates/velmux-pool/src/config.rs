@@ -50,13 +50,21 @@ struct GlobalFile {
     agent: Option<String>,
     claude_history: Option<bool>,
     prefix: Option<String>,
+    mouse: Option<bool>,
 }
 
-/// The TUI prefix key from the global config (e.g. `"C-a"`), if set.
-/// Server-wide, so it lives outside the per-repo [`Config`].
-pub fn prefix_key(env: &Env) -> Result<Option<String>> {
+/// Server-wide TUI settings from the global config (outside the per-repo [`Config`]).
+#[derive(Debug, Default)]
+pub struct TuiSettings {
+    /// Prefix key spec, e.g. `"C-a"`.
+    pub prefix: Option<String>,
+    /// Mouse support (default on).
+    pub mouse: bool,
+}
+
+pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
     let global: GlobalFile = read_toml(&env.global_config)?;
-    Ok(global.prefix)
+    Ok(TuiSettings { prefix: global.prefix, mouse: global.mouse.unwrap_or(true) })
 }
 
 /// `<base>/.velmux.toml`

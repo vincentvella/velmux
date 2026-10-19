@@ -8,6 +8,6 @@ pub mod git;
 mod pool;
 pub mod state;
 
-pub use config::{prefix_key, Config, Env};
+pub use config::{tui_settings, Config, Env, TuiSettings};
 pub use pool::{ClaimOpts, Pool, Released, SlotView};
 pub use state::Status;

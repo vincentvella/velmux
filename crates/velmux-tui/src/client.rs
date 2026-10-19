@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 
@@ -23,7 +23,8 @@ pub fn attach(cwd: PathBuf) -> Result<()> {
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let reason = pump(stream, writer);
-    let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen, cursor::Show);
+    // The server turns mouse reporting on; always turn it off on the way out.
+    let _ = execute!(stdout, DisableMouseCapture, DisableBracketedPaste, LeaveAlternateScreen, cursor::Show);
     let _ = terminal::disable_raw_mode();
     match reason {
         Ok(msg) => eprintln!("velmux: {msg}"),

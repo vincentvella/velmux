@@ -21,6 +21,8 @@ pub struct Copy {
     pub search_up: bool,
     last_search: Option<String>,
     pub message: Option<String>,
+    /// Opened by the wheel: scrolling back to the bottom closes it again.
+    pub from_mouse: bool,
 }
 
 pub enum Action {
@@ -77,6 +79,7 @@ impl Copy {
                 .screen()
                 .alternate_screen()
                 .then(|| "full-screen app: no history here (it scrolls itself) — copy what's visible".into()),
+            from_mouse: false,
         }
     }
 
@@ -106,6 +109,20 @@ impl Copy {
             self.offset = sb - (self.cursor.0 + 1 - rows as usize);
         }
         p.screen_mut().set_scrollback(self.offset);
+    }
+
+    /// Scroll the view by `lines` (negative = up into history), keeping the cursor on screen.
+    pub fn scroll<CB: vt100::Callbacks>(&mut self, lines: isize, p: &mut vt100::Parser<CB>) {
+        let (sb, rows, _) = dims(p);
+        self.offset = (self.offset as isize - lines).clamp(0, sb as isize) as usize;
+        let top = sb - self.offset;
+        self.cursor.0 = self.cursor.0.clamp(top, top + rows as usize - 1);
+        p.screen_mut().set_scrollback(self.offset);
+    }
+
+    /// Absolute position of a cell in the current view.
+    pub fn at<CB: vt100::Callbacks>(&self, row: u16, col: u16, p: &vt100::Parser<CB>) -> Pos {
+        (self.top(p) + row as usize, col)
     }
 
     /// Handle one key from `bytes`; returns how many bytes it used and what to do.
@@ -233,6 +250,12 @@ impl Copy {
         self.message = Some(format!("not found: {q}"));
     }
 
+    /// The selected text, if there is a selection.
+    pub fn selected_text<CB: vt100::Callbacks>(&self, p: &mut vt100::Parser<CB>) -> Option<String> {
+        let (a, b) = self.selection()?;
+        Some(self.extract(p, a, b))
+    }
+
     /// Text between two positions (inclusive), rejoining soft-wrapped lines.
     fn extract<CB: vt100::Callbacks>(&self, p: &mut vt100::Parser<CB>, a: Pos, b: Pos) -> String {
         let mut out = String::new();
@@ -356,6 +379,23 @@ mod tests {
         // Uppercase query is case-sensitive.
         keys(&mut c, &mut p, b"G?NEEDLE\r");
         assert_eq!(c.message.as_deref(), Some("not found: NEEDLE"));
+    }
+
+    #[test]
+    fn wheel_scroll_keeps_cursor_in_view() {
+        let text: String = (1..=50).map(|i| format!("{i}\r\n")).collect();
+        let mut p = parser(5, 10, &text);
+        let mut c = Copy::enter(1, &p);
+        c.scroll(-3, &mut p);
+        assert_eq!(c.offset, 3);
+        assert_eq!(p.screen().scrollback(), 3);
+        let top = c.top(&p);
+        assert!(c.cursor.0 >= top && c.cursor.0 < top + 5);
+        c.scroll(100, &mut p);
+        assert_eq!(c.offset, 0);
+        c.scroll(-1000, &mut p);
+        assert_eq!(c.offset, p.screen().scrollback_len());
+        assert_eq!(c.at(0, 2, &p), (0, 2));
     }
 
     #[test]

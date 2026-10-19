@@ -31,6 +31,10 @@ pub enum Layout {
 pub struct Divider {
     pub rect: Rect,
     pub dir: Dir,
+    /// Route from the root to its split (`false` = first half), for [`Layout::set_ratio`].
+    pub path: Vec<bool>,
+    /// The area the split divides, to turn a drag position into a ratio.
+    pub span: Rect,
 }
 
 const MIN_RATIO: f32 = 0.1;
@@ -118,11 +122,25 @@ impl Layout {
     pub fn rects(&self, area: Rect) -> (Vec<(u64, Rect)>, Vec<Divider>) {
         let mut panes = Vec::new();
         let mut dividers = Vec::new();
-        self.place(area, &mut panes, &mut dividers);
+        self.place(area, &mut Vec::new(), &mut panes, &mut dividers);
         (panes, dividers)
     }
 
-    fn place(&self, area: Rect, panes: &mut Vec<(u64, Rect)>, dividers: &mut Vec<Divider>) {
+    /// Set the ratio of the split at `path` (see [`Divider::path`]).
+    pub fn set_ratio(&mut self, path: &[bool], value: f32) -> bool {
+        match (self, path) {
+            (Layout::Split { ratio, .. }, []) => {
+                *ratio = value.clamp(MIN_RATIO, 1.0 - MIN_RATIO);
+                true
+            }
+            (Layout::Split { a, b, .. }, [first, rest @ ..]) => {
+                if *first { b.set_ratio(rest, value) } else { a.set_ratio(rest, value) }
+            }
+            (Layout::Leaf(_), _) => false,
+        }
+    }
+
+    fn place(&self, area: Rect, path: &mut Vec<bool>, panes: &mut Vec<(u64, Rect)>, dividers: &mut Vec<Divider>) {
         match self {
             Layout::Leaf(id) => panes.push((*id, area)),
             Layout::Split { dir, ratio, a, b } => {
@@ -132,7 +150,9 @@ impl Layout {
                 };
                 if span < 3 {
                     // Too small to divide: give it all to the first half.
-                    a.place(area, panes, dividers);
+                    path.push(false);
+                    a.place(area, path, panes, dividers);
+                    path.pop();
                     for id in b.leaves() {
                         panes.push((id, Rect::new(area.x, area.y, 0, 0)));
                     }
@@ -152,9 +172,13 @@ impl Layout {
                         Rect::new(area.x, area.y + first + 1, area.width, rest),
                     ),
                 };
-                a.place(ra, panes, dividers);
-                dividers.push(Divider { rect: div, dir: *dir });
-                b.place(rb, panes, dividers);
+                path.push(false);
+                a.place(ra, path, panes, dividers);
+                path.pop();
+                dividers.push(Divider { rect: div, dir: *dir, path: path.clone(), span: area });
+                path.push(true);
+                b.place(rb, path, panes, dividers);
+                path.pop();
             }
         }
     }
@@ -227,6 +251,21 @@ mod tests {
         assert_eq!(neighbor(&rects, 3, Toward::Up), Some(2));
         assert_eq!(neighbor(&rects, 3, Toward::Left), Some(1));
         assert_eq!(neighbor(&rects, 1, Toward::Left), None);
+    }
+
+    #[test]
+    fn dividers_address_their_split() {
+        let mut l = Layout::Leaf(1);
+        l.split(1, 2, Dir::Right);
+        l.split(2, 3, Dir::Down);
+        let (_, dividers) = l.rects(area());
+        let inner = dividers.iter().find(|d| d.dir == Dir::Down).unwrap();
+        assert_eq!(inner.path, vec![true]);
+        assert_eq!(inner.span, Rect::new(51, 0, 50, 41));
+        assert!(l.set_ratio(&inner.path, 0.25));
+        let (panes, _) = l.rects(area());
+        assert_eq!(panes[1].1.height, 10);
+        assert!(!l.set_ratio(&[true, true], 0.5));
     }
 
     #[test]

@@ -24,13 +24,46 @@ pub enum Kind {
     Editor,
 }
 
-/// Captures OSC window titles, which agents use to report progress.
+/// The terminal side of a pane: captures OSC titles (agents report progress
+/// there) and answers the queries a real terminal answers, so apps that ask
+/// where the cursor is or what the background colour is don't stall.
 #[derive(Default)]
-pub struct Title(pub String);
+pub struct Term {
+    pub title: String,
+    /// Replies to write back to the app.
+    replies: Vec<u8>,
+}
 
-impl vt100::Callbacks for Title {
+impl vt100::Callbacks for Term {
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
-        self.0 = String::from_utf8_lossy(title).into_owned();
+        self.title = String::from_utf8_lossy(title).into_owned();
+    }
+
+    fn unhandled_csi(&mut self, screen: &mut vt100::Screen, i1: Option<u8>, _: Option<u8>, params: &[&[u16]], c: char) {
+        let first = params.first().and_then(|p| p.first()).copied().unwrap_or(0);
+        let reply = match (i1, c, first) {
+            // Device status: OK.
+            (None, 'n', 5) => "\x1b[0n".to_string(),
+            // Cursor position report (1-based).
+            (None, 'n', 6) => {
+                let (row, col) = screen.cursor_position();
+                format!("\x1b[{};{}R", row + 1, col + 1)
+            }
+            // Primary / secondary device attributes, answered like tmux.
+            (None, 'c', 0) => "\x1b[?1;2c".to_string(),
+            (Some(b'>'), 'c', 0) => "\x1b[>84;0;0c".to_string(),
+            _ => return,
+        };
+        self.replies.extend_from_slice(reply.as_bytes());
+    }
+
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        // OSC 10/11 colour queries: report a dark theme (light fg on black).
+        if let [which @ (b"10" | b"11"), b"?"] = params {
+            let rgb = if *which == b"10" { "c0c0/c0c0/c0c0" } else { "0000/0000/0000" };
+            let which = String::from_utf8_lossy(which);
+            self.replies.extend_from_slice(format!("\x1b]{which};rgb:{rgb}\x1b\\").as_bytes());
+        }
     }
 }
 
@@ -46,7 +79,7 @@ pub struct Pane {
     pub id: u64,
     pub loc: Loc,
     pub kind: Kind,
-    pub parser: vt100::Parser<Title>,
+    pub parser: vt100::Parser<Term>,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -122,7 +155,7 @@ impl Pane {
             id,
             loc,
             kind,
-            parser: vt100::Parser::new_with_callbacks(nz(rows), nz(cols), 5000, Title::default()),
+            parser: vt100::Parser::new_with_callbacks(nz(rows), nz(cols), 5000, Term::default()),
             master: pair.master,
             writer,
             child,
@@ -148,6 +181,14 @@ impl Pane {
             self.parser.process(&held);
         }
         self.parser.process(bytes);
+        self.send_replies();
+    }
+
+    fn send_replies(&mut self) {
+        let replies = std::mem::take(&mut self.parser.callbacks_mut().replies);
+        if !replies.is_empty() {
+            self.write_raw(&replies);
+        }
     }
 
     /// Hold output so the history copy mode is reading doesn't move.
@@ -160,6 +201,7 @@ impl Pane {
         self.parser.screen_mut().set_scrollback(0);
         if let Some(held) = self.frozen.take() {
             self.parser.process(&held);
+            self.send_replies();
         }
     }
 
@@ -194,8 +236,14 @@ impl Pane {
         let _ = self.writer.flush();
     }
 
+    /// Send bytes verbatim (already encoded for the app, e.g. mouse reports).
+    pub fn write_raw(&mut self, bytes: &[u8]) {
+        let _ = self.writer.write_all(bytes);
+        let _ = self.writer.flush();
+    }
+
     pub fn title(&self) -> &str {
-        &self.parser.callbacks().0
+        &self.parser.callbacks().title
     }
 
     /// Re-detect the foreground agent and its state. Returns true if anything changed.
@@ -292,4 +340,28 @@ fn replace(data: &[u8], pat: &[u8], with: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn term(input: &[u8]) -> Vec<u8> {
+        let mut p = vt100::Parser::new_with_callbacks(nz(10), nz(40), 0, Term::default());
+        p.process(input);
+        std::mem::take(&mut p.callbacks_mut().replies)
+    }
+
+    #[test]
+    fn answers_terminal_queries() {
+        assert_eq!(term(b"\x1b[3;7H\x1b[6n"), b"\x1b[3;7R");
+        assert_eq!(term(b"\x1b[5n"), b"\x1b[0n");
+        assert_eq!(term(b"\x1b[c"), b"\x1b[?1;2c");
+        assert_eq!(term(b"\x1b[>c"), b"\x1b[>84;0;0c");
+        assert_eq!(term(b"\x1b]11;?\x07"), b"\x1b]11;rgb:0000/0000/0000\x1b\\");
+        assert_eq!(term(b"plain text\x1b[2J"), b"");
+        let mut p = vt100::Parser::new_with_callbacks(nz(10), nz(40), 0, Term::default());
+        p.process(b"\x1b]0;\xe2\x9c\xb3 Claude Code\x07");
+        assert_eq!(p.callbacks().title, "✳ Claude Code");
+    }
 }

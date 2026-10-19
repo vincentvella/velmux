@@ -57,6 +57,24 @@ pub fn rows(app: &App) -> Vec<Row> {
     out
 }
 
+/// Sidebar rows with the screen line each is drawn on (a blank line separates
+/// projects). Shared by drawing and mouse hit-testing.
+pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
+    let mut out = Vec::new();
+    let mut y = 0;
+    for row in rows(app) {
+        if matches!(row, Row::Project(_)) && y > 0 {
+            y += 1;
+        }
+        if y + 1 >= height {
+            break;
+        }
+        out.push((y, row));
+        y += 1;
+    }
+    out
+}
+
 fn state_glyph(pane: &Pane) -> (&'static str, Style) {
     if pane.unseen_done {
         return ("✓", Style::new().fg(Color::Green));
@@ -88,16 +106,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
 
     // Sidebar.
     let dim = Style::new().fg(Color::DarkGray);
-    let mut y = 0;
-    for row in self::rows(app) {
-        if y + 1 >= rows {
-            break;
-        }
+    for (y, row) in sidebar_rows(app, rows) {
         match row {
             Row::Project(p) => {
-                if y > 0 {
-                    y += 1;
-                }
                 let name = &app.projects[p].pool.name;
                 buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
             }
@@ -134,7 +145,6 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 buf.set_stringn(4, y, label, side.saturating_sub(4) as usize, style);
             }
         }
-        y += 1;
     }
     for y in 0..rows.saturating_sub(1) {
         buf.set_string(side, y, "│", dim);
