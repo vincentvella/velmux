@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use velmux_pool::Status;
 
+use crate::copy::Copy;
 use crate::detect::AgentState;
 use crate::layout::Dir;
 use crate::pane::{Kind, Loc, Pane};
@@ -176,6 +177,10 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
                 let inner = content_rect(outer, titled);
                 draw_screen(pane.parser.screen(), inner, buf);
+                if let Some(c) = app.copy.as_ref().filter(|c| c.pane == id) {
+                    cursor = draw_copy(c, pane, inner, buf);
+                    continue;
+                }
                 let screen = pane.parser.screen();
                 if is_focused && !screen.hide_cursor() && matches!(app.mode, Mode::Normal | Mode::Prefix) {
                     let (r, c) = screen.cursor_position();
@@ -209,12 +214,24 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         Mode::Prefix => "n slot · a agent@base · c/e shell/editor · |/- split · arrows move · z zoom · HJKL resize · j/k cycle · 1-9 slot · r release · x close · d detach · Q quit".to_string(),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
+        Mode::Copy => match app.copy.as_ref() {
+            Some(c) => match (&c.search, &c.message) {
+                (Some(q), _) => format!("search {} {q}", if c.search_up { "↑" } else { "↓" }),
+                (None, Some(m)) => m.clone(),
+                (None, None) => "COPY · hjkl/arrows · ^u ^d ^b ^f · g G · v/V select · y copy · / ? search · n N · q exit".into(),
+            },
+            None => String::new(),
+        },
         Mode::Normal => app
             .status_text()
             .unwrap_or_else(|| format!("{} ? keys", app.prefix.label)),
     };
     let style = if matches!(app.mode, Mode::Normal) { bar } else { bar.fg(Color::Yellow) };
     buf.set_stringn(1, sy, &text, cols.saturating_sub(2) as usize, style);
+    if let Some(q) = app.copy.as_ref().and_then(|c| c.search.as_ref()) {
+        let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
+        cursor = Some(Position::new(x.min(cols - 1), sy));
+    }
     if let Mode::Prompt { label, input, .. } = &app.mode {
         let x = 1 + (label.chars().count() + 2 + input.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
@@ -227,6 +244,35 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
     cursor
+}
+
+/// Selection highlight, scroll position and the copy cursor over a frozen pane.
+fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    let top = c.top(&pane.parser);
+    let sel = Style::new().bg(Color::Indexed(25)).fg(Color::White);
+    if let Some((a, b)) = c.selection() {
+        for r in 0..area.height {
+            let abs = top + r as usize;
+            if abs < a.0 || abs > b.0 {
+                continue;
+            }
+            let from = if abs == a.0 { a.1 } else { 0 };
+            let to = if abs == b.0 { b.1.min(area.width.saturating_sub(1)) } else { area.width.saturating_sub(1) };
+            for col in from..=to {
+                if let Some(cell) = buf.cell_mut((area.x + col, area.y + r)) {
+                    cell.set_style(sel);
+                }
+            }
+        }
+    }
+    let sb = pane.parser.screen().scrollback_len();
+    let tag = format!("[{}/{}]", c.offset, sb);
+    let w = tag.chars().count() as u16;
+    if w < area.width {
+        buf.set_string(area.right() - w, area.y, tag, Style::new().bg(Color::Yellow).fg(Color::Black));
+    }
+    let row = c.cursor.0.checked_sub(top).filter(|r| *r < area.height as usize)?;
+    (c.search.is_none()).then(|| Position::new(area.x + c.cursor.1.min(area.width - 1), area.y + row as u16))
 }
 
 fn draw_title(pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {

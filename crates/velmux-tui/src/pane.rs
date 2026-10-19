@@ -60,7 +60,12 @@ pub struct Pane {
     /// Claude session this pane runs, when the agent is Claude Code.
     pub session: Option<String>,
     pub started_at: SystemTime,
+    /// Output held back while copy mode reads the history (`None` = live).
+    frozen: Option<Vec<u8>>,
 }
+
+/// Past this much held output, copy mode stops freezing the pane.
+const FREEZE_CAP: usize = 16 << 20;
 
 fn nz(v: u16) -> NonZeroU16 {
     NonZeroU16::new(v.max(1)).unwrap()
@@ -128,12 +133,34 @@ impl Pane {
             last_output: Instant::now(),
             session: None,
             started_at: SystemTime::now(),
+            frozen: None,
         })
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
         self.last_output = Instant::now();
+        if let Some(held) = &mut self.frozen {
+            if held.len() + bytes.len() <= FREEZE_CAP {
+                held.extend_from_slice(bytes);
+                return;
+            }
+            let held = self.frozen.take().unwrap_or_default();
+            self.parser.process(&held);
+        }
+        self.parser.process(bytes);
+    }
+
+    /// Hold output so the history copy mode is reading doesn't move.
+    pub fn freeze(&mut self) {
+        self.frozen.get_or_insert_with(Vec::new);
+    }
+
+    /// Back to the live view, applying everything held while frozen.
+    pub fn thaw(&mut self) {
+        self.parser.screen_mut().set_scrollback(0);
+        if let Some(held) = self.frozen.take() {
+            self.parser.process(&held);
+        }
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -173,6 +200,10 @@ impl Pane {
 
     /// Re-detect the foreground agent and its state. Returns true if anything changed.
     pub fn detect(&mut self, focused: bool) -> bool {
+        // A frozen pane shows scrolled history, not the agent's live screen.
+        if self.frozen.is_some() {
+            return false;
+        }
         let agent = detect::foreground_agent(self.master.process_group_leader());
         let state = match agent {
             Some("claude") => {

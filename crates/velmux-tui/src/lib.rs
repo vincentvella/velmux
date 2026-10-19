@@ -2,6 +2,7 @@
 //! thin clients attach, detach, and reattach without losing panes.
 
 mod client;
+mod copy;
 mod detect;
 mod layout;
 mod pane;

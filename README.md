@@ -31,10 +31,23 @@ The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
 | arrows | focus the pane in that direction |
 | `H` `J` `K` `L` | move the nearest divider |
 | `z` | zoom the focused pane (toggle) |
+| `[` / `PgUp` | copy mode: scroll history, select, yank |
 | `j` `k` / `1`–`9` | next / previous pane across all slots, jump to slot N |
 | `r` | release the current slot (closes its panes, stashes work) |
 | `x` / `d` / `Q` | close pane / detach / stop the server |
 | `<prefix>` | send the prefix key itself to the pane |
+
+### Copy mode
+
+`<prefix> [` (or `<prefix> PgUp`) freezes the focused pane and opens its
+history (5000 lines). vi keys move (`hjkl`, `^u ^d ^b ^f`, `g G`, `0 $`), `v` /
+`V` select by character / line, `y` or Enter copies and exits, `/` and `?` search
+down / up (smartcase), `n N` repeat, `q` or Esc exits. Copies go to the system
+clipboard (`pbcopy`, `wl-copy` or `xclip`) and to your terminal via OSC 52, so
+they work over SSH too. Output is held while you read and applied on exit.
+
+Full-screen apps (vim, or Claude with `"tui": "fullscreen"`) draw on the
+alternate screen, which has no history; copy mode can still copy what's visible.
 
 ### Restore
 

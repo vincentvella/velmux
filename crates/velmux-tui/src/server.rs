@@ -12,6 +12,7 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use crate::copy::{self, Action, Copy};
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::prefix::Prefix;
@@ -24,6 +25,7 @@ const KEY_UP: u8 = 0xF1;
 const KEY_DOWN: u8 = 0xF2;
 const KEY_RIGHT: u8 = 0xF3;
 const KEY_LEFT: u8 = 0xF4;
+const KEY_PGUP: u8 = 0xF5;
 
 pub enum Event {
     Client(UnixStream),
@@ -45,6 +47,8 @@ pub enum Mode {
     Prefix,
     Prompt { label: String, input: String },
     Confirm { label: String, action: Confirm },
+    /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
+    Copy,
 }
 
 pub enum Confirm {
@@ -82,6 +86,9 @@ pub struct App {
     next_conn: u64,
     next_pane: u64,
     prev: Buffer,
+    pub copy: Option<Copy>,
+    /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
+    pending_out: Vec<u8>,
     full_redraw: bool,
     dirty: bool,
     quit: bool,
@@ -173,6 +180,8 @@ impl App {
             next_conn: 0,
             next_pane: 1,
             prev: Buffer::empty(Rect::new(0, 0, 80, 24)),
+            copy: None,
+            pending_out: Vec::new(),
             full_redraw: true,
             dirty: true,
             quit: false,
@@ -520,6 +529,7 @@ impl App {
                         [0x1b, b'[', b'B', ..] => (KEY_DOWN, 3),
                         [0x1b, b'[', b'C', ..] => (KEY_RIGHT, 3),
                         [0x1b, b'[', b'D', ..] => (KEY_LEFT, 3),
+                        [0x1b, b'[', b'5', b'~', ..] => (KEY_PGUP, 4),
                         [b, ..] => (*b, 1),
                         [] => unreachable!(),
                     };
@@ -527,6 +537,7 @@ impl App {
                     len
                 }
                 Mode::Prompt { .. } => self.prompt_input(bytes),
+                Mode::Copy => self.copy_input(bytes),
                 Mode::Confirm { .. } => {
                     let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
                     else {
@@ -630,6 +641,8 @@ impl App {
             b'K' => self.nudge(Dir::Down, -0.05),
             b'J' => self.nudge(Dir::Down, 0.05),
             b'z' => self.toggle_zoom(),
+            b'[' => self.enter_copy(false),
+            KEY_PGUP => self.enter_copy(true),
             b'x' => {
                 if let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
                     pane.kill();
@@ -650,7 +663,7 @@ impl App {
                 self.mode = Mode::Confirm { label: "stop the server? panes and Claude sessions are restored next time you run velmux".into(), action: Confirm::Quit }
             }
             b'?' => self.say(format!(
-                "{} then: n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · {0} literal",
+                "{} then: [ copy/scroll · n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · {0} literal",
                 self.prefix.short
             )),
             b'1'..=b'9' => self.jump_to_slot(format!("slot-{}", key - b'0')),
@@ -843,7 +856,88 @@ impl App {
         }
     }
 
+    fn enter_copy(&mut self, page_up: bool) {
+        let Some(id) = self.focus else { return };
+        let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
+        pane.freeze();
+        let mut c = Copy::enter(id, &pane.parser);
+        if page_up {
+            c.key(&[0x02], &mut pane.parser);
+        }
+        c.sync(&mut pane.parser);
+        self.copy = Some(c);
+        self.mode = Mode::Copy;
+    }
+
+    fn copy_input(&mut self, bytes: &[u8]) -> usize {
+        let Some(id) = self.copy.as_ref().map(|c| c.pane) else {
+            self.mode = Mode::Normal;
+            return bytes.len();
+        };
+        let (Some(c), Some(pane)) = (self.copy.as_mut(), self.panes.iter_mut().find(|p| p.id == id)) else {
+            self.exit_copy();
+            return bytes.len();
+        };
+        let (used, action) = c.key(bytes, &mut pane.parser);
+        match action {
+            Action::Stay => {}
+            Action::Exit => self.exit_copy(),
+            Action::Yank(text) => {
+                let lines = text.lines().count().max(1);
+                self.set_clipboard(&text);
+                self.exit_copy();
+                self.say(format!("copied {lines} line(s)"));
+            }
+        }
+        used.max(1)
+    }
+
+    fn exit_copy(&mut self) {
+        if let Some(c) = self.copy.take() {
+            if let Some(pane) = self.panes.iter_mut().find(|p| p.id == c.pane) {
+                pane.thaw();
+            }
+        }
+        self.mode = Mode::Normal;
+        self.dirty = true;
+    }
+
+    /// OSC 52 to the client terminal (works over SSH), plus the local clipboard
+    /// tool when there is one, since the server runs on the user's machine.
+    fn set_clipboard(&mut self, text: &str) {
+        self.pending_out.extend_from_slice(&copy::osc52(text));
+        let text = text.to_string();
+        std::thread::spawn(move || {
+            let tools: &[&[&str]] = if cfg!(target_os = "macos") {
+                &[&["pbcopy"]]
+            } else {
+                &[&["wl-copy"], &["xclip", "-selection", "clipboard"]]
+            };
+            for tool in tools {
+                let child = std::process::Command::new(tool[0])
+                    .args(&tool[1..])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                if let Ok(mut child) = child {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    if child.wait().is_ok_and(|s| s.success()) {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
     fn remove_pane(&mut self, id: u64) {
+        if self.copy.as_ref().is_some_and(|c| c.pane == id) {
+            self.copy = None;
+            self.mode = Mode::Normal;
+        }
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let mut pane = self.panes.remove(i);
         pane.reap();
@@ -910,7 +1004,7 @@ impl App {
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let mut buf = Buffer::empty(area);
         let cursor = ui::draw(self, &mut buf);
-        let mut out: Vec<u8> = Vec::new();
+        let mut out: Vec<u8> = std::mem::take(&mut self.pending_out);
         if self.full_redraw || self.prev.area != area {
             out.extend_from_slice(b"\x1b[0m\x1b[2J\x1b[H");
             self.prev = Buffer::empty(area);
