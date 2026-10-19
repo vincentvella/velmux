@@ -12,3 +12,5 @@ crossterm = "0.29"
 portable-pty = "0.9"
 vt100 = "0.18"
 libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true

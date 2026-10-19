@@ -1829,6 +1829,8 @@ dependencies = [
  "libc",
  "portable-pty",
  "ratatui",
+ "serde",
+ "serde_json",
  "velmux-pool",
  "vt100",
 ]

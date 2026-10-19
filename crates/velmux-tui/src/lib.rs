@@ -8,6 +8,7 @@ mod pane;
 mod prefix;
 mod proto;
 mod server;
+mod session;
 mod ui;
 
 pub use client::attach;

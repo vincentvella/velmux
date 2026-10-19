@@ -6,7 +6,9 @@
 //! Resuming adopts the current cwd, so callers must resume inside the slot the
 //! session ran in.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
@@ -55,9 +57,88 @@ pub fn link(claude_dir: &Path, base: &Path, slot: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The session a pane in `cwd` should resume: the newest transcript recorded in
+/// `cwd` that is either `known` or was written since `since`, skipping sessions
+/// that belong to other panes (`exclude`). Catches `/clear`, which starts a new
+/// session without telling us.
+pub fn latest_session(
+    claude_dir: &Path,
+    cwd: &Path,
+    known: Option<&str>,
+    since: SystemTime,
+    exclude: &[String],
+) -> Option<String> {
+    let dir = project_dir(claude_dir, cwd);
+    let mut best: Option<(SystemTime, String)> = None;
+    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
+        if exclude.contains(&id) {
+            continue;
+        }
+        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else { continue };
+        let is_known = known == Some(id.as_str());
+        if !is_known && (mtime < since || transcript_cwd(&path).as_deref() != Some(cwd)) {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+            best = Some((mtime, id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// The `cwd` a transcript was recorded in (from its first entries that carry one).
+fn transcript_cwd(path: &Path) -> Option<PathBuf> {
+    let file = std::fs::File::open(path).ok()?;
+    BufReader::new(file).lines().take(200).map_while(Result::ok).find_map(|line| {
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        v.get("cwd")?.as_str().map(PathBuf::from)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn transcript(dir: &Path, id: &str, cwd: &str) {
+        let body = format!(
+            "{{\"type\":\"mode\",\"sessionId\":\"{id}\"}}\n{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n"
+        );
+        std::fs::write(dir.join(format!("{id}.jsonl")), body).unwrap();
+    }
+
+    #[test]
+    fn latest_session_prefers_newest_in_same_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path();
+        let slot = Path::new("/w/.pools/app/slot-1");
+        let dir = project_dir(claude, slot);
+        std::fs::create_dir_all(&dir).unwrap();
+        let start = SystemTime::now() - Duration::from_secs(5);
+
+        transcript(&dir, "aaa", "/w/.pools/app/slot-1");
+        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &[]).as_deref(), Some("aaa"));
+
+        // After /clear: a newer transcript for the same slot wins over the known id…
+        std::thread::sleep(Duration::from_millis(20));
+        transcript(&dir, "bbb", "/w/.pools/app/slot-1");
+        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &[]).as_deref(), Some("bbb"));
+        // …unless another pane owns it, or it ran in a different slot.
+        let others = vec!["bbb".to_string()];
+        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &others).as_deref(), Some("aaa"));
+        std::thread::sleep(Duration::from_millis(20));
+        transcript(&dir, "ccc", "/w/.pools/app/slot-2");
+        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &others).as_deref(), Some("aaa"));
+
+        // Unknown and nothing recent: start fresh.
+        let later = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(latest_session(claude, slot, None, later, &[]), None);
+    }
 
     #[test]
     fn sanitizes_like_claude_code() {

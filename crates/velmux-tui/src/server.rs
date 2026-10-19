@@ -3,10 +3,11 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use velmux_pool::{prefix_key, ClaimOpts, Env, Pool, SlotView, Status};
+use velmux_pool::{claude, prefix_key, ClaimOpts, Env, Pool, SlotView, Status};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,6 +16,7 @@ use crate::layout::{self, Dir, Layout, Toward};
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::prefix::Prefix;
 use crate::proto::{ClientMsg, ServerMsg};
+use crate::session::{self, Saved, SavedPane, SavedView};
 use crate::{paths, ui};
 
 // Arrow keys after the prefix, mapped out of the byte range commands use.
@@ -114,6 +116,7 @@ pub fn serve() -> Result<()> {
         eprintln!("velmux: {w}");
     }
     let mut app = App::new(tx, prefix, warning);
+    app.restore();
     let (mut last_detect, mut last_slots, mut last_render) =
         (Instant::now(), Instant::now(), Instant::now());
     loop {
@@ -146,6 +149,8 @@ pub fn serve() -> Result<()> {
     }
     app.say_bye("server stopped");
     let _ = std::fs::remove_file(&sock);
+    // Let each pane's SIGKILL fallback fire before the process (and its threads) exit.
+    std::thread::sleep(Duration::from_millis(1700));
     Ok(())
 }
 
@@ -348,6 +353,107 @@ impl App {
         }
         self.full_redraw = true;
         self.dirty = true;
+        // Every structural change ends in a relayout, so this keeps the save current.
+        self.save();
+    }
+
+    fn save(&self) {
+        let secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let views = self
+            .views
+            .iter()
+            .map(|(loc, view)| SavedView {
+                project: self.projects[loc.project].pool.base.clone(),
+                slot: loc.slot.clone(),
+                layout: view.layout.clone(),
+                panes: view
+                    .layout
+                    .leaves()
+                    .into_iter()
+                    .filter_map(|id| self.pane(id))
+                    .map(|p| SavedPane {
+                        id: p.id,
+                        kind: p.kind,
+                        claude_session: p.session.clone(),
+                        started_at: secs(p.started_at),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let saved = Saved {
+            version: 1,
+            projects: self.projects.iter().map(|p| p.pool.base.clone()).collect(),
+            views,
+        };
+        if let Err(e) = session::save(&saved) {
+            eprintln!("velmux: saving session: {e:#}");
+        }
+    }
+
+    /// Bring back the projects, layouts and panes of the last server. Claude panes
+    /// resume their conversation in the slot they ran in; slots released since are skipped.
+    fn restore(&mut self) {
+        let Some(saved) = session::load() else { return };
+        let env = Env::from_process().ok();
+        for base in &saved.projects {
+            let Some(pool) = env.clone().and_then(|e| Pool::discover(e, base).ok()) else { continue };
+            if !self.projects.iter().any(|p| p.pool.base == pool.base) {
+                self.projects.push(Project { pool: Arc::new(pool), slots: Vec::new() });
+            }
+        }
+        self.refresh_slots();
+
+        let known: Vec<String> =
+            saved.views.iter().flat_map(|v| &v.panes).filter_map(|p| p.claude_session.clone()).collect();
+        let mut taken: Vec<String> = Vec::new();
+        let (mut panes, mut resumed) = (0, 0);
+        for view in saved.views {
+            let Some(project) = self.projects.iter().position(|p| p.pool.base == view.project) else { continue };
+            let loc = Loc { project, slot: view.slot };
+            if let Some(id) = &loc.slot {
+                let in_use = self.projects[project].slots.iter().any(|s| &s.id == id && s.status == Status::InUse);
+                if !in_use {
+                    continue;
+                }
+            }
+            let Some(cwd) = self.loc_cwd(&loc) else { continue };
+            let mut layout = Some(view.layout);
+            let mut ids = HashMap::new();
+            for p in view.panes {
+                let resume = match (&env, p.kind) {
+                    (Some(env), Kind::Agent) => {
+                        let exclude: Vec<String> = known
+                            .iter()
+                            .filter(|k| Some(*k) != p.claude_session.as_ref())
+                            .chain(&taken)
+                            .cloned()
+                            .collect();
+                        let since = UNIX_EPOCH + Duration::from_secs(p.started_at.saturating_sub(10));
+                        claude::latest_session(&env.claude_dir, &cwd, p.claude_session.as_deref(), since, &exclude)
+                    }
+                    _ => None,
+                };
+                if let Some(id) = &resume {
+                    taken.push(id.clone());
+                }
+                let resuming = resume.is_some();
+                match self.launch(&loc, p.kind, resume) {
+                    Ok(new) => {
+                        ids.insert(p.id, new);
+                        panes += 1;
+                        resumed += resuming as usize;
+                    }
+                    Err(_) => layout = layout.and_then(|l| l.remove(p.id)),
+                }
+            }
+            if let Some(layout) = layout {
+                self.views.insert(loc, View { layout: layout.remap(&ids), zoomed: None });
+            }
+        }
+        if panes > 0 && self.startup_warning.is_none() {
+            self.startup_warning = Some(format!("restored {panes} pane(s), {resumed} Claude session(s) resumed"));
+        }
+        self.relayout();
     }
 
     /// Register the repo containing `cwd` and make it current.
@@ -365,10 +471,12 @@ impl App {
         };
         self.refresh_slots();
         let slot = self.projects[index].pool.slot_of(cwd).ok().flatten();
-        self.current = Some(Loc { project: index, slot });
-        if self.focused().is_none_or(|p| p.loc.project != index) {
-            self.focus = None;
+        let loc = Loc { project: index, slot };
+        if self.focused().is_none_or(|p| p.loc != loc) {
+            self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
         }
+        self.current = Some(loc);
+        self.save();
     }
 
     pub fn refresh_slots(&mut self) {
@@ -539,7 +647,7 @@ impl App {
             },
             b'd' => self.say_bye("detached — run `velmux` to reattach"),
             b'Q' => {
-                self.mode = Mode::Confirm { label: "quit server and close every pane?".into(), action: Confirm::Quit }
+                self.mode = Mode::Confirm { label: "stop the server? panes and Claude sessions are restored next time you run velmux".into(), action: Confirm::Quit }
             }
             b'?' => self.say(format!(
                 "{} then: n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · {0} literal",
@@ -613,16 +721,47 @@ impl App {
 
     /// Open a pane in `loc`, splitting the focused pane there (`dir`, or along its longer side).
     fn spawn(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>) {
-        let project = &self.projects[loc.project];
-        let pool = &project.pool;
-        let cwd = match &loc.slot {
-            None => pool.base.clone(),
-            Some(id) => match project.slots.iter().find(|s| &s.id == id) {
-                Some(s) => s.path.clone(),
-                None => return self.say(format!("{id} not found")),
-            },
-        };
+        match self.launch(&loc, kind, None) {
+            Ok(id) => {
+                self.insert_into_view(&loc, id, dir);
+                self.focus = Some(id);
+                self.current = Some(loc);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
+        self.dirty = true;
+    }
+
+    fn loc_cwd(&self, loc: &Loc) -> Option<PathBuf> {
+        let project = self.projects.get(loc.project)?;
+        match &loc.slot {
+            None => Some(project.pool.base.clone()),
+            Some(id) => project.slots.iter().find(|s| &s.id == id).map(|s| s.path.clone()),
+        }
+    }
+
+    /// Start a pane process in `loc` (not yet placed in a view). Claude agents get a
+    /// known session id, or resume `resume`.
+    fn launch(&mut self, loc: &Loc, kind: Kind, resume: Option<String>) -> Result<u64, String> {
+        let cwd = self.loc_cwd(loc).ok_or_else(|| format!("{} not found", self.loc_name(loc)))?;
+        let pool = &self.projects[loc.project].pool;
+        let mut session = None;
         let command = match kind {
+            Kind::Agent if session::is_claude(&pool.cfg.agent) => {
+                let agent = &pool.cfg.agent;
+                Some(match resume {
+                    Some(id) => {
+                        session = Some(id.clone());
+                        format!("{agent} --resume {id}")
+                    }
+                    None => {
+                        let id = session::new_session_id();
+                        session = Some(id.clone());
+                        format!("{agent} --session-id {id}")
+                    }
+                })
+            }
             Kind::Agent => Some(pool.cfg.agent.clone()),
             Kind::Shell => None,
             Kind::Editor => {
@@ -644,17 +783,11 @@ impl App {
         let id = self.next_pane;
         self.next_pane += 1;
         let launch = Launch { cwd: &cwd, command: command.as_deref(), env: &env };
-        match Pane::spawn(id, loc.clone(), kind, launch, (body.width, body.height), self.events.clone()) {
-            Ok(pane) => {
-                self.panes.push(pane);
-                self.insert_into_view(&loc, id, dir);
-                self.focus = Some(id);
-                self.current = Some(loc);
-                self.relayout();
-            }
-            Err(e) => self.say(format!("spawn failed: {e:#}")),
-        }
-        self.dirty = true;
+        let mut pane = Pane::spawn(id, loc.clone(), kind, launch, (body.width, body.height), self.events.clone())
+            .map_err(|e| format!("spawn failed: {e:#}"))?;
+        pane.session = session;
+        self.panes.push(pane);
+        Ok(id)
     }
 
     fn insert_into_view(&mut self, loc: &Loc, id: u64, dir: Option<Dir>) {

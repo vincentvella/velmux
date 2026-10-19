@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::num::NonZeroU16;
 use std::path::Path;
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{anyhow, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -17,7 +17,7 @@ pub struct Loc {
     pub slot: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Agent,
     Shell,
@@ -57,6 +57,9 @@ pub struct Pane {
     /// Agent finished while the pane wasn't focused.
     pub unseen_done: bool,
     pub last_output: Instant,
+    /// Claude session this pane runs, when the agent is Claude Code.
+    pub session: Option<String>,
+    pub started_at: SystemTime,
 }
 
 fn nz(v: u16) -> NonZeroU16 {
@@ -123,6 +126,8 @@ impl Pane {
             idle_streak: 0,
             unseen_done: false,
             last_output: Instant::now(),
+            session: None,
+            started_at: SystemTime::now(),
         })
     }
 
@@ -201,8 +206,37 @@ impl Pane {
         changed
     }
 
+    /// Terminate everything running in the pane, not just its shell: `sh -c 'claude; …'`
+    /// keeps the agent in the shell's process group, and it outlives a lone SIGHUP to
+    /// the shell (reparented to init). Signal the groups, then SIGKILL stragglers.
     pub fn kill(&mut self) {
+        let mut groups: Vec<libc::pid_t> = Vec::new();
+        if let Some(pid) = self.child.process_id() {
+            groups.push(pid as libc::pid_t);
+        }
+        if let Some(fg) = self.master.process_group_leader() {
+            if !groups.contains(&fg) {
+                groups.push(fg);
+            }
+        }
+        groups.retain(|&g| g > 1);
+        for &g in &groups {
+            unsafe {
+                libc::killpg(g, libc::SIGHUP);
+                libc::killpg(g, libc::SIGTERM);
+            }
+        }
         let _ = self.child.kill();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            for g in groups {
+                unsafe {
+                    if libc::killpg(g, 0) == 0 {
+                        libc::killpg(g, libc::SIGKILL);
+                    }
+                }
+            }
+        });
     }
 
     pub fn reap(&mut self) {

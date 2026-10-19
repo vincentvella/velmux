@@ -36,6 +36,16 @@ The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
 | `x` / `d` / `Q` | close pane / detach / stop the server |
 | `<prefix>` | send the prefix key itself to the pane |
 
+### Restore
+
+The server saves projects, layouts and panes as they change
+(`~/.local/state/velmux/session.json`). After a restart (`<prefix> Q`, an
+upgrade, a crash, a reboot) `velmux` brings them back: shells and editors
+reopen, and Claude panes run `claude --resume` **inside the slot they ran in**.
+velmux launches Claude with `--session-id`, so no hooks are needed; if you
+`/clear` mid-pane, restore picks the newest transcript recorded in that slot.
+Slots released in the meantime are skipped.
+
 ## CLI
 
 ```sh

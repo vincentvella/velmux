@@ -1,8 +1,11 @@
 //! Binary split tree of pane ids, one per location (base or slot).
 
-use ratatui::layout::Rect;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dir {
     /// Side by side, divided by a vertical line.
     Right,
@@ -18,7 +21,7 @@ pub enum Toward {
     Down,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Layout {
     Leaf(u64),
     Split { dir: Dir, ratio: f32, a: Box<Layout>, b: Box<Layout> },
@@ -41,6 +44,19 @@ impl Layout {
                 v.extend(b.leaves());
                 v
             }
+        }
+    }
+
+    /// Rewrite leaf ids (after restoring panes under new ids).
+    pub fn remap(self, ids: &HashMap<u64, u64>) -> Layout {
+        match self {
+            Layout::Leaf(id) => Layout::Leaf(ids.get(&id).copied().unwrap_or(id)),
+            Layout::Split { dir, ratio, a, b } => Layout::Split {
+                dir,
+                ratio,
+                a: Box::new(a.remap(ids)),
+                b: Box::new(b.remap(ids)),
+            },
         }
     }
 
