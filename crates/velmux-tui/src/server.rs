@@ -1152,6 +1152,8 @@ impl App {
                 Some(format!("{editor} ."))
             }
         };
+        let path_var = std::env::var_os("PATH");
+        let command = command.map(|c| session::resolve_program(&c, path_var.as_deref()));
         let mut env = Vec::new();
         if let Some(base) = project.base() {
             env.push(("VELMUX_BASE", base.to_string_lossy().into_owned()));

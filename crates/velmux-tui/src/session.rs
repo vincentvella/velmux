@@ -83,6 +83,28 @@ pub fn is_claude(agent: &str) -> bool {
         .is_some_and(|name| name == "claude")
 }
 
+/// Pin a command's program to an absolute path using `path_var` (the server's
+/// PATH, inherited from the terminal that started velmux). Panes run through a
+/// login shell, whose profile can reorder PATH: without this, `claude` in a pane
+/// may be a different install than `claude` in your terminal.
+pub fn resolve_program(command: &str, path_var: Option<&std::ffi::OsStr>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let trimmed = command.trim_start();
+    let prog_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let (prog, rest) = trimmed.split_at(prog_len);
+    if prog.is_empty() || prog.contains('/') {
+        return command.to_string();
+    }
+    let Some(path_var) = path_var else { return command.to_string() };
+    let found = std::env::split_paths(path_var).map(|dir| dir.join(prog)).find(|p| {
+        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    });
+    match found {
+        Some(p) if !p.to_string_lossy().contains(char::is_whitespace) => format!("{}{rest}", p.display()),
+        _ => command.to_string(),
+    }
+}
+
 /// A fresh v4 UUID for `claude --session-id`.
 pub fn new_session_id() -> String {
     let mut b = [0u8; 16];
@@ -110,6 +132,29 @@ mod tests {
         assert!(is_claude("/Users/me/.local/bin/claude --model opus"));
         assert!(!is_claude("codex"));
         assert!(!is_claude("claude-wrapper"));
+    }
+
+    #[test]
+    fn resolves_programs_with_the_given_path_order() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let (first, second) = (tmp.path().join("a"), tmp.path().join("b"));
+        for dir in [&first, &second] {
+            std::fs::create_dir_all(dir).unwrap();
+            let bin = dir.join("claude");
+            std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(first.join("notexec"), "").unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        let p = Some(path.as_os_str());
+        assert_eq!(resolve_program("claude --resume x", p), format!("{}/claude --resume x", first.display()));
+        assert_eq!(resolve_program("claude", p), format!("{}/claude", first.display()));
+        // Explicit paths, unknown or non-executable programs are left alone.
+        assert_eq!(resolve_program("/opt/x/claude -c", p), "/opt/x/claude -c");
+        assert_eq!(resolve_program("nope --flag", p), "nope --flag");
+        assert_eq!(resolve_program("notexec", p), "notexec");
+        assert_eq!(resolve_program("claude", None), "claude");
     }
 
     #[test]
