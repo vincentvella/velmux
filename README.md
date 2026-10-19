@@ -16,14 +16,19 @@ Run `velmux` with no arguments inside a repo. A background server owns every
 pane, so `ctrl+b d` detaches and `velmux` reattaches with everything still
 running. The sidebar nests panes under the base checkout and each slot, with
 agent state: `●` working, `▲` blocked on you, `○` idle, `✓` finished while you
-were elsewhere.
+were elsewhere. Each base checkout and slot has its own split layout, like a
+tmux window per slot, so a slot can show Claude beside a test-runner shell.
 
 | `ctrl+b` then | |
 |---|---|
 | `n` | claim a slot (prompts for a branch) and start Claude there |
 | `a` | Claude in the base checkout |
-| `c` / `e` | shell / editor in the current base or slot |
-| `j` `k` / `1`–`9` | next / previous pane, jump to slot N |
+| `c` / `e` | shell / editor in the current base or slot (splits the focused pane) |
+| `\|` / `-` | split right / down with a shell |
+| arrows | focus the pane in that direction |
+| `H` `J` `K` `L` | move the nearest divider |
+| `z` | zoom the focused pane (toggle) |
+| `j` `k` / `1`–`9` | next / previous pane across all slots, jump to slot N |
 | `r` | release the current slot (closes its panes, stashes work) |
 | `x` / `d` / `Q` | close pane / detach / stop the server |
 | `ctrl+b` | send a literal ctrl+b |

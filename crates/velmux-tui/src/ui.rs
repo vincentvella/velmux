@@ -5,6 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use velmux_pool::Status;
 
 use crate::detect::AgentState;
+use crate::layout::Dir;
 use crate::pane::{Kind, Loc, Pane};
 use crate::server::{App, Mode};
 
@@ -16,6 +17,15 @@ pub fn sidebar_width(cols: u16) -> u16 {
 pub fn pane_area(cols: u16, rows: u16) -> Rect {
     let x = sidebar_width(cols) + 1;
     Rect::new(x, 1, cols.saturating_sub(x).max(1), rows.saturating_sub(2).max(1))
+}
+
+/// A pane's terminal area within its outer rect (minus the title row when split).
+pub fn content_rect(outer: Rect, titled: bool) -> Rect {
+    if titled && outer.height > 1 {
+        Rect::new(outer.x, outer.y + 1, outer.width, outer.height - 1)
+    } else {
+        outer
+    }
 }
 
 /// One sidebar line. Panes nest under the base/slot they run in.
@@ -143,13 +153,36 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     buf.set_stringn(body.x, 0, header, body.width as usize, Style::new().add_modifier(Modifier::BOLD));
 
     let mut cursor = None;
-    match focused {
-        Some(pane) => {
-            draw_screen(pane.parser.screen(), body, buf);
-            let screen = pane.parser.screen();
-            if !screen.hide_cursor() && matches!(app.mode, Mode::Normal | Mode::Prefix) {
-                let (r, c) = screen.cursor_position();
-                cursor = Some(Position::new(body.x + c, body.y + r));
+    match current.as_ref().filter(|loc| app.views.contains_key(loc)) {
+        Some(loc) => {
+            let titled = app.titled(loc);
+            let (rects, dividers) = app.view_rects(loc);
+            for d in dividers {
+                let glyph = match d.dir {
+                    Dir::Right => "│",
+                    Dir::Down => "─",
+                };
+                for y in d.rect.y..d.rect.bottom() {
+                    for x in d.rect.x..d.rect.right() {
+                        buf.set_string(x, y, glyph, dim);
+                    }
+                }
+            }
+            for (id, outer) in rects {
+                let Some(pane) = app.pane(id) else { continue };
+                let is_focused = focused.map(|f| f.id) == Some(id);
+                if titled {
+                    draw_title(pane, outer, is_focused, buf);
+                }
+                let inner = content_rect(outer, titled);
+                draw_screen(pane.parser.screen(), inner, buf);
+                let screen = pane.parser.screen();
+                if is_focused && !screen.hide_cursor() && matches!(app.mode, Mode::Normal | Mode::Prefix) {
+                    let (r, c) = screen.cursor_position();
+                    if r < inner.height && c < inner.width {
+                        cursor = Some(Position::new(inner.x + c, inner.y + r));
+                    }
+                }
             }
         }
         None => {
@@ -172,7 +205,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let bar = Style::new().bg(Color::Indexed(236)).fg(Color::White);
     buf.set_style(Rect::new(0, sy, cols, 1), bar);
     let text = match &app.mode {
-        Mode::Prefix => "n slot · a agent@base · c shell · e editor · j/k move · 1-9 slot · r release · x close · d detach · Q quit".to_string(),
+        Mode::Prefix => "n slot · a agent@base · c/e shell/editor · |/- split · arrows move · z zoom · HJKL resize · j/k cycle · 1-9 slot · r release · x close · d detach · Q quit".to_string(),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
         Mode::Normal => app.status_text().unwrap_or_else(|| "ctrl+b ? keys".into()),
@@ -191,6 +224,25 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
     cursor
+}
+
+fn draw_title(pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {
+    let row = Rect::new(outer.x, outer.y, outer.width, 1);
+    let style = if focused {
+        Style::new().bg(Color::Indexed(24)).fg(Color::White).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().bg(Color::Indexed(236)).fg(Color::Gray)
+    };
+    buf.set_style(row, style);
+    let (glyph, gstyle) = state_glyph(pane);
+    buf.set_stringn(row.x + 1, row.y, glyph, 1, gstyle.patch(Style::new().bg(style.bg.unwrap_or(Color::Reset))));
+    let title = pane.title().trim();
+    let text = if title.is_empty() {
+        pane_label(pane).to_string()
+    } else {
+        format!("{} — {title}", pane_label(pane))
+    };
+    buf.set_stringn(row.x + 3, row.y, text, row.width.saturating_sub(4) as usize, style);
 }
 
 fn color(c: vt100::Color) -> Color {

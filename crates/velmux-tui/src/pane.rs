@@ -11,7 +11,7 @@ use crate::detect::{self, AgentState};
 use crate::server::Event;
 
 /// Where a pane lives: a project's base checkout (`slot: None`) or one of its slots.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Loc {
     pub project: usize,
     pub slot: Option<String>,

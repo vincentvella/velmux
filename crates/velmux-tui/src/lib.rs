@@ -3,6 +3,7 @@
 
 mod client;
 mod detect;
+mod layout;
 mod pane;
 mod proto;
 mod server;

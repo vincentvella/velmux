@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
@@ -10,11 +11,17 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use crate::layout::{self, Dir, Layout, Toward};
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::proto::{ClientMsg, ServerMsg};
 use crate::{paths, ui};
 
 const PREFIX: u8 = 0x02; // ctrl+b
+// Arrow keys after the prefix, mapped out of the byte range commands use.
+const KEY_UP: u8 = 0xF1;
+const KEY_DOWN: u8 = 0xF2;
+const KEY_RIGHT: u8 = 0xF3;
+const KEY_LEFT: u8 = 0xF4;
 
 pub enum Event {
     Client(UnixStream),
@@ -48,9 +55,17 @@ struct Client {
     stream: UnixStream,
 }
 
+/// The panes of one location (base or slot), tiled.
+pub struct View {
+    pub layout: Layout,
+    /// Show only this pane, full size.
+    pub zoomed: Option<u64>,
+}
+
 pub struct App {
     pub projects: Vec<Project>,
     pub panes: Vec<Pane>,
+    pub views: HashMap<Loc, View>,
     focus: Option<u64>,
     current: Option<Loc>,
     pub mode: Mode,
@@ -125,6 +140,7 @@ impl App {
         App {
             projects: Vec::new(),
             panes: Vec::new(),
+            views: HashMap::new(),
             focus: None,
             current: None,
             mode: Mode::Normal,
@@ -146,6 +162,27 @@ impl App {
 
     pub fn focused(&self) -> Option<&Pane> {
         self.focus.and_then(|id| self.panes.iter().find(|p| p.id == id))
+    }
+
+    pub fn pane(&self, id: u64) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
+
+    /// Outer rect of every pane in `loc`'s view, plus dividers (none when zoomed).
+    pub fn view_rects(&self, loc: &Loc) -> (Vec<(u64, Rect)>, Vec<layout::Divider>) {
+        let Some(view) = self.views.get(loc) else { return (Vec::new(), Vec::new()) };
+        let body = ui::pane_area(self.size.0, self.size.1);
+        match view.zoomed {
+            Some(id) => (vec![(id, body)], Vec::new()),
+            None => view.layout.rects(body),
+        }
+    }
+
+    /// Whether panes in `loc` get a title row (only when more than one is visible).
+    pub fn titled(&self, loc: &Loc) -> bool {
+        self.views
+            .get(loc)
+            .is_some_and(|v| v.zoomed.is_none() && v.layout.leaves().len() > 1)
     }
 
     pub fn current_loc(&self) -> Option<Loc> {
@@ -215,7 +252,7 @@ impl App {
                     Ok(slot) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.say(format!("claimed {}", slot.id));
-                        self.spawn(loc, Kind::Agent);
+                        self.spawn(loc, Kind::Agent, None);
                     }
                     Err(e) => self.say(format!("claim failed: {e}")),
                 }
@@ -274,9 +311,21 @@ impl App {
 
     fn resize(&mut self, cols: u16, rows: u16) {
         self.size = (cols.max(20), rows.max(5));
-        let body = ui::pane_area(self.size.0, self.size.1);
-        for pane in &mut self.panes {
-            pane.resize(body.width, body.height);
+        self.relayout();
+    }
+
+    /// Size every pane to its rect in its location's layout.
+    fn relayout(&mut self) {
+        let locs: Vec<Loc> = self.views.keys().cloned().collect();
+        for loc in locs {
+            let titled = self.titled(&loc);
+            let (rects, _) = self.view_rects(&loc);
+            for (id, outer) in rects {
+                let inner = ui::content_rect(outer, titled);
+                if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
+                    pane.resize(inner.width, inner.height);
+                }
+            }
         }
         self.full_redraw = true;
         self.dirty = true;
@@ -340,8 +389,10 @@ impl App {
                 Mode::Prefix => {
                     self.mode = Mode::Normal;
                     let (key, len) = match bytes {
-                        [0x1b, b'[', b'A', ..] => (b'k', 3),
-                        [0x1b, b'[', b'B', ..] => (b'j', 3),
+                        [0x1b, b'[', b'A', ..] => (KEY_UP, 3),
+                        [0x1b, b'[', b'B', ..] => (KEY_DOWN, 3),
+                        [0x1b, b'[', b'C', ..] => (KEY_RIGHT, 3),
+                        [0x1b, b'[', b'D', ..] => (KEY_LEFT, 3),
                         [b, ..] => (*b, 1),
                         [] => unreachable!(),
                     };
@@ -434,13 +485,24 @@ impl App {
             }
             b'a' => {
                 if let Some(loc) = self.current_loc() {
-                    self.spawn(Loc { project: loc.project, slot: None }, Kind::Agent);
+                    self.spawn(Loc { project: loc.project, slot: None }, Kind::Agent, None);
                 }
             }
-            b'c' => self.spawn_here(Kind::Shell),
-            b'e' => self.spawn_here(Kind::Editor),
+            b'c' => self.spawn_here(Kind::Shell, None),
+            b'e' => self.spawn_here(Kind::Editor, None),
+            b'|' | b'%' => self.spawn_here(Kind::Shell, Some(Dir::Right)),
+            b'-' | b'"' => self.spawn_here(Kind::Shell, Some(Dir::Down)),
             b'j' => self.cycle(1),
             b'k' => self.cycle(-1),
+            KEY_UP => self.move_focus(Toward::Up),
+            KEY_DOWN => self.move_focus(Toward::Down),
+            KEY_LEFT => self.move_focus(Toward::Left),
+            KEY_RIGHT => self.move_focus(Toward::Right),
+            b'H' => self.nudge(Dir::Right, -0.05),
+            b'L' => self.nudge(Dir::Right, 0.05),
+            b'K' => self.nudge(Dir::Down, -0.05),
+            b'J' => self.nudge(Dir::Down, 0.05),
+            b'z' => self.toggle_zoom(),
             b'x' => {
                 if let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
                     pane.kill();
@@ -461,7 +523,7 @@ impl App {
                 self.mode = Mode::Confirm { label: "quit server and close every pane?".into(), action: Confirm::Quit }
             }
             b'?' => self.say(
-                "^b then: n claim slot · a Claude@base · c shell · e editor · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · ^b literal",
+                "^b then: n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit",
             ),
             b'1'..=b'9' => self.jump_to_slot(format!("slot-{}", key - b'0')),
             _ => {}
@@ -521,15 +583,16 @@ impl App {
         });
     }
 
-    fn spawn_here(&mut self, kind: Kind) {
+    fn spawn_here(&mut self, kind: Kind, dir: Option<Dir>) {
         if let Some(loc) = self.current_loc() {
-            self.spawn(loc, kind);
+            self.spawn(loc, kind, dir);
         } else {
             self.say("not in a git repo — run velmux from inside one");
         }
     }
 
-    fn spawn(&mut self, loc: Loc, kind: Kind) {
+    /// Open a pane in `loc`, splitting the focused pane there (`dir`, or along its longer side).
+    fn spawn(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>) {
         let project = &self.projects[loc.project];
         let pool = &project.pool;
         let cwd = match &loc.slot {
@@ -564,25 +627,85 @@ impl App {
         match Pane::spawn(id, loc.clone(), kind, launch, (body.width, body.height), self.events.clone()) {
             Ok(pane) => {
                 self.panes.push(pane);
+                self.insert_into_view(&loc, id, dir);
                 self.focus = Some(id);
                 self.current = Some(loc);
+                self.relayout();
             }
             Err(e) => self.say(format!("spawn failed: {e:#}")),
         }
         self.dirty = true;
     }
 
+    fn insert_into_view(&mut self, loc: &Loc, id: u64, dir: Option<Dir>) {
+        let (rects, _) = self.view_rects(loc);
+        let Some(view) = self.views.get_mut(loc) else {
+            self.views.insert(loc.clone(), View { layout: Layout::Leaf(id), zoomed: None });
+            return;
+        };
+        view.zoomed = None;
+        let leaves = view.layout.leaves();
+        let target = self
+            .focus
+            .filter(|f| leaves.contains(f))
+            .unwrap_or_else(|| *leaves.last().unwrap());
+        // Terminal cells are ~2:1, so compare width against twice the height.
+        let dir = dir.unwrap_or_else(|| match rects.iter().find(|(p, _)| *p == target) {
+            Some((_, r)) if r.width < r.height * 2 => Dir::Down,
+            _ => Dir::Right,
+        });
+        view.layout.split(target, id, dir);
+    }
+
+    fn focused_view(&mut self) -> Option<(u64, &mut View)> {
+        let id = self.focus?;
+        let loc = self.pane(id)?.loc.clone();
+        Some((id, self.views.get_mut(&loc)?))
+    }
+
+    fn move_focus(&mut self, toward: Toward) {
+        let Some(loc) = self.focused().map(|p| p.loc.clone()) else { return };
+        let (rects, _) = self.view_rects(&loc);
+        if let Some(next) = self.focus.and_then(|f| layout::neighbor(&rects, f, toward)) {
+            self.focus = Some(next);
+        }
+    }
+
+    fn nudge(&mut self, dir: Dir, delta: f32) {
+        if let Some((id, view)) = self.focused_view() {
+            if view.layout.nudge(id, dir, delta) {
+                self.relayout();
+            }
+        }
+    }
+
+    fn toggle_zoom(&mut self) {
+        if let Some((id, view)) = self.focused_view() {
+            view.zoomed = match view.zoomed {
+                Some(_) => None,
+                None if view.layout.leaves().len() > 1 => Some(id),
+                None => None,
+            };
+            self.relayout();
+        }
+    }
+
     fn remove_pane(&mut self, id: u64) {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let mut pane = self.panes.remove(i);
         pane.reap();
+        if let Some(view) = self.views.remove(&pane.loc) {
+            if let Some(layout) = view.layout.remove(id) {
+                let zoomed = view.zoomed.filter(|z| *z != id);
+                self.views.insert(pane.loc.clone(), View { layout, zoomed });
+            }
+        }
         if self.focus == Some(id) {
             // Prefer another pane in the same place, else nothing.
-            self.focus = self.panes.iter().find(|p| p.loc == pane.loc).map(|p| p.id);
+            self.focus = self.views.get(&pane.loc).and_then(|v| v.layout.leaves().first().copied());
             self.current = Some(pane.loc);
         }
-        self.full_redraw = true;
-        self.dirty = true;
+        self.relayout();
     }
 
     /// Move focus along the sidebar's pane order.
@@ -612,7 +735,7 @@ impl App {
         if !self.projects[loc.project].slots.iter().any(|s| s.id == slot) {
             return self.say(format!("no {slot} (run `velmux init` or claim with ^b n)"));
         }
-        self.focus = self.panes.iter().find(|p| p.loc == target).map(|p| p.id);
+        self.focus = self.views.get(&target).and_then(|v| v.layout.leaves().first().copied());
         let in_use = self.projects[loc.project]
             .slots
             .iter()
