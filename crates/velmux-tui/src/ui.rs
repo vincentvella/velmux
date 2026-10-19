@@ -186,13 +186,14 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
         }
         None => {
+            let p = &app.prefix.label;
             let lines = [
-                "No pane focused.",
-                "",
-                "ctrl+b a   Claude in the base checkout",
-                "ctrl+b n   claim a slot and start Claude there",
-                "ctrl+b c   shell here    ctrl+b e   editor here",
-                "ctrl+b ?   all keys",
+                "No pane focused.".to_string(),
+                String::new(),
+                format!("{p} a   Claude in the base checkout"),
+                format!("{p} n   claim a slot and start Claude there"),
+                format!("{p} c   shell here    {p} e   editor here"),
+                format!("{p} ?   all keys"),
             ];
             for (i, l) in lines.iter().enumerate() {
                 buf.set_stringn(body.x + 2, body.y + 1 + i as u16, l, body.width as usize, dim);
@@ -208,7 +209,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         Mode::Prefix => "n slot · a agent@base · c/e shell/editor · |/- split · arrows move · z zoom · HJKL resize · j/k cycle · 1-9 slot · r release · x close · d detach · Q quit".to_string(),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
-        Mode::Normal => app.status_text().unwrap_or_else(|| "ctrl+b ? keys".into()),
+        Mode::Normal => app
+            .status_text()
+            .unwrap_or_else(|| format!("{} ? keys", app.prefix.label)),
     };
     let style = if matches!(app.mode, Mode::Normal) { bar } else { bar.fg(Color::Yellow) };
     buf.set_stringn(1, sy, &text, cols.saturating_sub(2) as usize, style);

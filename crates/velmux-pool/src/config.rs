@@ -49,6 +49,14 @@ struct GlobalFile {
     editor: Option<String>,
     agent: Option<String>,
     claude_history: Option<bool>,
+    prefix: Option<String>,
+}
+
+/// The TUI prefix key from the global config (e.g. `"C-a"`), if set.
+/// Server-wide, so it lives outside the per-repo [`Config`].
+pub fn prefix_key(env: &Env) -> Result<Option<String>> {
+    let global: GlobalFile = read_toml(&env.global_config)?;
+    Ok(global.prefix)
 }
 
 /// `<base>/.velmux.toml`

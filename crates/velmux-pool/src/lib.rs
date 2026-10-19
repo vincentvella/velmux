@@ -8,6 +8,6 @@ pub mod git;
 mod pool;
 pub mod state;
 
-pub use config::{Config, Env};
+pub use config::{prefix_key, Config, Env};
 pub use pool::{ClaimOpts, Pool, Released, SlotView};
 pub use state::Status;

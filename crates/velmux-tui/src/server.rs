@@ -6,17 +6,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use velmux_pool::{ClaimOpts, Env, Pool, SlotView, Status};
+use velmux_pool::{prefix_key, ClaimOpts, Env, Pool, SlotView, Status};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::pane::{Kind, Launch, Loc, Pane};
+use crate::prefix::Prefix;
 use crate::proto::{ClientMsg, ServerMsg};
 use crate::{paths, ui};
 
-const PREFIX: u8 = 0x02; // ctrl+b
 // Arrow keys after the prefix, mapped out of the byte range commands use.
 const KEY_UP: u8 = 0xF1;
 const KEY_DOWN: u8 = 0xF2;
@@ -69,6 +69,9 @@ pub struct App {
     focus: Option<u64>,
     current: Option<Loc>,
     pub mode: Mode,
+    pub prefix: Prefix,
+    /// Shown once a client attaches (e.g. an invalid `prefix` in config).
+    startup_warning: Option<String>,
     pub jobs: Vec<String>,
     status: Option<(String, Instant)>,
     size: (u16, u16),
@@ -99,7 +102,18 @@ pub fn serve() -> Result<()> {
         }
     });
 
-    let mut app = App::new(tx);
+    let (prefix, warning) = match Env::from_process().and_then(|env| prefix_key(&env)) {
+        Ok(None) => (Prefix::default(), None),
+        Ok(Some(spec)) => match Prefix::parse(&spec) {
+            Ok(p) => (p, None),
+            Err(e) => (Prefix::default(), Some(format!("config: {e:#}; using ctrl+b"))),
+        },
+        Err(e) => (Prefix::default(), Some(format!("config: {e:#}; using ctrl+b"))),
+    };
+    if let Some(w) = &warning {
+        eprintln!("velmux: {w}");
+    }
+    let mut app = App::new(tx, prefix, warning);
     let (mut last_detect, mut last_slots, mut last_render) =
         (Instant::now(), Instant::now(), Instant::now());
     loop {
@@ -136,7 +150,7 @@ pub fn serve() -> Result<()> {
 }
 
 impl App {
-    fn new(events: Sender<Event>) -> App {
+    fn new(events: Sender<Event>, prefix: Prefix, startup_warning: Option<String>) -> App {
         App {
             projects: Vec::new(),
             panes: Vec::new(),
@@ -144,6 +158,8 @@ impl App {
             focus: None,
             current: None,
             mode: Mode::Normal,
+            prefix,
+            startup_warning,
             jobs: Vec::new(),
             status: None,
             size: (80, 24),
@@ -303,6 +319,9 @@ impl App {
             ClientMsg::Hello { cols, rows, cwd } => {
                 self.resize(cols, rows);
                 self.open_cwd(&cwd);
+                if let Some(w) = self.startup_warning.take() {
+                    self.say(w);
+                }
             }
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
@@ -375,7 +394,7 @@ impl App {
     fn input(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let consumed = match self.mode {
-                Mode::Normal => match bytes.iter().position(|&b| b == PREFIX) {
+                Mode::Normal => match bytes.iter().position(|&b| b == self.prefix.byte) {
                     Some(at) => {
                         self.send_to_pane(&bytes[..at]);
                         self.mode = Mode::Prefix;
@@ -472,7 +491,7 @@ impl App {
 
     fn command(&mut self, key: u8) {
         match key {
-            PREFIX => self.send_to_pane(&[PREFIX]),
+            k if k == self.prefix.byte => self.send_to_pane(&[k]),
             b'n' => {
                 if self.current_loc().is_none() {
                     self.say("not in a git repo — run velmux from inside one");
@@ -522,9 +541,10 @@ impl App {
             b'Q' => {
                 self.mode = Mode::Confirm { label: "quit server and close every pane?".into(), action: Confirm::Quit }
             }
-            b'?' => self.say(
-                "^b then: n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit",
-            ),
+            b'?' => self.say(format!(
+                "{} then: n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · {0} literal",
+                self.prefix.short
+            )),
             b'1'..=b'9' => self.jump_to_slot(format!("slot-{}", key - b'0')),
             _ => {}
         }
@@ -733,7 +753,7 @@ impl App {
         let Some(loc) = self.current_loc() else { return };
         let target = Loc { project: loc.project, slot: Some(slot.clone()) };
         if !self.projects[loc.project].slots.iter().any(|s| s.id == slot) {
-            return self.say(format!("no {slot} (run `velmux init` or claim with ^b n)"));
+            return self.say(format!("no {slot} (run `velmux init` or claim with {} n)", self.prefix.short));
         }
         self.focus = self.views.get(&target).and_then(|v| v.layout.leaves().first().copied());
         let in_use = self.projects[loc.project]
@@ -741,7 +761,7 @@ impl App {
             .iter()
             .any(|s| s.id == slot && s.status == Status::InUse);
         if self.focus.is_none() && in_use {
-            self.say(format!("{slot}: no panes — ^b a/c/e to open one"));
+            self.say(format!("{slot}: no panes — {} a/c/e to open one", self.prefix.short));
         }
         self.current = Some(target);
         self.full_redraw = true;

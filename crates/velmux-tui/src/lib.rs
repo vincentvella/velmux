@@ -5,6 +5,7 @@ mod client;
 mod detect;
 mod layout;
 mod pane;
+mod prefix;
 mod proto;
 mod server;
 mod ui;

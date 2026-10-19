@@ -13,13 +13,16 @@ release, so a claim is sub-second instead of a cold install.
 ## TUI
 
 Run `velmux` with no arguments inside a repo. A background server owns every
-pane, so `ctrl+b d` detaches and `velmux` reattaches with everything still
+pane, so `<prefix> d` detaches and `velmux` reattaches with everything still
 running. The sidebar nests panes under the base checkout and each slot, with
 agent state: `●` working, `▲` blocked on you, `○` idle, `✓` finished while you
 were elsewhere. Each base checkout and slot has its own split layout, like a
 tmux window per slot, so a slot can show Claude beside a test-runner shell.
 
-| `ctrl+b` then | |
+The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
+`"C-a"`, handy inside tmux). Restart the server (`<prefix> Q`) to apply.
+
+| `<prefix>` then | |
 |---|---|
 | `n` | claim a slot (prompts for a branch) and start Claude there |
 | `a` | Claude in the base checkout |
@@ -31,7 +34,7 @@ tmux window per slot, so a slot can show Claude beside a test-runner shell.
 | `j` `k` / `1`–`9` | next / previous pane across all slots, jump to slot N |
 | `r` | release the current slot (closes its panes, stashes work) |
 | `x` / `d` / `Q` | close pane / detach / stop the server |
-| `ctrl+b` | send a literal ctrl+b |
+| `<prefix>` | send the prefix key itself to the pane |
 
 ## CLI
 
@@ -73,6 +76,7 @@ slots = 5
 pool_root = "/Users/me/Workspace/.pools" # default: <base parent>/.pools
 editor = "code"
 agent = "claude"                         # command for agent panes
+prefix = "C-b"                           # TUI prefix: C-a, ctrl+space, ^], …
 claude_history = true
 ```
 
