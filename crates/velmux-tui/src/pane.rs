@@ -228,7 +228,7 @@ impl Pane {
             data = strip(&data, b"\x1b[201~");
         }
         if screen.application_cursor() {
-            for k in [b'A', b'B', b'C', b'D'] {
+            for k in *b"ABCD" {
                 data = replace(&data, &[0x1b, b'[', k], &[0x1b, b'O', k]);
             }
         }
