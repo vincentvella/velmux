@@ -93,6 +93,9 @@ pub struct Pane {
     /// Claude session this pane runs, when the agent is Claude Code.
     pub session: Option<String>,
     pub started_at: SystemTime,
+    /// Launch overrides, persisted so restore reproduces the pane.
+    pub cwd_override: Option<std::path::PathBuf>,
+    pub command_override: Option<String>,
     /// Output held back while copy mode reads the history (`None` = live).
     frozen: Option<Vec<u8>>,
 }
@@ -166,6 +169,8 @@ impl Pane {
             last_output: Instant::now(),
             session: None,
             started_at: SystemTime::now(),
+            cwd_override: None,
+            command_override: None,
             frozen: None,
         })
     }

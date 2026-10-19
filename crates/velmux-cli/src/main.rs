@@ -54,6 +54,18 @@ enum Cmd {
     Open { slot: Option<String> },
     /// Prune dead worktrees and recreate missing slots.
     Gc,
+    /// Import a herdr session: workspaces in git repos become velmux layouts.
+    ImportHerdr {
+        /// herdr session file (default: ~/.config/herdr/session.json).
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// A named herdr session (`herdr --session NAME`).
+        #[arg(long, conflicts_with = "file")]
+        session: Option<String>,
+        /// Show what would be imported without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
     Server,
@@ -75,6 +87,9 @@ fn run() -> Result<()> {
     let cmd = match cli.cmd {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
+        Some(Cmd::ImportHerdr { file, session, dry_run }) => {
+            return velmux_tui::import_herdr(file, session.as_deref(), dry_run)
+        }
         Some(cmd) => cmd,
     };
     let pool = Pool::discover(Env::from_process()?, &cwd)?;
@@ -146,7 +161,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } => unreachable!(),
     }
     Ok(())
 }

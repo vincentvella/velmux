@@ -36,6 +36,12 @@ pub struct SavedPane {
     pub claude_session: Option<String>,
     /// Unix seconds; transcripts newer than this may belong to the pane (`/clear`).
     pub started_at: u64,
+    /// Working directory, when it isn't the location's root (e.g. a subfolder).
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    /// Exact command, when the pane runs something other than the configured agent.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 fn file() -> Result<PathBuf> {

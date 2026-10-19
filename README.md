@@ -69,6 +69,20 @@ velmux launches Claude with `--session-id`, so no hooks are needed; if you
 `/clear` mid-pane, restore picks the newest transcript recorded in that slot.
 Slots released in the meantime are skipped.
 
+### Import from herdr
+
+```sh
+velmux import-herdr --dry-run      # show what would come over
+velmux import-herdr                # ~/.config/herdr/session.json
+velmux import-herdr --session work # a named herdr session
+```
+
+Each herdr workspace inside a git repo becomes that repo's base view (or slot,
+if it lives in one), with its active tab's split layout. Panes keep their
+working directory; agent panes come back as agents, and Claude resumes the
+session herdr recorded. Workspaces outside a repo, extra tabs, and locations
+velmux already has panes in are skipped and listed.
+
 ## CLI
 
 ```sh

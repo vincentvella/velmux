@@ -14,6 +14,7 @@ use ratatui::layout::{Position, Rect};
 use vt100::MouseProtocolMode;
 
 use crate::copy::{self, Action, Copy};
+use crate::herdr::{self, Plan};
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::mouse::{self, Chunk, MouseEvent};
 use crate::pane::Term;
@@ -31,7 +32,10 @@ const KEY_LEFT: u8 = 0xF4;
 const KEY_PGUP: u8 = 0xF5;
 
 pub enum Event {
-    Client(UnixStream),
+    /// A new connection and its first message (`Hello` attaches).
+    Client(UnixStream, ClientMsg),
+    /// A one-shot control connection.
+    Control(UnixStream, ClientMsg),
     FromClient(u64, ClientMsg),
     ClientGone(u64),
     PtyOutput(u64, Vec<u8>),
@@ -60,6 +64,14 @@ enum Drag {
     Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
     /// Selecting text; copy mode opens on the first motion, copies on release.
     Select { pane: u64, origin: (u16, u16), moved: bool },
+}
+
+/// Overrides for a new pane (restore and import).
+#[derive(Default)]
+struct LaunchOpts {
+    resume: Option<String>,
+    cwd: Option<PathBuf>,
+    command: Option<String>,
 }
 
 pub enum Confirm {
@@ -119,10 +131,18 @@ pub fn serve() -> Result<()> {
     let (tx, rx) = channel();
     let accept_tx = tx.clone();
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if accept_tx.send(Event::Client(stream)).is_err() {
-                break;
-            }
+        for mut stream in listener.incoming().flatten() {
+            // Read the first frame off the accept thread so control requests never
+            // disturb the attached client.
+            let tx = accept_tx.clone();
+            std::thread::spawn(move || {
+                let Ok(first) = ClientMsg::read(&mut stream) else { return };
+                let ev = match first {
+                    ClientMsg::ImportHerdr { .. } => Event::Control(stream, first),
+                    _ => Event::Client(stream, first),
+                };
+                let _ = tx.send(ev);
+            });
         }
     });
 
@@ -277,7 +297,14 @@ impl App {
 
     fn handle(&mut self, ev: Event) {
         match ev {
-            Event::Client(stream) => self.attach(stream),
+            Event::Client(stream, first) => self.attach(stream, first),
+            Event::Control(mut stream, msg) => {
+                let reply = match msg {
+                    ClientMsg::ImportHerdr { path } => self.import_herdr(&path),
+                    _ => "unsupported request".into(),
+                };
+                let _ = ServerMsg::Reply(reply).write(&mut stream);
+            }
             Event::FromClient(conn, msg) => {
                 if self.client.as_ref().map(|c| c.conn) == Some(conn) {
                     self.on_client(msg);
@@ -327,7 +354,7 @@ impl App {
         }
     }
 
-    fn attach(&mut self, stream: UnixStream) {
+    fn attach(&mut self, stream: UnixStream, first: ClientMsg) {
         self.say_bye("attached from another terminal");
         let conn = self.next_conn;
         self.next_conn += 1;
@@ -342,6 +369,7 @@ impl App {
             let _ = tx.send(Event::ClientGone(conn));
         });
         self.client = Some(Client { conn, stream });
+        self.on_client(first);
     }
 
     fn say_bye(&mut self, reason: &str) {
@@ -364,6 +392,8 @@ impl App {
             }
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
+            // Only valid as the first message of a control connection.
+            ClientMsg::ImportHerdr { .. } => {}
         }
     }
 
@@ -410,6 +440,8 @@ impl App {
                         kind: p.kind,
                         claude_session: p.session.clone(),
                         started_at: secs(p.started_at),
+                        cwd: p.cwd_override.clone(),
+                        command: p.command_override.clone(),
                     })
                     .collect(),
             })
@@ -454,8 +486,9 @@ impl App {
             let mut layout = Some(view.layout);
             let mut ids = HashMap::new();
             for p in view.panes {
+                let pane_cwd = p.cwd.clone().unwrap_or_else(|| cwd.clone());
                 let resume = match (&env, p.kind) {
-                    (Some(env), Kind::Agent) => {
+                    (Some(env), Kind::Agent) if p.command.is_none() => {
                         let exclude: Vec<String> = known
                             .iter()
                             .filter(|k| Some(*k) != p.claude_session.as_ref())
@@ -463,7 +496,7 @@ impl App {
                             .cloned()
                             .collect();
                         let since = UNIX_EPOCH + Duration::from_secs(p.started_at.saturating_sub(10));
-                        claude::latest_session(&env.claude_dir, &cwd, p.claude_session.as_deref(), since, &exclude)
+                        claude::latest_session(&env.claude_dir, &pane_cwd, p.claude_session.as_deref(), since, &exclude)
                     }
                     _ => None,
                 };
@@ -471,7 +504,8 @@ impl App {
                     taken.push(id.clone());
                 }
                 let resuming = resume.is_some();
-                match self.launch(&loc, p.kind, resume) {
+                let opts = LaunchOpts { resume, cwd: p.cwd, command: p.command };
+                match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
                         ids.insert(p.id, new);
                         panes += 1;
@@ -970,7 +1004,7 @@ impl App {
 
     /// Open a pane in `loc`, splitting the focused pane there (`dir`, or along its longer side).
     fn spawn(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>) {
-        match self.launch(&loc, kind, None) {
+        match self.launch(&loc, kind, LaunchOpts::default()) {
             Ok(id) => {
                 self.insert_into_view(&loc, id, dir);
                 self.focus = Some(id);
@@ -992,11 +1026,15 @@ impl App {
 
     /// Start a pane process in `loc` (not yet placed in a view). Claude agents get a
     /// known session id, or resume `resume`.
-    fn launch(&mut self, loc: &Loc, kind: Kind, resume: Option<String>) -> Result<u64, String> {
-        let cwd = self.loc_cwd(loc).ok_or_else(|| format!("{} not found", self.loc_name(loc)))?;
+    fn launch(&mut self, loc: &Loc, kind: Kind, opts: LaunchOpts) -> Result<u64, String> {
+        let root = self.loc_cwd(loc).ok_or_else(|| format!("{} not found", self.loc_name(loc)))?;
+        let cwd_override = opts.cwd.filter(|c| c.is_dir() && *c != root);
+        let cwd = cwd_override.clone().unwrap_or(root);
+        let resume = opts.resume;
         let pool = &self.projects[loc.project].pool;
         let mut session = None;
         let command = match kind {
+            Kind::Agent if opts.command.is_some() => opts.command.clone(),
             Kind::Agent if session::is_claude(&pool.cfg.agent) => {
                 let agent = &pool.cfg.agent;
                 Some(match resume {
@@ -1035,8 +1073,70 @@ impl App {
         let mut pane = Pane::spawn(id, loc.clone(), kind, launch, (body.width, body.height), self.events.clone())
             .map_err(|e| format!("spawn failed: {e:#}"))?;
         pane.session = session;
+        pane.cwd_override = cwd_override;
+        pane.command_override = opts.command.filter(|_| kind == Kind::Agent);
         self.panes.push(pane);
         Ok(id)
+    }
+
+    /// Import a herdr session: one view per mapped workspace, skipping locations
+    /// velmux already has panes in. Returns a summary for the caller.
+    fn import_herdr(&mut self, path: &Path) -> String {
+        let plan = match Env::from_process().and_then(|env| herdr::plan(path, &env)) {
+            Ok(plan) => plan,
+            Err(e) => return format!("import failed: {e:#}"),
+        };
+        let Plan { views, mut skipped } = plan;
+        let (mut imported, mut panes) = (0, 0);
+        let mut first = None;
+        for v in views {
+            let project = match self.projects.iter().position(|p| p.pool.base == v.base) {
+                Some(i) => i,
+                None => match Env::from_process().and_then(|env| Pool::discover(env, &v.base)) {
+                    Ok(pool) => {
+                        self.projects.push(Project { pool: Arc::new(pool), slots: Vec::new() });
+                        self.refresh_slots();
+                        self.projects.len() - 1
+                    }
+                    Err(e) => {
+                        skipped.push((v.label, format!("{e:#}")));
+                        continue;
+                    }
+                },
+            };
+            let loc = Loc { project, slot: v.slot };
+            if self.views.contains_key(&loc) {
+                skipped.push((v.label, "velmux already has panes there".into()));
+                continue;
+            }
+            let mut layout = Some(v.layout);
+            let mut ids = HashMap::new();
+            for p in v.panes {
+                let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command };
+                match self.launch(&loc, p.kind, opts) {
+                    Ok(new) => {
+                        ids.insert(p.id, new);
+                    }
+                    Err(_) => layout = layout.and_then(|l| l.remove(p.id)),
+                }
+            }
+            let Some(layout) = layout else { continue };
+            let zoomed = v.zoomed.and_then(|z| ids.get(&z).copied());
+            panes += ids.len();
+            imported += 1;
+            first.get_or_insert((loc.clone(), layout.leaves().first().and_then(|l| ids.get(l).copied())));
+            self.views.insert(loc, View { layout: layout.remap(&ids), zoomed });
+        }
+        if let (None, Some((loc, pane))) = (self.focus, first) {
+            self.focus = pane;
+            self.current = Some(loc);
+        }
+        self.relayout();
+        let mut out = format!("imported {imported} workspace(s), {panes} pane(s) from {}\n", path.display());
+        for (label, why) in skipped {
+            out.push_str(&format!("  - skipped {label}: {why}\n"));
+        }
+        out
     }
 
     fn insert_into_view(&mut self, loc: &Loc, id: u64, dir: Option<Dir>) {
