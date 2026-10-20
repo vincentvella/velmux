@@ -102,7 +102,16 @@ impl Config {
     pub fn load(env: &Env, base: &Path) -> Result<Config> {
         let global: GlobalFile = read_toml(&env.global_config)?;
         let repo: RepoFile = read_toml(&base.join(".velmux.toml"))?;
-        Ok(Config {
+        Ok(Config::from_files(global, repo))
+    }
+
+    /// Built-in defaults, with no config files at all.
+    pub fn defaults() -> Config {
+        Config::from_files(GlobalFile::default(), RepoFile::default())
+    }
+
+    fn from_files(global: GlobalFile, repo: RepoFile) -> Config {
+        Config {
             slots: repo.slots.or(global.slots).unwrap_or(DEFAULT_SLOTS).max(1),
             pool_root: global.pool_root,
             editor: global.editor,
@@ -116,7 +125,7 @@ impl Config {
             post_claim: repo.post_claim.unwrap_or_default(),
             install: repo.install.unwrap_or(true),
             install_cmd: repo.install_cmd,
-        })
+        }
     }
 }
 
