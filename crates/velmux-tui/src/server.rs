@@ -85,13 +85,24 @@ pub enum Mode {
     Prompt { label: String, input: String, purpose: PromptFor },
     /// Fuzzy location picker.
     Picker(Picker),
-    /// The short menu, with the highlighted row.
-    Menu { selected: usize },
+    /// The short menu, with the highlighted row; `context` when it was opened
+    /// by right-clicking a place in the sidebar.
+    Menu { selected: usize, context: Option<MenuContext> },
     /// Choosing a theme: the highlighted one is previewed live; esc restores `original`.
     ThemePicker { selected: usize, original: crate::theme::Theme },
     Confirm { label: String, action: Confirm },
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
+}
+
+/// A right-click menu: actions for one place, run there.
+#[derive(Debug, Clone)]
+pub struct MenuContext {
+    pub target: Loc,
+    pub title: String,
+    pub items: Vec<(&'static str, Action)>,
+    /// Where it was opened (the click).
+    pub at: (u16, u16),
 }
 
 /// A mouse drag in progress.
@@ -1187,12 +1198,17 @@ impl App {
         let (cols, rows) = self.size;
         let at = Position::new(ev.x, ev.y);
         if let Mode::Menu { .. } = self.mode {
-            if ev.is_press() && ev.is_left() {
+            if ev.is_press() && (ev.is_left() || ev.is_right()) {
                 let area = ui::menu_area(self, cols, rows);
-                let item = (area.contains(at) && ev.y > area.y).then(|| (ev.y - area.y - 1) as usize);
-                self.mode = Mode::Normal;
-                if let Some(&(_, action)) = item.and_then(|i| ui::MENU.get(i)) {
-                    self.run(action);
+                let item = (ev.is_left() && area.contains(at) && ev.y > area.y).then(|| (ev.y - area.y - 1) as usize);
+                let Mode::Menu { context, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { unreachable!() };
+                match item {
+                    Some(i) => self.run_menu_item(context, i),
+                    // Right-clicking another place opens its menu instead.
+                    None if ev.is_right() && !area.contains(at) && ev.x < ui::sidebar_width(cols, self.sidebar_hidden) => {
+                        self.open_context_menu(ev.x, ev.y)
+                    }
+                    None => {}
                 }
             }
             return;
@@ -1201,6 +1217,9 @@ impl App {
             return;
         }
         if ev.x < ui::sidebar_width(cols, self.sidebar_hidden) {
+            if ev.is_press() && ev.is_right() {
+                return self.open_context_menu(ev.x, ev.y);
+            }
             if ev.is_press() && ev.is_left() {
                 // Repo headings and folders can be dragged; decide on release.
                 match self.grab_at(ev.y) {
@@ -1552,9 +1571,60 @@ impl App {
                 live.unwrap_or(Loc { project: p, slot: if self.projects[p].is_unclassified() { first } else { None } })
             }
         };
+        self.go_to(loc);
+    }
+
+    /// Show a place: its active tab, focused where you left it.
+    fn go_to(&mut self, loc: Loc) {
         self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
         self.current = Some(loc);
         self.full_redraw = true;
+    }
+
+    /// Right-click on a sidebar row: the menu of things to do in that place.
+    fn open_context_menu(&mut self, x: u16, y: u16) {
+        let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else { return };
+        let target = match row {
+            ui::Row::Location(loc) => loc,
+            ui::Row::Project(p) if !self.projects[p].is_unclassified() => Loc { project: p, slot: None },
+            ui::Row::Agent { pane, .. } => self.panes[pane].loc.clone(),
+            _ => return,
+        };
+        let folder = self.projects[target.project].is_unclassified();
+        let mut items: Vec<(&'static str, Action)> = vec![("new conversation", Action::AgentBase)];
+        if !folder && target.slot.is_none() {
+            items.push(("claim a slot…", Action::ClaimSlot));
+        }
+        items.extend([("new shell", Action::NewShell), ("open editor", Action::NewEditor), ("name this place", Action::RenameLocation)]);
+        items.push(match (folder, target.slot.is_some()) {
+            (true, _) => ("remove folder", Action::RemovePlace),
+            (false, true) => ("release slot", Action::RemovePlace),
+            (false, false) => ("remove repo", Action::RemovePlace),
+        });
+        let title = self.loc_name(&target);
+        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { target, title, items, at: (x, y) }) };
+    }
+
+    /// Run menu row `i`: the global menu's action here, or a context menu's
+    /// action in its place (going there first).
+    fn run_menu_item(&mut self, context: Option<MenuContext>, i: usize) {
+        match context {
+            Some(c) => {
+                let Some(&(_, action)) = c.items.get(i) else { return };
+                if self.current_loc().as_ref() != Some(&c.target) {
+                    if self.copy.is_some() {
+                        self.exit_copy();
+                    }
+                    self.go_to(c.target);
+                }
+                self.run(action);
+            }
+            None => {
+                if let Some(&(_, action)) = ui::MENU.get(i) {
+                    self.run(action);
+                }
+            }
+        }
     }
 
     fn with_copy(&mut self, f: impl FnOnce(&mut Copy, &mut vt100::Parser<Term>)) {
@@ -1798,8 +1868,8 @@ impl App {
     }
 
     fn menu_input(&mut self, bytes: &[u8]) -> usize {
-        let Mode::Menu { selected } = &mut self.mode else { return bytes.len() };
-        let n = ui::MENU.len();
+        let Mode::Menu { selected, context } = &mut self.mode else { return bytes.len() };
+        let n = context.as_ref().map_or(ui::MENU.len(), |c| c.items.len());
         let (used, key) = match bytes {
             [0x1b, b'[', b'A', ..] => (3, b'k'),
             [0x1b, b'[', b'B', ..] => (3, b'j'),
@@ -1814,9 +1884,9 @@ impl App {
             b'k' | 0x10 => *selected = (*selected + n - 1) % n,
             b'j' | 0x0e => *selected = (*selected + 1) % n,
             b'\r' | b'\n' => {
-                let action = ui::MENU[*selected].1;
-                self.mode = Mode::Normal;
-                self.run(action);
+                let i = *selected;
+                let Mode::Menu { context, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { unreachable!() };
+                self.run_menu_item(context, i);
             }
             0x1b | 0x03 | b'q' => self.mode = Mode::Normal,
             _ => {}
@@ -1979,7 +2049,7 @@ impl App {
             },
             Action::Settings => self.open_settings(),
             Action::ReloadConfig => self.reload_config(),
-            Action::Menu => self.mode = Mode::Menu { selected: 0 },
+            Action::Menu => self.mode = Mode::Menu { selected: 0, context: None },
             Action::ThemePicker => {
                 let selected = crate::theme::NAMES.iter().position(|n| *n == self.theme.name).unwrap_or(0);
                 self.mode = Mode::ThemePicker { selected, original: self.theme.clone() };

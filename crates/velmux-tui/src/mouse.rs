@@ -32,6 +32,10 @@ impl MouseEvent {
         self.wheel().is_none() && self.code & 0b11 == 0
     }
 
+    pub fn is_right(&self) -> bool {
+        self.wheel().is_none() && self.code & 0b11 == 2
+    }
+
     pub fn is_press(&self) -> bool {
         !self.release && !self.is_motion()
     }

@@ -78,8 +78,25 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
     ]
 };
 
-/// Where the menu popup sits (anchored under the top bar).
+/// The open menu's rows: a right-click menu's, else the global one.
+pub fn menu_items(app: &App) -> &[(&'static str, crate::keys::Action)] {
+    match &app.mode {
+        Mode::Menu { context: Some(c), .. } => &c.items,
+        _ => MENU,
+    }
+}
+
+/// Where the menu popup sits: under the top bar, or at a right-click (below
+/// the clicked row, kept on screen).
 pub fn menu_area(app: &App, cols: u16, rows: u16) -> Rect {
+    if let Mode::Menu { context: Some(c), .. } = &app.mode {
+        let width = 26.min(cols.saturating_sub(2));
+        let height = (c.items.len() as u16 + 2).min(rows.saturating_sub(1));
+        let x = c.at.0.min(cols.saturating_sub(width));
+        let below = c.at.1 + 1;
+        let y = if below + height <= rows { below } else { c.at.1.saturating_sub(height) };
+        return Rect::new(x, y, width, height);
+    }
     let side = sidebar_width(cols, app.sidebar_hidden);
     let width = 30.min(cols.saturating_sub(2)).max(side.saturating_sub(2).min(30));
     let height = (MENU.len() as u16 + 2).min(rows.saturating_sub(2));
@@ -403,7 +420,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 let gray = Style::new().fg(t.text2);
                 buf.set_string(1, y, "⊕", Style::new().fg(t.accent));
                 buf.set_string(3, y, "new", gray);
-                let menu_open = matches!(app.mode, Mode::Menu { .. });
+                let menu_open = matches!(app.mode, Mode::Menu { context: None, .. });
                 let label = "menu";
                 let x = side.saturating_sub(label.chars().count() as u16 + 3);
                 buf.set_string(x, y, "≡", Style::new().fg(if menu_open { t.accent } else { t.menu_border }));
@@ -560,7 +577,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         draw_which_key(app, body, buf);
         cursor = None;
     }
-    if let Mode::Menu { selected } = &app.mode {
+    if let Mode::Menu { selected, .. } = &app.mode {
         draw_menu(app, *selected, buf);
     }
     if let Mode::ThemePicker { selected, .. } = &app.mode {
@@ -906,10 +923,15 @@ fn draw_menu(app: &App, selected: usize, buf: &mut Buffer) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.menu_border))
-        .title(" menu ")
+        .title(match &app.mode {
+            Mode::Menu { context: Some(c), .. } => format!(" {} ", c.title),
+            _ => " menu ".into(),
+        })
         .render(area, buf);
+    // Key hints act on where you are, so a right-click menu (for another place) leaves them out.
+    let hints = !matches!(app.mode, Mode::Menu { context: Some(_), .. });
     let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
-    for (i, (label, action)) in MENU.iter().enumerate().take(inner.height as usize) {
+    for (i, (label, action)) in menu_items(app).iter().enumerate().take(inner.height as usize) {
         let y = inner.y + i as u16;
         let on = i == selected;
         let base = if on { Style::new().bg(t.selected_bg) } else { Style::new() };
@@ -919,7 +941,7 @@ fn draw_menu(app: &App, selected: usize, buf: &mut Buffer) {
         }
         let text = if on { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
         buf.set_stringn(inner.x + 2, y, label, inner.width.saturating_sub(3) as usize, text);
-        if let Some(hint) = app.keymap.hint(*action, &app.prefix.short) {
+        if let Some(hint) = app.keymap.hint(*action, &app.prefix.short).filter(|_| hints) {
             let w = hint.chars().count() as u16;
             if w + label.chars().count() as u16 + 4 < inner.width {
                 buf.set_string(inner.right() - w - 1, y, hint, base.fg(t.dim));

@@ -100,7 +100,9 @@ new_tab = []
 ### Mouse
 
 On by default (`mouse = false` in the global config turns it off). Click a pane
-to focus it, or a sidebar row to jump there; drag a divider to resize; drag over
+to focus it, or a sidebar row to jump there; right-click a repo, slot or folder
+for what you can do there (new conversation, claim a slot, shell, editor,
+rename, release / remove); drag a divider to resize; drag over
 text to select it and copy on release. The wheel scrolls a pane's history
 (opening copy mode, which closes again at the bottom), sends arrow keys to
 full-screen apps such as `less`, and is passed straight through, along with
