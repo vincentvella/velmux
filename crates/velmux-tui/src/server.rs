@@ -223,7 +223,8 @@ pub struct App {
     /// Display order of projects (indices into `projects`, which never move,
     /// since locations refer to projects by index).
     pub project_order: Vec<usize>,
-    /// A sidebar reorder in progress, and the row it's over (for drawing).
+    /// A sidebar reorder in progress: what's dragged, and the screen row whose
+    /// bottom edge is the insertion line (for drawing).
     pub sidebar_drag: Option<(Grab, u16)>,
     /// Shown once a client attaches (e.g. an invalid `prefix` in config).
     startup_warning: Option<String>,
@@ -1131,8 +1132,8 @@ impl App {
                 }
                 if ev.is_motion() {
                     moved |= ev.y != start.1;
-                    let valid = moved && self.drop_target(&grab, ev.y).is_some();
-                    self.sidebar_drag = valid.then(|| (grab.clone(), ev.y));
+                    let gap = if moved { self.drop_gap(&grab, ev.y) } else { None };
+                    self.sidebar_drag = gap.map(|(_, line)| (grab.clone(), line));
                 }
                 self.drag = Some(Drag::Sidebar { grab, start, moved });
             }
@@ -1206,43 +1207,79 @@ impl App {
         }
     }
 
-    /// Where `grab` would land if dropped on sidebar line `y`: a repo onto any row
-    /// of another repo, a folder onto another folder.
-    fn drop_target(&self, grab: &Grab, y: u16) -> Option<Grab> {
-        let row = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y)?.1;
-        let target = match (grab, row) {
-            (Grab::Repo(_), ui::Row::Project(p)) => Grab::Repo(p),
-            (Grab::Repo(_), ui::Row::Location(loc)) if !self.projects[loc.project].is_unclassified() => Grab::Repo(loc.project),
-            (Grab::Folder(_), ui::Row::Location(loc)) if self.projects[loc.project].is_unclassified() => Grab::Folder(loc.slot?),
-            _ => return None,
-        };
-        (target != *grab).then_some(target)
+    /// The draggable items of `grab`'s kind (repos or folders) in sidebar order,
+    /// each with the screen rows it covers.
+    fn drag_items(&self, grab: &Grab) -> Vec<(Grab, u16, u16)> {
+        let mut items: Vec<(Grab, u16, u16)> = Vec::new();
+        for (y, row) in ui::sidebar_rows(self, self.size.1) {
+            match (grab, row) {
+                (Grab::Repo(_), ui::Row::Project(p)) => items.push((Grab::Repo(p), y, y)),
+                (Grab::Repo(_), ui::Row::Location(loc)) if !self.projects[loc.project].is_unclassified() => {
+                    if let Some(last) = items.last_mut().filter(|(g, ..)| *g == Grab::Repo(loc.project)) {
+                        last.2 = y;
+                    }
+                }
+                (Grab::Folder(_), ui::Row::Location(loc)) if self.projects[loc.project].is_unclassified() => {
+                    if let Some(id) = loc.slot {
+                        items.push((Grab::Folder(id), y, y));
+                    }
+                }
+                _ => {}
+            }
+        }
+        items
     }
 
-    /// Move `grab` to the target's place: before it when moving up, after it when moving down.
-    fn drop_on(&mut self, grab: &Grab, y: u16) {
-        let Some(target) = self.drop_target(grab, y) else { return };
-        fn shift<T: PartialEq + Clone>(list: &mut Vec<T>, from: &T, to: &T) {
-            let (Some(a), Some(b)) = (list.iter().position(|x| x == from), list.iter().position(|x| x == to)) else { return };
-            let item = list.remove(a);
-            list.insert(b, item);
+    /// Where `grab` lands if dropped with the pointer on line `y`: the gap index
+    /// (0 = before the first item) and the row whose bottom edge marks it. The
+    /// top half of an item means "before it", the bottom half "after it"; a
+    /// one-row item (a folder) splits by drag direction instead. `None` when
+    /// it wouldn't move.
+    fn drop_gap(&self, grab: &Grab, y: u16) -> Option<(usize, u16)> {
+        let items = self.drag_items(grab);
+        let from = items.iter().position(|(g, ..)| g == grab)?;
+        let (first, last) = (items.first()?.1, items.last()?.2);
+        let k = items.iter().position(|(_, top, bottom)| y >= *top && y <= *bottom);
+        let gap = match k {
+            Some(k) => {
+                let (_, top, bottom) = items[k];
+                let before = if top == bottom { k < from } else { y < top + (bottom - top).div_ceil(2) };
+                if before { k } else { k + 1 }
+            }
+            None if y < first => 0,
+            None if y > last => items.len(),
+            None => return None,
+        };
+        if gap == from || gap == from + 1 {
+            return None;
         }
-        match (grab, &target) {
-            (Grab::Repo(from), Grab::Repo(to)) => {
-                let mut order = self.ordered_projects();
-                shift(&mut order, from, to);
+        // The line sits on the bottom edge of the row just above the gap.
+        let line = if gap == 0 { first.saturating_sub(1) } else { items[gap - 1].2 };
+        Some((gap, line))
+    }
+
+    /// Move `grab` into the gap under the pointer.
+    fn drop_on(&mut self, grab: &Grab, y: u16) {
+        let Some((gap, _)) = self.drop_gap(grab, y) else { return };
+        let ids: Vec<Grab> = self.drag_items(grab).into_iter().map(|(g, ..)| g).collect();
+        let Some(from) = ids.iter().position(|g| g == grab) else { return };
+        let mut moved = ids.clone();
+        let item = moved.remove(from);
+        moved.insert(if gap > from { gap - 1 } else { gap }, item);
+        match grab {
+            Grab::Repo(_) => {
+                // Visible repos in their new order, then any not on screen (scrolled off).
+                let mut order: Vec<usize> = moved.iter().filter_map(|g| if let Grab::Repo(p) = g { Some(*p) } else { None }).collect();
+                let rest: Vec<usize> = self.ordered_projects().into_iter().filter(|p| !order.contains(p)).collect();
+                order.extend(rest);
                 self.project_order = order;
             }
-            (Grab::Folder(from), Grab::Folder(to)) => {
+            Grab::Folder(_) => {
                 if let Some(p) = self.projects.iter().position(Project::is_unclassified) {
-                    let folders = &mut self.projects[p].folders;
-                    let ids: Vec<String> = folders.iter().map(|f| f.id.clone()).collect();
-                    let mut moved = ids.clone();
-                    shift(&mut moved, from, to);
-                    folders.sort_by_key(|f| moved.iter().position(|id| *id == f.id));
+                    let rank = |id: &String| moved.iter().position(|g| *g == Grab::Folder(id.clone())).unwrap_or(usize::MAX);
+                    self.projects[p].folders.sort_by_key(|f| rank(&f.id));
                 }
             }
-            _ => return,
         }
         self.save();
         self.dirty = true;

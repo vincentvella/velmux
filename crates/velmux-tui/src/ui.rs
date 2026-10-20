@@ -440,11 +440,11 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
         }
     }
-    // Reordering: light up where the dragged repo / folder will land.
+    // Reordering: an accent line in the gap where the dragged repo / folder
+    // will land (an underline on the row above it reads as a line between rows).
     if let (Some((_, y)), false) = (&app.sidebar_drag, app.sidebar_hidden) {
-        let row = Rect::new(0, *y, side, 1);
-        buf.set_style(row, Style::new().bg(Color::Indexed(24)));
-        buf.set_string(side.saturating_sub(2), *y, "⇅", Style::new().fg(Color::White).bg(Color::Indexed(24)));
+        let line = Style::new().add_modifier(Modifier::UNDERLINED).underline_color(ACCENT);
+        buf.set_style(Rect::new(1, *y, side.saturating_sub(2), 1), line);
     }
     if !app.sidebar_hidden {
         for y in 0..rows.saturating_sub(1) {
