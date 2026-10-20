@@ -923,10 +923,12 @@ impl App {
                 self.full_redraw = true;
                 return;
             }
-            ui::Row::Location(loc) => loc,
+            ui::Row::Location(loc) | ui::Row::FreeSlots { first: loc, .. } => loc,
             ui::Row::Project(p) => {
+                // Open the project at its first location with panes, else its root.
+                let live = self.live_locations().into_iter().find(|l| l.project == p);
                 let first = self.projects[p].folders.first().map(|f| f.id.clone());
-                Loc { project: p, slot: if self.projects[p].is_unclassified() { first } else { None } }
+                live.unwrap_or(Loc { project: p, slot: if self.projects[p].is_unclassified() { first } else { None } })
             }
         };
         self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());

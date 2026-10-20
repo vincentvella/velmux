@@ -37,6 +37,77 @@ pub enum Row {
     Project(usize),
     Location(Loc),
     Pane(usize),
+    /// A run of free slots folded into one row; `first` is where a click goes.
+    FreeSlots { count: usize, first: Loc },
+}
+
+/// The project shown expanded: the one you're in (or the first).
+pub fn expanded_project(app: &App) -> Option<usize> {
+    app.current_loc().map(|l| l.project).or_else(|| (!app.projects.is_empty()).then_some(0))
+}
+
+/// What the sidebar shows: [`rows`] with every project but the current one
+/// collapsed to its header, and runs of free slots folded into one row.
+/// Navigation (location N, cycling, attention) keeps using the full [`rows`].
+pub fn display_rows(app: &App) -> Vec<Row> {
+    let open = expanded_project(app);
+    let mut out: Vec<Row> = Vec::new();
+    let mut project = None;
+    for row in rows(app) {
+        match &row {
+            Row::Project(p) => project = Some(*p),
+            _ if project != open => continue,
+            Row::Location(loc) if is_free_slot(app, loc) => {
+                if let Some(Row::FreeSlots { count, .. }) = out.last_mut() {
+                    *count += 1;
+                    continue;
+                }
+                out.push(Row::FreeSlots { count: 1, first: loc.clone() });
+                continue;
+            }
+            _ => {}
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn is_free_slot(app: &App, loc: &Loc) -> bool {
+    let project = &app.projects[loc.project];
+    match (&loc.slot, project.is_unclassified()) {
+        (Some(id), false) => {
+            !app.views.contains_key(loc)
+                && project.slots.iter().any(|s| &s.id == id && s.status == Status::Free)
+        }
+        _ => false,
+    }
+}
+
+/// Agent-state glyphs for a collapsed project: (glyph, count, style), non-zero only.
+fn rollup(app: &App, project: usize) -> Vec<(&'static str, usize, Style)> {
+    let panes = app.panes.iter().filter(|p| p.loc.project == project);
+    let (mut working, mut blocked, mut done, mut idle) = (0, 0, 0, 0);
+    for p in panes {
+        if p.unseen_done {
+            done += 1;
+            continue;
+        }
+        match p.state {
+            Some(AgentState::Working) => working += 1,
+            Some(AgentState::Blocked) => blocked += 1,
+            Some(AgentState::Idle) => idle += 1,
+            None => {}
+        }
+    }
+    [
+        ("▲", blocked, Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ("✓", done, Style::new().fg(Color::Green)),
+        ("●", working, Style::new().fg(Color::Yellow)),
+        ("○", idle, Style::new().fg(Color::DarkGray)),
+    ]
+    .into_iter()
+    .filter(|(_, n, _)| *n > 0)
+    .collect()
 }
 
 pub fn rows(app: &App) -> Vec<Row> {
@@ -74,9 +145,18 @@ pub fn rows(app: &App) -> Vec<Row> {
 pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
     let mut out = Vec::new();
     let mut y = 0;
-    for row in rows(app) {
-        if matches!(row, Row::Project(_)) && y > 0 {
-            y += 1;
+    let open = expanded_project(app);
+    let mut prev_collapsed = false;
+    for row in display_rows(app) {
+        // A blank line before each project, except between stacked collapsed ones.
+        if let Row::Project(p) = row {
+            let collapsed = Some(p) != open;
+            if y > 0 && !(collapsed && prev_collapsed) {
+                y += 1;
+            }
+            prev_collapsed = collapsed;
+        } else {
+            prev_collapsed = false;
         }
         if y + 1 >= height {
             break;
@@ -123,7 +203,27 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         match row {
             Row::Project(p) => {
                 let name = app.projects[p].name();
-                buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
+                if expanded_project(app) == Some(p) {
+                    buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
+                } else {
+                    // Collapsed: name plus a summary of its agents.
+                    let label = format!("▸ {name}");
+                    buf.set_stringn(0, y, &label, side as usize, Style::new().fg(Color::Gray));
+                    let mut x = label.chars().count() as u16 + 1;
+                    for (glyph, n, style) in rollup(app, p) {
+                        let part = format!("{glyph}{n}");
+                        let w = part.chars().count() as u16;
+                        if x + w > side {
+                            break;
+                        }
+                        buf.set_string(x, y, &part, style);
+                        x += w + 1;
+                    }
+                }
+            }
+            Row::FreeSlots { count, .. } => {
+                let text = if count == 1 { " □ 1 free slot".to_string() } else { format!(" □ {count} free slots") };
+                buf.set_stringn(0, y, text, side as usize, dim);
             }
             Row::Location(loc) => {
                 let is_current = current.as_ref() == Some(&loc);
