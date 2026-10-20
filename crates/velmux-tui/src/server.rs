@@ -210,11 +210,30 @@ pub struct View {
     pub active: usize,
     /// Name given with rename_location (shown instead of base / slot id).
     pub name: Option<String>,
+    /// The tab shown before the active one, for flipping back (not saved).
+    pub previous: Option<usize>,
 }
 
 impl View {
     pub fn single(tab: Tab) -> View {
-        View { tabs: vec![tab], active: 0, name: None }
+        View { tabs: vec![tab], active: 0, name: None, previous: None }
+    }
+
+    /// Show tab `t`, remembering the one it replaces.
+    pub fn set_active(&mut self, t: usize) {
+        if t != self.active {
+            self.previous = Some(self.active);
+            self.active = t;
+        }
+    }
+
+    /// Tab `t` was removed: keep `previous` pointing at the same tab.
+    pub fn forget_tab(&mut self, t: usize) {
+        self.previous = match self.previous {
+            Some(p) if p == t => None,
+            Some(p) if p > t => Some(p - 1),
+            p => p,
+        };
     }
 
     pub fn tab_of(&self, pane: u64) -> Option<usize> {
@@ -751,7 +770,7 @@ impl App {
         let Some(loc) = self.pane(id).map(|p| p.loc.clone()) else { return };
         if let Some(view) = self.views.get_mut(&loc) {
             if let Some(t) = view.tab_of(id) {
-                view.active = t;
+                view.set_active(t);
                 view.tabs[t].last_focus = Some(id);
             }
         }
@@ -925,7 +944,7 @@ impl App {
             }
             if !tabs.is_empty() {
                 let active = active.min(tabs.len() - 1);
-                self.views.insert(loc, View { tabs, active, name });
+                self.views.insert(loc, View { tabs, active, name, previous: None });
             }
         }
         // Anything left over has nowhere to live: let it go.
@@ -1021,7 +1040,7 @@ impl App {
             }
             if !tabs.is_empty() {
                 let active = active.min(tabs.len() - 1);
-                self.views.insert(loc, View { tabs, active, name: view_name });
+                self.views.insert(loc, View { tabs, active, name: view_name, previous: None });
             }
         }
         if panes > 0 && self.startup_warning.is_none() {
@@ -1192,6 +1211,13 @@ impl App {
             return;
         }
         if ev.y == 0 {
+            // Scrolling over the header cycles tabs.
+            if let Some(step) = ev.wheel() {
+                if self.current_loc().and_then(|l| self.views.get(&l)).is_some_and(|v| v.tabs.len() > 1) {
+                    self.step_tab(step);
+                }
+                return;
+            }
             if ev.is_press() && ev.is_left() {
                 let body = ui::pane_area(cols, rows, self.sidebar_hidden);
                 match ui::tab_hit(self, body, ev.x) {
@@ -1989,6 +2015,7 @@ impl App {
             Action::NextTab => self.step_tab(1),
             Action::PrevTab => self.step_tab(-1),
             Action::Tab(n) => self.goto_tab(n as usize - 1),
+            Action::LastTab => self.last_tab(),
         }
     }
 
@@ -2025,7 +2052,7 @@ impl App {
                 match self.views.get_mut(&loc) {
                     Some(view) => {
                         view.tabs.push(tab);
-                        view.active = view.tabs.len() - 1;
+                        view.set_active(view.tabs.len() - 1);
                     }
                     None => {
                         self.views.insert(loc.clone(), View::single(tab));
@@ -2106,7 +2133,7 @@ impl App {
                 match self.views.get_mut(&loc) {
                     Some(view) => {
                         view.tabs.push(tab);
-                        view.active = view.tabs.len() - 1;
+                        view.set_active(view.tabs.len() - 1);
                     }
                     None => {
                         self.views.insert(loc.clone(), View::single(tab));
@@ -2127,13 +2154,23 @@ impl App {
             let n = view.tabs.len();
             return self.say(format!("no tab {} ({n} open)", index + 1));
         }
-        view.active = index;
+        view.set_active(index);
         let tab = &view.tabs[index];
         self.focus = tab.last_focus.filter(|f| tab.layout.contains(*f)).or_else(|| tab.layout.leaves().first().copied());
         if self.copy.is_some() {
             self.exit_copy();
         }
         self.full_redraw = true;
+    }
+
+    /// Flip back to the tab shown before this one.
+    fn last_tab(&mut self) {
+        let Some(loc) = self.current_loc() else { return };
+        let Some(view) = self.views.get(&loc) else { return };
+        match view.previous.filter(|p| *p < view.tabs.len() && *p != view.active) {
+            Some(p) => self.goto_tab(p),
+            None => self.say("no other tab to flip to"),
+        }
     }
 
     fn step_tab(&mut self, step: isize) {
@@ -2280,6 +2317,8 @@ impl App {
                 if let Some(layout) = tab.layout.remove(id) {
                     let last_focus = tab.last_focus.filter(|f| *f != id);
                     view.tabs.insert(t, Tab { layout, zoomed: tab.zoomed.filter(|z| *z != id), last_focus, name: tab.name });
+                } else {
+                    view.forget_tab(t);
                 }
             }
             if !view.tabs.is_empty() {
@@ -2521,7 +2560,7 @@ impl App {
             }
             imported += 1;
             let active = v.active_tab.min(tabs.len() - 1);
-            self.views.insert(loc, View { tabs, active, name: v.name });
+            self.views.insert(loc, View { tabs, active, name: v.name, previous: None });
         }
         if let (None, Some((loc, pane))) = (self.focus, first) {
             self.focus = pane;
@@ -2682,8 +2721,11 @@ impl App {
                     let zoomed = tab.zoomed.filter(|z| *z != id);
                     let last_focus = tab.last_focus.filter(|f| *f != id);
                     view.tabs.insert(t, Tab { layout, zoomed, last_focus, name: tab.name });
-                } else if view.active >= t && view.active > 0 {
-                    view.active -= 1; // the tab closed; stay on its neighbour
+                } else {
+                    view.forget_tab(t);
+                    if view.active >= t && view.active > 0 {
+                        view.active -= 1; // the tab closed; stay on its neighbour
+                    }
                 }
             }
             if !view.tabs.is_empty() {

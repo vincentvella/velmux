@@ -53,6 +53,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | arrows, `H J K L` | focus a neighbour, move the nearest divider |
 | `z` | zoom the focused pane |
 | `t`, `tab` / `shift+tab` | new tab, next / previous tab |
+| `;` | flip back to the last tab (also `ctrl+0`, or scroll over the header) |
 | `T` | rename the tab (empty clears; names show in the tab bar) |
 | `w` | location picker: type to fuzzy-filter, ↑↓ / `^p ^n`, enter to go |
 | `W` | name this location (base, slot or folder); empty clears |
@@ -73,7 +74,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 Any action can also be bound with no prefix. Two levels of jumping: `super+1..9`
 goes to location N across every space, and `alt+1..9` / `alt+0` swap between
 the current space's pool slots and its base (folders, when unclassified). The
-other defaults mirror a Cmd-driven (herdr / cmux style) layout: `ctrl+1..9` tabs, `super+t`
+other defaults mirror a Cmd-driven (herdr / cmux style) layout: `ctrl+1..9` tabs, `ctrl+0` last tab, `super+t`
 new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
 `super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
 close, `super+shift+enter` zoom, `super+alt+arrows` focus, `super+b` sidebar,

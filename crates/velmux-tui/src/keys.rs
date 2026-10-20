@@ -50,6 +50,8 @@ pub enum Action {
     NewTab,
     NextTab,
     PrevTab,
+    /// Flip back to the previously shown tab.
+    LastTab,
     Tab(u8),
     ToggleSidebar,
     /// Fuzzy-pick any location to go to.
@@ -111,6 +113,7 @@ const NAMES: &[(&str, Action)] = &[
     ("new_tab", Action::NewTab),
     ("next_tab", Action::NextTab),
     ("prev_tab", Action::PrevTab),
+    ("last_tab", Action::LastTab),
     ("tab", Action::Tab(0)),
     ("toggle_sidebar", Action::ToggleSidebar),
     ("location_picker", Action::LocationPicker),
@@ -176,6 +179,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (NewTab, &["prefix+t", "super+t"]),
         (NextTab, &["prefix+tab", "super+shift+]"]),
         (PrevTab, &["prefix+shift+tab", "super+shift+["]),
+        (LastTab, &["prefix+;", "ctrl+0"]),
         (Tab(0), &["ctrl+1..9"]),
         (ToggleSidebar, &["prefix+b", "super+b"]),
         (LocationPicker, &["prefix+w", "super+p"]),
@@ -513,6 +517,7 @@ impl Keymap {
                     (vec![ResizeLeft, ResizeDown, ResizeUp, ResizeRight], "resize"),
                     (vec![NextPane, PrevPane], "next / prev pane"),
                     (vec![NextTab, PrevTab], "next / prev tab"),
+                    (one(LastTab), "last tab"),
                     (vec![NextLocation, PrevLocation], "next / prev place"),
                 ],
             ),
