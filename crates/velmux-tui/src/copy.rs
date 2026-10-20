@@ -120,6 +120,32 @@ impl Copy {
         p.screen_mut().set_scrollback(self.offset);
     }
 
+    /// Select the word under a view cell (a run of non-space characters).
+    pub fn select_word<CB: vt100::Callbacks>(&mut self, row: u16, col: u16, p: &mut vt100::Parser<CB>) {
+        let at = self.at(row, col, p);
+        let (cells, _) = line_cells(p, at.0);
+        let blank = |c: usize| cells.get(c).is_none_or(|s| s.trim().is_empty());
+        let col = (at.1 as usize).min(cells.len().saturating_sub(1));
+        if blank(col) {
+            self.anchor = Some(at);
+            self.cursor = at;
+            return;
+        }
+        let start = (0..=col).rev().take_while(|&c| !blank(c)).last().unwrap_or(col);
+        let end = (col..cells.len()).take_while(|&c| !blank(c)).last().unwrap_or(col);
+        self.linewise = false;
+        self.anchor = Some((at.0, start as u16));
+        self.cursor = (at.0, end as u16);
+    }
+
+    /// Select the whole line under a view cell.
+    pub fn select_line<CB: vt100::Callbacks>(&mut self, row: u16, p: &vt100::Parser<CB>) {
+        let at = self.at(row, 0, p);
+        self.linewise = true;
+        self.anchor = Some(at);
+        self.cursor = at;
+    }
+
     /// Absolute position of a cell in the current view.
     pub fn at<CB: vt100::Callbacks>(&self, row: u16, col: u16, p: &vt100::Parser<CB>) -> Pos {
         (self.top(p) + row as usize, col)
@@ -396,6 +422,18 @@ mod tests {
         c.scroll(-1000, &mut p);
         assert_eq!(c.offset, p.screen().scrollback_len());
         assert_eq!(c.at(0, 2, &p), (0, 2));
+    }
+
+    #[test]
+    fn double_and_triple_click_selections() {
+        let mut p = parser(5, 30, "git commit -m fix-nav\r\nsecond line\r\n");
+        let mut c = Copy::enter(1, &p);
+        c.select_word(0, 16, &mut p);
+        assert_eq!(c.selected_text(&mut p).as_deref(), Some("fix-nav"));
+        c.select_word(0, 0, &mut p);
+        assert_eq!(c.selected_text(&mut p).as_deref(), Some("git"));
+        c.select_line(1, &p);
+        assert_eq!(c.selected_text(&mut p).as_deref(), Some("second line"));
     }
 
     #[test]

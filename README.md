@@ -103,6 +103,29 @@ full-screen apps such as `less`, and is passed straight through, along with
 clicks, to apps that ask for the mouse (vim with `mouse=a`, full-screen TUIs).
 Hold Shift (Option in iTerm2) for your terminal's native selection.
 
+### Notifications
+
+When an agent finishes while you're looking elsewhere, or gets blocked on you
+(a permission prompt, a question), velmux shows a desktop notification
+(through your terminal, e.g. Ghostty; the OS's own when you're detached) and
+plays a sound. Agents that just started or restored don't notify, nor does a
+blocked agent you're already looking at.
+
+```toml
+[notify]
+desktop = true
+sound = true
+done_sound = "Glass"     # macOS system sound name, or a path to a sound file
+blocked_sound = "Funk"
+```
+
+### Copying
+
+Drag over text in any pane to copy it, even in apps that use the mouse
+(fullscreen Claude, vim): a click that doesn't move still reaches the app.
+Double-click copies a word, triple-click a line. Copies go to the clipboard
+(and OSC 52), with a "copied to clipboard" toast.
+
 ### Copy mode
 
 `<prefix> [` (or `<prefix> PgUp`) freezes the focused pane and opens its

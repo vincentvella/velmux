@@ -8,6 +8,7 @@ mod herdr;
 mod keys;
 mod layout;
 mod mouse;
+mod notify;
 mod pane;
 mod picker;
 mod prefix;

@@ -100,7 +100,9 @@ enum Drag {
     /// Resizing the split behind a divider.
     Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
     /// Selecting text; copy mode opens on the first motion, copies on release.
-    Select { pane: u64, origin: (u16, u16), moved: bool },
+    /// `click`: the app asked for the mouse, so a press that never moves is
+    /// replayed to it on release (a click); a drag selects instead.
+    Select { pane: u64, origin: (u16, u16), moved: bool, click: bool },
 }
 
 /// What's being dragged in the sidebar.
@@ -131,6 +133,8 @@ fn unbound_len(bytes: &[u8]) -> usize {
         _ => 1,
     }
 }
+
+const TOAST_FOR: Duration = Duration::from_millis(1600);
 
 /// What a Claude in a repo's base checkout is told, so new work starts as a
 /// conversation and Claude claims its own worktree slot when it's ready.
@@ -262,6 +266,13 @@ pub struct App {
     mouse: bool,
     /// Restart in place when the binary changes.
     auto_restart: bool,
+    notify: velmux_pool::NotifySettings,
+    /// A floating "copied to clipboard"-style message and when it appeared.
+    toast: Option<(String, Instant)>,
+    /// The last left press: when, which pane, which cell, how many in a row.
+    last_click: Option<(Instant, u64, (u16, u16), u8)>,
+    /// When each pane last notified, so a flapping agent doesn't spam.
+    notified: HashMap<u64, Instant>,
     /// The binary this server runs, and its mtime when we last looked.
     exe: Option<(PathBuf, Option<SystemTime>)>,
     /// A newer binary seen once; restart when it's unchanged on the next look.
@@ -309,7 +320,7 @@ pub fn serve() -> Result<()> {
     let (settings, mut warning) = match Env::from_process().and_then(|env| tui_settings(&env)) {
         Ok(s) => (s, None),
         Err(e) => (
-            TuiSettings { prefix: None, mouse: true, auto_restart: true, keys: Default::default() },
+            TuiSettings { prefix: None, mouse: true, auto_restart: true, keys: Default::default(), notify: Default::default() },
             Some(format!("config: {e:#}")),
         ),
     };
@@ -335,6 +346,7 @@ pub fn serve() -> Result<()> {
     }
     let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
     app.auto_restart = settings.auto_restart;
+    app.notify = settings.notify.clone();
     match std::env::var_os("VELMUX_HANDOFF") {
         Some(path) => {
             // Don't pass it on to panes we start later.
@@ -409,6 +421,10 @@ impl App {
             pending_out: Vec::new(),
             mouse,
             auto_restart: true,
+            notify: Default::default(),
+            notified: HashMap::new(),
+            toast: None,
+            last_click: None,
             exe: std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).map(|p| {
                 let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
                 (p, mtime)
@@ -1028,20 +1044,71 @@ impl App {
         self.dirty = true;
     }
 
+    /// Tell you an agent needs you: a desktop notification and a sound. Skips
+    /// agents that just started (restores, trust prompts), a blocked agent
+    /// you're looking at, and repeats within a few seconds.
+    fn alert(&mut self, id: u64, kind: crate::notify::Kind) {
+        use crate::notify::{self, Kind};
+        let Some(pane) = self.pane(id) else { return };
+        if pane.started_at.elapsed().unwrap_or_default() < Duration::from_secs(6) {
+            return;
+        }
+        let agent = pane.agent.unwrap_or("agent");
+        let place = ui::short_loc(self, &pane.loc);
+        let task = ui::useful_title(pane).map(|t| format!(" · {t}")).unwrap_or_default();
+        let watching = self.client.is_some() && self.focus == Some(id);
+        if kind == Kind::Blocked && watching {
+            return;
+        }
+        if self.notified.get(&id).is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+            return;
+        }
+        self.notified.insert(id, Instant::now());
+        let body = match kind {
+            Kind::Blocked => format!("{place}: {agent} needs you{task}"),
+            Kind::Done => format!("{place}: {agent} finished{task}"),
+        };
+        if self.notify.desktop {
+            if self.client.is_some() {
+                self.pending_out.extend_from_slice(&notify::osc777("velmux", &body));
+                self.dirty = true;
+            } else {
+                notify::system("velmux", &body);
+            }
+        }
+        if self.notify.sound {
+            notify::play(match kind {
+                Kind::Blocked => &self.notify.blocked_sound,
+                Kind::Done => &self.notify.done_sound,
+            });
+        }
+    }
+
     fn detect_all(&mut self) {
         let focus = self.focus;
         let mut changed = false;
         let mut sessions_changed = false;
         let claude_dir = self.claude_dir.clone();
+        let mut alerts = Vec::new();
         for pane in &mut self.panes {
             let before = pane.session.clone();
+            let was = (pane.state, pane.unseen_done);
             changed |= pane.detect(focus == Some(pane.id), &claude_dir);
             sessions_changed |= pane.session != before;
+            if let Some(kind) = crate::notify::transition(was, (pane.state, pane.unseen_done)) {
+                alerts.push((pane.id, kind));
+            }
+        }
+        for (id, kind) in alerts {
+            self.alert(id, kind);
         }
         if sessions_changed {
             self.save();
         }
-        self.dirty |= changed || self.status.is_some();
+        self.dirty |= changed || self.status.is_some() || self.toast.is_some();
+        if self.toast.as_ref().is_some_and(|(_, at)| at.elapsed() >= TOAST_FOR) {
+            self.toast = None;
+        }
     }
 
     // ---- input ----
@@ -1127,8 +1194,20 @@ impl App {
         let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
         let screen = pane.parser.screen();
         let app_mode = screen.mouse_protocol_mode();
+        let clicks = self.count_click(id, (lx, ly), &ev);
+        if clicks >= 2 && ev.is_left() {
+            // Double-click copies a word, triple-click a line, in any app.
+            return self.click_select(id, lx, ly, clicks);
+        }
+        let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
+        let screen = pane.parser.screen();
         if !copying && app_mode != MouseProtocolMode::None {
-            // The app handles the mouse itself (vim with mouse=a, fullscreen TUIs).
+            // A left drag selects text even in mouse-aware apps (vim, fullscreen
+            // Claude); a click that doesn't move is handed to the app on release.
+            if ev.is_press() && ev.is_left() {
+                self.drag = Some(Drag::Select { pane: id, origin: (lx, ly), moved: false, click: true });
+                return;
+            }
             if let Some(bytes) = mouse::encode(&ev, lx, ly, app_mode, screen.mouse_protocol_encoding()) {
                 pane.write_raw(&bytes);
             }
@@ -1160,8 +1239,39 @@ impl App {
                     c.sync(p);
                 });
             }
-            self.drag = Some(Drag::Select { pane: id, origin: (lx, ly), moved: false });
+            self.drag = Some(Drag::Select { pane: id, origin: (lx, ly), moved: false, click: false });
         }
+    }
+
+    /// How many quick presses in a row at the same cell (1 = single click).
+    fn count_click(&mut self, pane: u64, cell: (u16, u16), ev: &MouseEvent) -> u8 {
+        if !(ev.is_press() && ev.is_left()) {
+            return 0;
+        }
+        let n = match self.last_click {
+            Some((at, p, c, n)) if p == pane && c == cell && at.elapsed() < Duration::from_millis(450) => n + 1,
+            _ => 1,
+        };
+        self.last_click = Some((Instant::now(), pane, cell, n));
+        n
+    }
+
+    /// Copy the word (2 clicks) or line (3+) under a cell, then flash a toast.
+    fn click_select(&mut self, pane: u64, lx: u16, ly: u16, clicks: u8) {
+        if self.copy.as_ref().is_none_or(|c| c.pane != pane) {
+            if self.focus != Some(pane) {
+                self.focus = Some(pane);
+            }
+            self.enter_copy(false);
+        }
+        self.with_copy(|c, p| {
+            if clicks == 2 {
+                c.select_word(ly, lx, p);
+            } else {
+                c.select_line(ly, p);
+            }
+        });
+        self.yank_selection();
     }
 
     fn continue_drag(&mut self, drag: Drag, ev: MouseEvent) {
@@ -1202,10 +1312,13 @@ impl App {
                 }
                 self.drag = Some(Drag::Divider { loc, path, span, dir });
             }
-            Drag::Select { pane, origin, mut moved } => {
+            Drag::Select { pane, origin, mut moved, click } => {
                 if ev.release {
                     if moved {
                         self.yank_selection();
+                    } else if click {
+                        // Never dragged: it was a click meant for the app.
+                        self.replay_click(pane, origin, &ev);
                     }
                     return;
                 }
@@ -1230,7 +1343,7 @@ impl App {
                         c.sync(p);
                     });
                 }
-                self.drag = Some(Drag::Select { pane, origin, moved });
+                self.drag = Some(Drag::Select { pane, origin, moved, click });
             }
         }
     }
@@ -1397,15 +1510,37 @@ impl App {
         }
     }
 
+    /// Send a held-back click (press + release) to the pane's app.
+    fn replay_click(&mut self, pane: u64, (lx, ly): (u16, u16), release: &MouseEvent) {
+        let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) else { return };
+        let screen = p.parser.screen();
+        let (mode, enc) = (screen.mouse_protocol_mode(), screen.mouse_protocol_encoding());
+        let press = MouseEvent { release: false, ..*release };
+        for ev in [press, *release] {
+            if let Some(bytes) = mouse::encode(&ev, lx, ly, mode, enc) {
+                p.write_raw(&bytes);
+            }
+        }
+    }
+
     fn yank_selection(&mut self) {
         let mut text = None;
         self.with_copy(|c, p| text = c.selected_text(p));
-        if let Some(text) = text.filter(|t| !t.is_empty()) {
-            let lines = text.lines().count().max(1);
+        if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
             self.set_clipboard(&text);
-            self.say(format!("copied {lines} line(s)"));
+            self.toast("copied to clipboard");
         }
         self.exit_copy();
+    }
+
+    /// A brief floating message over the pane area.
+    pub fn toast(&mut self, text: &str) {
+        self.toast = Some((text.to_string(), Instant::now()));
+        self.dirty = true;
+    }
+
+    pub fn toast_text(&self) -> Option<&str> {
+        self.toast.as_ref().filter(|(_, at)| at.elapsed() < TOAST_FOR).map(|(t, _)| t.as_str())
     }
 
     fn keys(&mut self, mut bytes: &[u8]) {
@@ -1843,6 +1978,7 @@ impl App {
         let (keymap, key_warnings) = Keymap::build(self.prefix.byte, &settings.keys);
         self.keymap = keymap;
         warnings.extend(key_warnings);
+        self.notify = settings.notify.clone();
         if settings.mouse != self.mouse {
             self.mouse = settings.mouse;
             self.pending_out.extend_from_slice(if self.mouse { mouse::ENABLE } else { mouse::DISABLE });
@@ -2392,10 +2528,9 @@ impl App {
             CopyAction::Stay => {}
             CopyAction::Exit => self.exit_copy(),
             CopyAction::Yank(text) => {
-                let lines = text.lines().count().max(1);
                 self.set_clipboard(&text);
                 self.exit_copy();
-                self.say(format!("copied {lines} line(s)"));
+                self.toast("copied to clipboard");
             }
         }
         used.max(1)

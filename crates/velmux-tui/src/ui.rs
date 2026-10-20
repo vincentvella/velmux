@@ -359,7 +359,7 @@ pub fn pane_label(app: &App, pane: &Pane) -> String {
 
 /// The window title worth showing: agents put their task there; shells just
 /// put `user@host:path`, which the label already covers.
-fn useful_title(pane: &Pane) -> Option<&str> {
+pub fn useful_title(pane: &Pane) -> Option<&str> {
     let t = pane.title().trim();
     (pane.agent.is_some() && !t.is_empty()).then_some(t)
 }
@@ -565,6 +565,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
     }
+    if let Some(text) = app.toast_text() {
+        draw_toast(text, body, buf);
+    }
     if let Mode::Menu { selected } = &app.mode {
         draw_menu(app, *selected, buf);
     }
@@ -617,6 +620,21 @@ fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
         buf.set_stringn(x, ly, k, 10, Style::new().fg(ACCENT));
         buf.set_stringn(x + 11, ly, label, width.saturating_sub(11) as usize, Style::new().fg(Color::Gray));
     }
+}
+
+/// A small floating box at the bottom centre of the pane area.
+fn draw_toast(text: &str, body: Rect, buf: &mut Buffer) {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let width = (text.chars().count() as u16 + 6).min(body.width);
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.bottom().saturating_sub(4), width, 3);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Indexed(60)))
+        .render(area, buf);
+    buf.set_string(area.x + 2, area.y + 1, "●", Style::new().fg(ACCENT));
+    buf.set_stringn(area.x + 4, area.y + 1, text, width.saturating_sub(5) as usize, Style::new().fg(Color::White).add_modifier(Modifier::BOLD));
 }
 
 /// The short menu: label left, its shortcut right.
@@ -701,7 +719,7 @@ fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffe
 /// Selection highlight, scroll position and the copy cursor over a frozen pane.
 fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let top = c.top(&pane.parser);
-    let sel = Style::new().bg(Color::Indexed(25)).fg(Color::White);
+    let sel = Style::new().bg(Color::Indexed(111)).fg(Color::Black);
     if let Some((a, b)) = c.selection() {
         for r in 0..area.height {
             let abs = top + r as usize;

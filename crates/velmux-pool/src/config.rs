@@ -55,6 +55,16 @@ struct GlobalFile {
     auto_restart: Option<bool>,
     /// TUI key bindings: action name → one spec or a list.
     keys: Option<std::collections::BTreeMap<String, KeySpecs>>,
+    notify: Option<NotifyFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotifyFile {
+    desktop: Option<bool>,
+    sound: Option<bool>,
+    done_sound: Option<String>,
+    blocked_sound: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +85,24 @@ pub struct TuiSettings {
     pub auto_restart: bool,
     /// Key binding overrides: action name → specs (empty = unbound).
     pub keys: std::collections::BTreeMap<String, Vec<String>>,
+    pub notify: NotifySettings,
+}
+
+/// When an agent finishes unseen or gets blocked on you.
+#[derive(Debug, Clone)]
+pub struct NotifySettings {
+    /// A desktop notification (through the terminal, or the OS when detached).
+    pub desktop: bool,
+    pub sound: bool,
+    /// A macOS system sound name (Glass, Funk, Ping, …) or a sound file path.
+    pub done_sound: String,
+    pub blocked_sound: String,
+}
+
+impl Default for NotifySettings {
+    fn default() -> NotifySettings {
+        NotifySettings { desktop: true, sound: true, done_sound: "Glass".into(), blocked_sound: "Funk".into() }
+    }
 }
 
 pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
@@ -85,11 +113,20 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
         .into_iter()
         .map(|(k, v)| (k, match v { KeySpecs::One(s) => vec![s], KeySpecs::Many(v) => v }))
         .collect();
+    let n = global.notify.unwrap_or_default();
+    let d = NotifySettings::default();
+    let notify = NotifySettings {
+        desktop: n.desktop.unwrap_or(d.desktop),
+        sound: n.sound.unwrap_or(d.sound),
+        done_sound: n.done_sound.unwrap_or(d.done_sound),
+        blocked_sound: n.blocked_sound.unwrap_or(d.blocked_sound),
+    };
     Ok(TuiSettings {
         prefix: global.prefix,
         mouse: global.mouse.unwrap_or(true),
         auto_restart: global.auto_restart.unwrap_or(true),
         keys,
+        notify,
     })
 }
 
