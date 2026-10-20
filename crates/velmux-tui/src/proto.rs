@@ -14,6 +14,10 @@ pub enum ClientMsg {
     ImportHerdr { path: PathBuf, with_latest_claude: bool },
     /// One-shot control request: live-restart the server.
     Restart,
+    /// One-shot: claim a slot for the pane `velmux claim` runs in, moving it there.
+    ClaimFor { pane: u64, branch: Option<String> },
+    /// One-shot: release the slot that pane is in, moving it back to the base.
+    ReleaseFor { pane: u64 },
 }
 
 pub enum ServerMsg {
@@ -67,6 +71,12 @@ impl ClientMsg {
             ClientMsg::Input(bytes) => write_frame(w, 2, bytes),
             ClientMsg::Resize { cols, rows } => write_frame(w, 3, &size_bytes(*cols, *rows)),
             ClientMsg::Restart => write_frame(w, 5, &[]),
+            ClientMsg::ClaimFor { pane, branch } => {
+                let mut p = pane.to_be_bytes().to_vec();
+                p.extend_from_slice(branch.as_deref().unwrap_or("").as_bytes());
+                write_frame(w, 6, &p)
+            }
+            ClientMsg::ReleaseFor { pane } => write_frame(w, 7, &pane.to_be_bytes()),
             ClientMsg::ImportHerdr { path, with_latest_claude } => {
                 let mut p = vec![*with_latest_claude as u8];
                 p.extend_from_slice(path.as_os_str().as_encoded_bytes());
@@ -89,6 +99,14 @@ impl ClientMsg {
                 Ok(ClientMsg::Resize { cols, rows })
             }
             5 => Ok(ClientMsg::Restart),
+            6 if p.len() >= 8 => {
+                let branch = String::from_utf8_lossy(&p[8..]).into_owned();
+                Ok(ClientMsg::ClaimFor {
+                    pane: u64::from_be_bytes(p[..8].try_into().unwrap()),
+                    branch: (!branch.is_empty()).then_some(branch),
+                })
+            }
+            7 if p.len() >= 8 => Ok(ClientMsg::ReleaseFor { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
             4 if !p.is_empty() => Ok(ClientMsg::ImportHerdr {
                 with_latest_claude: p[0] == 1,
                 path: PathBuf::from(String::from_utf8_lossy(&p[1..]).into_owned()),

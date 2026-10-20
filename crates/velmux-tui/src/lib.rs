@@ -19,6 +19,32 @@ mod ui;
 
 pub use client::attach;
 
+/// The velmux pane this process runs in, when a server is there to ask.
+pub fn current_pane() -> Option<u64> {
+    let pane = std::env::var("VELMUX_PANE").ok()?.parse().ok()?;
+    std::os::unix::net::UnixStream::connect(paths::socket().ok()?).ok()?;
+    Some(pane)
+}
+
+/// `velmux claim` inside a pane: the server claims a slot and moves this pane
+/// there. Returns the slot's path.
+pub fn claim_for_pane(pane: u64, branch: Option<String>) -> anyhow::Result<String> {
+    let reply = client::request(proto::ClientMsg::ClaimFor { pane, branch })?;
+    match reply.strip_prefix("error: ") {
+        Some(e) => anyhow::bail!("{e}"),
+        None => Ok(reply),
+    }
+}
+
+/// `velmux release` inside a pane: release its slot, moving the pane back to base.
+pub fn release_for_pane(pane: u64) -> anyhow::Result<String> {
+    let reply = client::request(proto::ClientMsg::ReleaseFor { pane })?;
+    match reply.strip_prefix("error: ") {
+        Some(e) => anyhow::bail!("{e}"),
+        None => Ok(reply),
+    }
+}
+
 /// `velmux restart`: re-exec the running server (picking up a rebuilt binary)
 /// without stopping any pane.
 pub fn restart_server() -> anyhow::Result<()> {

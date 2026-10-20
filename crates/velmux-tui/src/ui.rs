@@ -62,7 +62,8 @@ pub enum SidebarView {
 pub const MENU: &[(&str, crate::keys::Action)] = {
     use crate::keys::Action::*;
     &[
-        ("new slot", ClaimSlot),
+        ("new conversation", AgentBase),
+        ("claim a slot…", ClaimSlot),
         ("go to…", LocationPicker),
         ("new tab", NewTab),
         ("name this place", RenameLocation),

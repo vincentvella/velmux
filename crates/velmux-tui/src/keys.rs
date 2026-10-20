@@ -135,9 +135,10 @@ fn indexed(a: Action) -> Option<fn(u8) -> Action> {
 fn defaults() -> Vec<(Action, &'static [&'static str])> {
     use Action::*;
     vec![
-        (ClaimSlot, &["prefix+n", "super+n"]),
+        (ClaimSlot, &["prefix+n", "super+shift+n"]),
         (ReleaseSlot, &["prefix+r", "super+shift+w"]),
-        (AgentBase, &["prefix+a", "super+shift+a"]),
+        // New work starts as a conversation in the base; Claude claims a slot itself.
+        (AgentBase, &["prefix+a", "super+n"]),
         (NewShell, &["prefix+c"]),
         (NewEditor, &["prefix+e"]),
         (SplitRight, &["prefix+|", "prefix+%", "super+d"]),
@@ -473,8 +474,8 @@ impl Keymap {
         };
         let parts: Vec<String> = [
             (Action::Menu, "menu"),
+            (Action::AgentBase, "new"),
             (Action::ClaimSlot, "claim"),
-            (Action::AgentBase, "claude@base"),
             (Action::SplitRight, "split"),
             (Action::NewTab, "tab"),
             (Action::LocationPicker, "pick"),

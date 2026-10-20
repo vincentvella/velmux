@@ -36,7 +36,9 @@ pub enum Event {
     ClientGone(u64),
     PtyOutput(u64, Vec<u8>),
     PtyExit(u64),
-    Claimed { project: usize, result: Result<SlotView, String> },
+    /// `for_pane`: claimed by `velmux claim` inside that pane, which moves to
+    /// the slot; the stream gets the slot's path.
+    Claimed { project: usize, result: Result<SlotView, String>, for_pane: Option<(u64, UnixStream)> },
     Released { project: usize, slot: String, result: Result<String, String> },
 }
 
@@ -125,6 +127,19 @@ fn unbound_len(bytes: &[u8]) -> usize {
         }
         _ => 1,
     }
+}
+
+/// What a Claude in a repo's base checkout is told, so new work starts as a
+/// conversation and Claude claims its own worktree slot when it's ready.
+const BASE_PROMPT: &str = "You are running inside velmux, in the base checkout of the {repo} repo. \
+Read, explore and plan here, but don't edit files in this checkout. When you're ready to change code, \
+run `velmux claim <branch>` with a short branch name for the task (e.g. feat/login-redirect): it sets up a \
+dedicated git worktree on that branch and prints its path. Do all edits, builds and commits in that path \
+(cd there in your shell; use its absolute paths for file edits). When the work is finished and committed, \
+you can run `velmux release` to hand the worktree back.";
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// Written by `settings` when there's no config yet.
@@ -275,7 +290,10 @@ pub fn serve() -> Result<()> {
             std::thread::spawn(move || {
                 let Ok(first) = ClientMsg::read(&mut stream) else { return };
                 let ev = match first {
-                    ClientMsg::ImportHerdr { .. } | ClientMsg::Restart => Event::Control(stream, first),
+                    ClientMsg::ImportHerdr { .. }
+                    | ClientMsg::Restart
+                    | ClientMsg::ClaimFor { .. }
+                    | ClientMsg::ReleaseFor { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -518,6 +536,15 @@ impl App {
             Event::Control(mut stream, msg) => {
                 let reply = match msg {
                     ClientMsg::ImportHerdr { path, with_latest_claude } => self.import_herdr(&path, with_latest_claude),
+                    ClientMsg::ClaimFor { pane, branch } => {
+                        let Some(project) = self.pane(pane).map(|p| p.loc.project) else {
+                            let _ = ServerMsg::Reply("error: that pane isn't in velmux".into()).write(&mut stream);
+                            return;
+                        };
+                        self.claim_in(project, branch, Some((pane, stream)));
+                        return;
+                    }
+                    ClientMsg::ReleaseFor { pane } => self.release_for(pane),
                     ClientMsg::Restart => {
                         let _ = ServerMsg::Reply("restarting — panes keep running".into()).write(&mut stream);
                         drop(stream);
@@ -555,16 +582,26 @@ impl App {
                     self.reload_config();
                 }
             }
-            Event::Claimed { project, result } => {
+            Event::Claimed { project, result, for_pane } => {
                 self.jobs.retain(|j| j != "claiming");
                 self.refresh_slots();
-                match result {
-                    Ok(slot) => {
+                match (result, for_pane) {
+                    (Ok(slot), None) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.say(format!("claimed {}", slot.id));
                         self.spawn(loc, Kind::Agent, None);
                     }
-                    Err(e) => self.say(format!("claim failed: {e}")),
+                    (Ok(slot), Some((pane, mut stream))) => {
+                        let loc = Loc { project, slot: Some(slot.id.clone()) };
+                        self.move_pane(pane, loc);
+                        let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
+                        self.say(format!("claimed {}{branch}", slot.id));
+                        let _ = ServerMsg::Reply(slot.path.display().to_string()).write(&mut stream);
+                    }
+                    (Err(e), None) => self.say(format!("claim failed: {e}")),
+                    (Err(e), Some((_, mut stream))) => {
+                        let _ = ServerMsg::Reply(format!("error: {e}")).write(&mut stream);
+                    }
                 }
             }
             Event::Released { project, slot, result } => {
@@ -624,7 +661,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
         }
     }
 
@@ -1926,40 +1963,93 @@ impl App {
     fn confirm(&mut self, action: Confirm) {
         match action {
             Confirm::Quit => self.quit = true,
-            Confirm::Release(loc) => {
-                let Some(slot) = loc.slot.clone() else { return };
-                let Some(pool) = self.projects[loc.project].pool.clone() else { return };
-                for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
-                    pane.kill();
+            Confirm::Release(loc) => self.release_location(loc),
+        }
+    }
+
+    /// `velmux release` inside a pane: move it back to its repo's base, then
+    /// release the slot it was in (other panes there close, work is stashed).
+    fn release_for(&mut self, pane: u64) -> String {
+        let Some(loc) = self.pane(pane).map(|p| p.loc.clone()) else { return "error: that pane isn't in velmux".into() };
+        let Some(slot) = loc.slot.clone().filter(|_| !self.projects[loc.project].is_unclassified()) else {
+            return "error: this pane isn't in a slot (nothing to release)".into();
+        };
+        self.move_pane(pane, Loc { project: loc.project, slot: None });
+        self.release_location(loc);
+        format!("releasing {slot}; this conversation is back in the base checkout")
+    }
+
+    /// Move a running pane to another location (its process is untouched).
+    fn move_pane(&mut self, id: u64, to: Loc) {
+        let Some(from) = self.pane(id).map(|p| p.loc.clone()) else { return };
+        if from == to {
+            return;
+        }
+        if let Some(mut view) = self.views.remove(&from) {
+            if let Some(t) = view.tab_of(id) {
+                let tab = view.tabs.remove(t);
+                if let Some(layout) = tab.layout.remove(id) {
+                    let last_focus = tab.last_focus.filter(|f| *f != id);
+                    view.tabs.insert(t, Tab { layout, zoomed: tab.zoomed.filter(|z| *z != id), last_focus, name: tab.name });
                 }
-                let tx = self.events.clone();
-                let project = loc.project;
-                self.jobs.push(format!("releasing {slot}"));
-                std::thread::spawn(move || {
-                    // Give killed processes a moment to exit before git touches the tree.
-                    std::thread::sleep(Duration::from_millis(300));
-                    let result = pool
-                        .release(&slot, false)
-                        .map(|r| {
-                            let mut msg = format!("released {}", r.id);
-                            if let Some(s) = r.stashed {
-                                msg.push_str(&format!(" · stashed: {s}"));
-                            }
-                            if let Some(b) = r.rescued {
-                                msg.push_str(&format!(" · kept commits on {b}"));
-                            }
-                            msg
-                        })
-                        .map_err(|e| format!("{e:#}"));
-                    let _ = tx.send(Event::Released { project, slot, result });
-                });
+            }
+            if !view.tabs.is_empty() {
+                view.active = view.active.min(view.tabs.len() - 1);
+                self.views.insert(from.clone(), view);
             }
         }
+        if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
+            pane.loc = to.clone();
+        }
+        self.insert_into_view(&to, id, None);
+        if self.focus == Some(id) {
+            self.current = Some(to);
+        }
+        self.relayout();
+    }
+
+    /// Release a slot: close its panes, then stash / reset it in the background.
+    fn release_location(&mut self, loc: Loc) {
+        let Some(slot) = loc.slot.clone() else { return };
+        let Some(pool) = self.projects[loc.project].pool.clone() else { return };
+        for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
+            pane.kill();
+        }
+        let tx = self.events.clone();
+        let project = loc.project;
+        self.jobs.push(format!("releasing {slot}"));
+        std::thread::spawn(move || {
+            // Give killed processes a moment to exit before git touches the tree.
+            std::thread::sleep(Duration::from_millis(300));
+            let result = pool
+                .release(&slot, false)
+                .map(|r| {
+                    let mut msg = format!("released {}", r.id);
+                    if let Some(s) = r.stashed {
+                        msg.push_str(&format!(" · stashed: {s}"));
+                    }
+                    if let Some(b) = r.rescued {
+                        msg.push_str(&format!(" · kept commits on {b}"));
+                    }
+                    msg
+                })
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::Released { project, slot, result });
+        });
     }
 
     fn claim(&mut self, branch: Option<String>) {
         let Some(loc) = self.current_loc() else { return };
-        let Some(pool) = self.projects[loc.project].pool.clone() else {
+        self.claim_in(loc.project, branch, None);
+    }
+
+    /// Claim a slot in `project` (in the background). With `for_pane`, that pane
+    /// moves into the slot and the stream gets its path, instead of a new pane.
+    fn claim_in(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>) {
+        let Some(pool) = self.projects[project].pool.clone() else {
+            if let Some((_, mut stream)) = for_pane {
+                let _ = ServerMsg::Reply("error: this folder isn't a git repo, so it has no slots".into()).write(&mut stream);
+            }
             return self.say("unclassified folders aren't git repos, so they have no slots");
         };
         let tx = self.events.clone();
@@ -1974,7 +2064,7 @@ impl App {
                 pool.claim(&opts, &quiet)
             })()
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Claimed { project: loc.project, result });
+            let _ = tx.send(Event::Claimed { project, result, for_pane });
         });
     }
 
@@ -2024,7 +2114,12 @@ impl App {
         let command = match kind {
             _ if opts.command.is_some() => opts.command.clone(),
             Kind::Agent if session::is_claude(&cfg.agent) => {
-                let agent = &cfg.agent;
+                let mut agent = cfg.agent.clone();
+                if let (None, Some(pool)) = (&loc.slot, &project.pool) {
+                    let _ = std::fs::create_dir_all(&pool.dir);
+                    let prompt = BASE_PROMPT.replace("{repo}", &pool.name);
+                    agent = format!("{agent} --add-dir {} --append-system-prompt {}", shell_quote(&pool.dir.display().to_string()), shell_quote(&prompt));
+                }
                 Some(match resume {
                     Some(id) => {
                         session = Some(id.clone());

@@ -12,6 +12,14 @@ release, so a claim is sub-second instead of a cold install.
 
 ## TUI
 
+**New work starts as a conversation in the base checkout** (`⌘N`, `⊕ new`, or
+`<prefix> a`). Claude is told to plan there and, when it's ready to change code,
+run `velmux claim <branch>` itself: that claims a free slot on a branch it
+names, moves its pane under that slot in the sidebar, and prints the path it
+then works in. `velmux release` (Claude, or you) hands the slot back and the
+conversation returns to the base. To claim a slot yourself with a branch,
+use `⌘⇧N` / `<prefix> n` / the menu.
+
 Run `velmux` with no arguments inside a repo. A background server owns every
 pane, so `<prefix> d` detaches and `velmux` reattaches with everything still
 running. The sidebar lists the base checkout and each slot, one row each, with

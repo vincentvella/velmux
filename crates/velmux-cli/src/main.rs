@@ -117,6 +117,15 @@ fn run() -> Result<()> {
             eprintln!("pool {} → {}", pool.name, pool.dir.display());
             print_table(&pool, &pool.init(&report)?);
         }
+        // Inside a velmux pane: let the server claim, so this pane moves to the slot.
+        Cmd::Claim { branch, json: false, .. } if velmux_tui::current_pane().is_some() => {
+            let path = velmux_tui::claim_for_pane(velmux_tui::current_pane().unwrap(), branch)?;
+            eprintln!("claimed a slot; work in it from here (this pane now lives there in velmux)");
+            println!("{path}");
+        }
+        Cmd::Release { slot: None, force: false } if velmux_tui::current_pane().is_some() => {
+            eprintln!("{}", velmux_tui::release_for_pane(velmux_tui::current_pane().unwrap())?);
+        }
         Cmd::Claim { branch, by, no_fetch, no_install, json } => {
             let opts = ClaimOpts { branch, by, fetch: !no_fetch, install: !no_install };
             let slot = pool.claim(&opts, &report)?;
