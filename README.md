@@ -40,7 +40,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `W` | name this location (base, slot or folder); empty clears |
 | `s` / `R` | settings: edit the config in a tab, applied when you quit the editor / reload config now |
 | `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
-| `1`–`9` | slot N of this repo |
+| `1`–`9`, `0` | slot N of this repo (folder N when unclassified), its base |
 | `o` | jump to the next agent that's blocked or finished unseen |
 | `b` | hide / show the sidebar |
 | `[` / `PgUp` | copy mode |
@@ -50,8 +50,10 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 
 ### Prefix-less keys
 
-Any action can also be bound with no prefix. The defaults mirror a Cmd-driven
-(herdr / cmux style) layout: `super+1..9` locations, `ctrl+1..9` tabs, `super+t`
+Any action can also be bound with no prefix. Two levels of jumping: `super+1..9`
+goes to location N across every space, and `alt+1..9` / `alt+0` swap between
+the current space's pool slots and its base (folders, when unclassified). The
+other defaults mirror a Cmd-driven (herdr / cmux style) layout: `ctrl+1..9` tabs, `super+t`
 new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
 `super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
 close, `super+shift+enter` zoom, `super+alt+arrows` focus, `super+b` sidebar,

@@ -36,8 +36,10 @@ pub enum Action {
     CopyModePageUp,
     NextPane,
     PrevPane,
-    /// Slot N of the current repo.
+    /// Slot N of the current repo (folder N in the unclassified group).
     Slot(u8),
+    /// The current repo's base checkout.
+    Base,
     /// The Nth location with panes, in sidebar order.
     Location(u8),
     PrevLocation,
@@ -88,6 +90,7 @@ const NAMES: &[(&str, Action)] = &[
     ("next_pane", Action::NextPane),
     ("prev_pane", Action::PrevPane),
     ("slot", Action::Slot(0)),
+    ("base", Action::Base),
     ("location", Action::Location(0)),
     ("prev_location", Action::PrevLocation),
     ("next_location", Action::NextLocation),
@@ -144,7 +147,9 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (CopyModePageUp, &["prefix+pageup"]),
         (NextPane, &["prefix+j"]),
         (PrevPane, &["prefix+k"]),
-        (Slot(0), &["prefix+1..9"]),
+        // Swap within the current space: ⌥1..9 slots, ⌥0 base. (⌘1..9 crosses spaces.)
+        (Slot(0), &["prefix+1..9", "alt+1..9"]),
+        (Base, &["prefix+0", "alt+0"]),
         (Location(0), &["prefix+alt+1..9", "super+1..9"]),
         (PrevLocation, &["prefix+,", "super+ctrl+["]),
         (NextLocation, &["prefix+.", "super+ctrl+]"]),
@@ -596,6 +601,10 @@ mod tests {
         assert_eq!(map.after_prefix(b"\x1b3"), Some((Action::Location(3), 2)));
         assert_eq!(map.after_prefix(b"\x02"), Some((Action::SendPrefix, 1)));
         assert_eq!(map.after_prefix(b"3"), Some((Action::Slot(3), 1)));
+        assert_eq!(map.after_prefix(b"0"), Some((Action::Base, 1)));
+        // ⌥N swaps slots with no prefix; after the prefix it's still location N.
+        assert_eq!(map.find_root(b"\x1b4"), Some((0, Action::Slot(4), 2)));
+        assert_eq!(map.find_root(b"\x1b0"), Some((0, Action::Base, 2)));
         // Root chords are found mid-stream; plain typing never matches.
         assert_eq!(map.find_root(b"ls\x1b[116;9u"), Some((2, Action::NewTab, 8)));
         assert_eq!(map.find_root(b"\x1b[51;5u"), Some((0, Action::Tab(3), 7)));

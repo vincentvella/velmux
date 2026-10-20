@@ -1263,7 +1263,14 @@ impl App {
                 let help = self.keymap.help(&self.prefix.short);
                 self.say(help);
             }
-            Action::Slot(n) => self.jump_to_slot(format!("slot-{n}")),
+            Action::Slot(n) => self.jump_in_space(n as usize),
+            Action::Base => match self.current_loc() {
+                Some(loc) if !self.projects[loc.project].is_unclassified() => {
+                    self.show_location(Loc { project: loc.project, slot: None })
+                }
+                Some(_) => self.say("unclassified folders have no base — ⌥1–9 picks a folder"),
+                None => {}
+            },
             Action::Location(n) => self.goto_location(n as usize - 1),
             Action::PrevLocation => self.step_location(-1),
             Action::NextLocation => self.step_location(1),
@@ -1937,22 +1944,29 @@ impl App {
         self.full_redraw = true;
     }
 
-    fn jump_to_slot(&mut self, slot: String) {
+    /// Swap within the current space: slot N of this repo, or folder N in the
+    /// unclassified group.
+    fn jump_in_space(&mut self, n: usize) {
         let Some(loc) = self.current_loc() else { return };
-        let target = Loc { project: loc.project, slot: Some(slot.clone()) };
-        if !self.projects[loc.project].slots.iter().any(|s| s.id == slot) {
-            return self.say(format!("no {slot} (run `velmux init` or claim with {} n)", self.prefix.short));
+        let project = &self.projects[loc.project];
+        if project.is_unclassified() {
+            return match project.folders.get(n.wrapping_sub(1)).map(|f| f.id.clone()) {
+                Some(id) => self.show_location(Loc { project: loc.project, slot: Some(id) }),
+                None => self.say(format!("no folder {n} here")),
+            };
         }
-        self.focus = self.views.get(&target).and_then(|v| v.layout.leaves().first().copied());
-        let in_use = self.projects[loc.project]
-            .slots
-            .iter()
-            .any(|s| s.id == slot && s.status == Status::InUse);
-        if self.focus.is_none() && in_use {
+        let slot = format!("slot-{n}");
+        let target = Loc { project: loc.project, slot: Some(slot.clone()) };
+        let Some(status) = project.slots.iter().find(|s| s.id == slot).map(|s| s.status) else {
+            return self.say(format!("no {slot} (this repo has {} slots)", project.slots.len()));
+        };
+        if status == Status::Free && !self.views.contains_key(&target) {
+            return self.say(format!("{slot} is free — claim one with {} n (or ⌘N)", self.prefix.short));
+        }
+        self.show_location(target);
+        if self.focus.is_none() {
             self.say(format!("{slot}: no panes — {} a/c/e to open one", self.prefix.short));
         }
-        self.current = Some(target);
-        self.full_redraw = true;
     }
 
     // ---- output ----
