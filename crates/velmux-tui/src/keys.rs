@@ -66,6 +66,8 @@ pub enum Action {
     RemovePlace,
     /// Switch the sidebar between spaces and agents.
     SidebarView,
+    /// Preview and pick a colour theme.
+    ThemePicker,
     /// Jump to the next agent that's blocked or finished unseen.
     Attention,
     Detach,
@@ -117,6 +119,7 @@ const NAMES: &[(&str, Action)] = &[
     ("menu", Action::Menu),
     ("remove_place", Action::RemovePlace),
     ("sidebar_view", Action::SidebarView),
+    ("theme_picker", Action::ThemePicker),
     ("attention", Action::Attention),
     ("detach", Action::Detach),
     ("quit", Action::Quit),
@@ -181,6 +184,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (Menu, &["prefix+m"]),
         (RemovePlace, &["prefix+X", "super+shift+backspace"]),
         (SidebarView, &["prefix+g"]),
+        (ThemePicker, &["prefix+ctrl+t"]),
         (Attention, &["prefix+o", "super+shift+u"]),
         (Detach, &["prefix+d"]),
         (Quit, &["prefix+Q"]),

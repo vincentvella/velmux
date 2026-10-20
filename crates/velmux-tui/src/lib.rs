@@ -16,6 +16,7 @@ mod proto;
 mod pty_raw;
 mod server;
 mod session;
+mod theme;
 mod ui;
 
 pub use client::attach;

@@ -119,6 +119,27 @@ done_sound = "Glass"     # macOS system sound name, or a path to a sound file
 blocked_sound = "Funk"
 ```
 
+### Themes
+
+Pick one live from the menu (`theme…`) or with `ctrl+a ctrl+t`. Arrow keys
+preview, Enter saves it to your config, Esc puts the old one back. Built in:
+`default` (your terminal's palette), `rose-pine`, `rose-pine-moon`,
+`rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`, `tokyonight`,
+`gruvbox`, `nord`.
+
+```toml
+theme = "rose-pine"
+
+[theme_colors]           # override any role: #rrggbb, 0-255, or a colour name
+accent = "#f6c177"
+working = "yellow"
+```
+
+Roles: `text` `text2` `dim` `accent` `selected_bg` `base_glyph` `slot_glyph`
+`dirty` `working` `blocked` `done` `idle` `focus_bg` `focus_fg` `title_bg`
+`title_fg` `bar_bg` `bar_fg` `alert` `jobs` `menu_border` `picker_border`
+`toast_border` `copy_bg` `copy_fg` `tag_bg` `tag_fg`.
+
 ### Copying
 
 Drag over text in any pane to copy it, even in apps that use the mouse

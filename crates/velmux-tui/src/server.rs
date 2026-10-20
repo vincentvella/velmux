@@ -87,6 +87,8 @@ pub enum Mode {
     Picker(Picker),
     /// The short menu, with the highlighted row.
     Menu { selected: usize },
+    /// Choosing a theme: the highlighted one is previewed live; esc restores `original`.
+    ThemePicker { selected: usize, original: crate::theme::Theme },
     Confirm { label: String, action: Confirm },
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
@@ -242,6 +244,9 @@ pub struct App {
     pub mode: Mode,
     pub prefix: Prefix,
     pub keymap: Keymap,
+    pub theme: crate::theme::Theme,
+    /// Per-role overrides from config, re-applied when the theme changes.
+    theme_colors: std::collections::BTreeMap<String, String>,
     pub sidebar_hidden: bool,
     pub sidebar_view: ui::SidebarView,
     /// Display order of projects (indices into `projects`, which never move,
@@ -320,7 +325,15 @@ pub fn serve() -> Result<()> {
     let (settings, mut warning) = match Env::from_process().and_then(|env| tui_settings(&env)) {
         Ok(s) => (s, None),
         Err(e) => (
-            TuiSettings { prefix: None, mouse: true, auto_restart: true, keys: Default::default(), notify: Default::default() },
+            TuiSettings {
+                prefix: None,
+                mouse: true,
+                auto_restart: true,
+                keys: Default::default(),
+                notify: Default::default(),
+                theme: None,
+                theme_colors: Default::default(),
+            },
             Some(format!("config: {e:#}")),
         ),
     };
@@ -347,6 +360,16 @@ pub fn serve() -> Result<()> {
     let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
     app.auto_restart = settings.auto_restart;
     app.notify = settings.notify.clone();
+    let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
+    app.theme = theme;
+    app.theme_colors = settings.theme_colors.clone();
+    if !theme_warnings.is_empty() {
+        let w = theme_warnings.join("; ");
+        app.startup_warning = Some(match app.startup_warning.take() {
+            Some(prev) => format!("{prev}; {w}"),
+            None => w,
+        });
+    }
     match std::env::var_os("VELMUX_HANDOFF") {
         Some(path) => {
             // Don't pass it on to panes we start later.
@@ -404,6 +427,8 @@ impl App {
             mode: Mode::Normal,
             prefix,
             keymap,
+            theme: crate::theme::builtin("default").unwrap(),
+            theme_colors: Default::default(),
             sidebar_hidden: false,
             sidebar_view: ui::SidebarView::Spaces,
             project_order: Vec::new(),
@@ -1580,6 +1605,7 @@ impl App {
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Picker(_) => self.picker_input(bytes),
                 Mode::Menu { .. } => self.menu_input(bytes),
+                Mode::ThemePicker { .. } => self.theme_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
                 Mode::Confirm { .. } => {
                     let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
@@ -1685,6 +1711,53 @@ impl App {
             })
             .map(|loc| picker::Item { label: self.loc_name(&loc), loc })
             .collect()
+    }
+
+    fn theme_input(&mut self, bytes: &[u8]) -> usize {
+        use crate::theme::{resolve, set_theme_line, NAMES};
+        let Mode::ThemePicker { selected, .. } = &mut self.mode else { return bytes.len() };
+        let n = NAMES.len();
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, b'k'),
+            [0x1b, b'[', b'B', ..] => (3, b'j'),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, 0)
+            }
+            [b, ..] => (1, *b),
+            [] => return 0,
+        };
+        match key {
+            b'k' | 0x10 | b'j' | 0x0e => {
+                *selected = if matches!(key, b'k' | 0x10) { (*selected + n - 1) % n } else { (*selected + 1) % n };
+                // Live preview, with your per-role overrides on top.
+                self.theme = resolve(Some(NAMES[*selected]), &self.theme_colors).0;
+            }
+            b'\r' | b'\n' => {
+                let name = NAMES[*selected];
+                self.mode = Mode::Normal;
+                let saved = Env::from_process().and_then(|env| {
+                    let text = std::fs::read_to_string(&env.global_config).unwrap_or_default();
+                    if let Some(dir) = env.global_config.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    std::fs::write(&env.global_config, set_theme_line(&text, name))?;
+                    Ok(())
+                });
+                match saved {
+                    Ok(()) => self.toast(&format!("theme: {name}")),
+                    Err(e) => self.say(format!("theme {name} applied, but saving it failed: {e:#}")),
+                }
+            }
+            0x1b | 0x03 | b'q' => {
+                if let Mode::ThemePicker { original, .. } = std::mem::replace(&mut self.mode, Mode::Normal) {
+                    self.theme = original;
+                }
+            }
+            _ => {}
+        }
+        self.full_redraw = true;
+        used
     }
 
     fn menu_input(&mut self, bytes: &[u8]) -> usize {
@@ -1872,6 +1945,10 @@ impl App {
             Action::Settings => self.open_settings(),
             Action::ReloadConfig => self.reload_config(),
             Action::Menu => self.mode = Mode::Menu { selected: 0 },
+            Action::ThemePicker => {
+                let selected = crate::theme::NAMES.iter().position(|n| *n == self.theme.name).unwrap_or(0);
+                self.mode = Mode::ThemePicker { selected, original: self.theme.clone() };
+            }
             Action::RemovePlace => match self.current_loc() {
                 None => self.say("nothing to remove here"),
                 Some(loc) if self.projects[loc.project].is_unclassified() => {
@@ -1979,6 +2056,10 @@ impl App {
         self.keymap = keymap;
         warnings.extend(key_warnings);
         self.notify = settings.notify.clone();
+        let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
+        self.theme = theme;
+        self.theme_colors = settings.theme_colors.clone();
+        warnings.extend(theme_warnings);
         if settings.mouse != self.mouse {
             self.mouse = settings.mouse;
             self.pending_out.extend_from_slice(if self.mouse { mouse::ENABLE } else { mouse::DISABLE });

@@ -56,6 +56,9 @@ struct GlobalFile {
     /// TUI key bindings: action name → one spec or a list.
     keys: Option<std::collections::BTreeMap<String, KeySpecs>>,
     notify: Option<NotifyFile>,
+    /// UI theme name (`velmux` has the list), and per-role colour overrides.
+    theme: Option<String>,
+    theme_colors: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -86,6 +89,8 @@ pub struct TuiSettings {
     /// Key binding overrides: action name → specs (empty = unbound).
     pub keys: std::collections::BTreeMap<String, Vec<String>>,
     pub notify: NotifySettings,
+    pub theme: Option<String>,
+    pub theme_colors: std::collections::BTreeMap<String, String>,
 }
 
 /// When an agent finishes unseen or gets blocked on you.
@@ -127,6 +132,8 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
         auto_restart: global.auto_restart.unwrap_or(true),
         keys,
         notify,
+        theme: global.theme,
+        theme_colors: global.theme_colors.unwrap_or_default(),
     })
 }
 

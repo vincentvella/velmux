@@ -6,6 +6,7 @@ use velmux_pool::Status;
 
 use crate::copy::Copy;
 use crate::detect::AgentState;
+use crate::theme::Theme;
 use crate::layout::Dir;
 use crate::pane::{Kind, Loc, Pane};
 use crate::server::{App, Mode};
@@ -68,6 +69,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         ("new tab", NewTab),
         ("name this place", RenameLocation),
         ("rename tab", RenameTab),
+        ("theme…", ThemePicker),
         ("settings", Settings),
         ("restart server", RestartServer),
         ("remove this place", RemovePlace),
@@ -233,7 +235,7 @@ fn free_slots(app: &App, project: usize) -> usize {
 }
 
 /// Agent-state glyphs for some panes: (glyph, count, style), non-zero only.
-fn rollup_of<'a>(panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, usize, Style)> {
+fn rollup_of<'a>(t: &Theme, panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, usize, Style)> {
     let (mut working, mut blocked, mut done, mut idle) = (0, 0, 0, 0);
     for p in panes {
         if p.unseen_done {
@@ -248,44 +250,43 @@ fn rollup_of<'a>(panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, us
         }
     }
     [
-        ("▲", blocked, Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        ("✓", done, Style::new().fg(Color::Green)),
-        ("●", working, Style::new().fg(Color::Yellow)),
-        ("○", idle, Style::new().fg(Color::DarkGray)),
+        ("▲", blocked, Style::new().fg(t.blocked).add_modifier(Modifier::BOLD)),
+        ("✓", done, Style::new().fg(t.done)),
+        ("●", working, Style::new().fg(t.working)),
+        ("○", idle, Style::new().fg(t.idle)),
     ]
     .into_iter()
     .filter(|(_, n, _)| *n > 0)
     .collect()
 }
 
-const ACCENT: Color = Color::Indexed(39);
-const SELECTED_BG: Color = Color::Indexed(236);
 
 /// One location row: glyph, label (name, branch or folder), a dim slot number,
 /// and its agents' states on the right. The current one gets a highlight bar.
 fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
-    let base = if selected { Style::new().bg(SELECTED_BG) } else { Style::new() };
+    let t = &app.theme;
+    let base = if selected { Style::new().bg(t.selected_bg) } else { Style::new() };
     if selected {
         buf.set_style(Rect::new(0, y, side, 1), base);
-        buf.set_string(0, y, "▌", base.fg(ACCENT));
+        buf.set_string(0, y, "▌", base.fg(t.accent));
     }
     let project = &app.projects[loc.project];
     let name = app.views.get(loc).and_then(|v| v.name.clone());
     let (glyph, glyph_color, label, number, dirty) = match &loc.slot {
-        None => (Some("◆"), Color::Magenta, name.unwrap_or_else(|| "base".into()), None, false),
+        None => (Some("◆"), t.base_glyph, name.unwrap_or_else(|| "base".into()), None, false),
         Some(id) if project.is_unclassified() => (None, Color::Reset, name.unwrap_or_else(|| id.clone()), None, false),
         Some(id) => {
             let slot = project.slots.iter().find(|s| &s.id == id);
             let branch = slot.and_then(|s| s.branch.clone()).unwrap_or_else(|| "detached".into());
             let n = id.trim_start_matches("slot-").to_string();
-            (Some("▣"), Color::Cyan, name.unwrap_or(branch), Some(n), slot.is_some_and(|s| s.dirty))
+            (Some("▣"), t.slot_glyph, name.unwrap_or(branch), Some(n), slot.is_some_and(|s| s.dirty))
         }
     };
-    let text = if selected { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray) };
-    let dim = base.fg(Color::DarkGray);
+    let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
+    let dim = base.fg(t.dim);
 
     // Right side first, so the label knows how much room it has.
-    let badges = rollup_of(app.panes.iter().filter(|p| p.loc == *loc));
+    let badges = rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc));
     let badge_text: Vec<String> =
         badges.iter().map(|(g, n, _)| if *n > 1 { format!("{g}{n}") } else { g.to_string() }).collect();
     let badge_w = badge_text.iter().map(|b| b.chars().count() as u16).sum::<u16>() + badge_text.len().saturating_sub(1) as u16;
@@ -313,7 +314,7 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     buf.set_string(x, y, &shown, text);
     x += shown.chars().count() as u16;
     if dirty {
-        buf.set_string(x, y, "*", base.fg(Color::Yellow));
+        buf.set_string(x, y, "*", base.fg(t.dirty));
         x += 1;
     }
     if !suffix.is_empty() {
@@ -321,14 +322,14 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     }
 }
 
-fn state_glyph(pane: &Pane) -> (&'static str, Style) {
+fn state_glyph(t: &Theme, pane: &Pane) -> (&'static str, Style) {
     if pane.unseen_done {
-        return ("✓", Style::new().fg(Color::Green));
+        return ("✓", Style::new().fg(t.done));
     }
     match pane.state {
-        Some(AgentState::Working) => ("●", Style::new().fg(Color::Yellow)),
-        Some(AgentState::Blocked) => ("▲", Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Some(AgentState::Idle) => ("○", Style::new().fg(Color::DarkGray)),
+        Some(AgentState::Working) => ("●", Style::new().fg(t.working)),
+        Some(AgentState::Blocked) => ("▲", Style::new().fg(t.blocked).add_modifier(Modifier::BOLD)),
+        Some(AgentState::Idle) => ("○", Style::new().fg(t.idle)),
         None => (" ", Style::new()),
     }
 }
@@ -373,7 +374,8 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let current = app.current_loc();
 
     // Sidebar.
-    let dim = Style::new().fg(Color::DarkGray);
+    let t = &app.theme;
+    let dim = Style::new().fg(t.dim);
     let sidebar = if app.sidebar_hidden { Vec::new() } else { sidebar_rows(app, rows) };
     for (y, row) in sidebar {
         match row {
@@ -385,7 +387,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
             Row::Project(p) => {
                 let here = current.as_ref().is_some_and(|c| c.project == p);
-                let style = Style::new().add_modifier(Modifier::BOLD).fg(if here { Color::White } else { Color::Gray });
+                let style = Style::new().add_modifier(Modifier::BOLD).fg(if here { t.text } else { t.text2 });
                 let free = free_slots(app, p);
                 let right = if free > 0 { format!("{free} free") } else { String::new() };
                 let rw = right.chars().count() as u16;
@@ -398,18 +400,18 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
             Row::Pane(_) | Row::Blank => {}
             Row::TopBar => {
-                let gray = Style::new().fg(Color::Gray);
-                buf.set_string(1, y, "⊕", Style::new().fg(ACCENT));
+                let gray = Style::new().fg(t.text2);
+                buf.set_string(1, y, "⊕", Style::new().fg(t.accent));
                 buf.set_string(3, y, "new", gray);
                 let menu_open = matches!(app.mode, Mode::Menu { .. });
                 let label = "menu";
                 let x = side.saturating_sub(label.chars().count() as u16 + 3);
-                buf.set_string(x, y, "≡", Style::new().fg(if menu_open { ACCENT } else { Color::Magenta }));
+                buf.set_string(x, y, "≡", Style::new().fg(if menu_open { t.accent } else { t.menu_border }));
                 buf.set_string(x + 2, y, label, if menu_open { gray.add_modifier(Modifier::BOLD) } else { gray });
             }
             Row::ViewTabs => {
-                let on = Style::new().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-                let off = Style::new().fg(Color::DarkGray);
+                let on = Style::new().fg(t.text).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+                let off = Style::new().fg(t.dim);
                 let agents_on = app.sidebar_view == SidebarView::Agents;
                 buf.set_string(1, y, "spaces", if agents_on { off } else { on });
                 buf.set_string(8, y, "·", off);
@@ -417,27 +419,27 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 // How many agents want you, even while looking at spaces.
                 let waiting = app.panes.iter().filter(|p| p.unseen_done || p.state == Some(AgentState::Blocked)).count();
                 if waiting > 0 {
-                    buf.set_string(VIEW_SPLIT_X + 8, y, format!("▲{waiting}"), Style::new().fg(Color::Red).add_modifier(Modifier::BOLD));
+                    buf.set_string(VIEW_SPLIT_X + 8, y, format!("▲{waiting}"), Style::new().fg(t.blocked).add_modifier(Modifier::BOLD));
                 }
             }
             Row::Agent { pane, second } => {
                 let p = &app.panes[pane];
                 let selected = focused.map(|f| f.id) == Some(p.id);
-                let base = if selected { Style::new().bg(SELECTED_BG) } else { Style::new() };
+                let base = if selected { Style::new().bg(t.selected_bg) } else { Style::new() };
                 if selected {
                     buf.set_style(Rect::new(0, y, side, 1), base);
-                    buf.set_string(0, y, "▌", base.fg(ACCENT));
+                    buf.set_string(0, y, "▌", base.fg(t.accent));
                 }
                 if second {
                     let label = p.agent.unwrap_or("agent");
                     let task = useful_title(p).map(|t| format!(" · {t}")).unwrap_or_default();
                     let text = format!("{label}{task}");
-                    buf.set_stringn(3, y, text, side.saturating_sub(4) as usize, base.fg(Color::DarkGray));
+                    buf.set_stringn(3, y, text, side.saturating_sub(4) as usize, base.fg(t.dim));
                 } else {
-                    let (glyph, gstyle) = state_glyph(p);
+                    let (glyph, gstyle) = state_glyph(&app.theme, p);
                     let glyph = if glyph == " " { "○" } else { glyph };
                     buf.set_string(1, y, glyph, gstyle.patch(base));
-                    let text = if selected { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray).add_modifier(Modifier::BOLD) };
+                    let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2).add_modifier(Modifier::BOLD) };
                     buf.set_stringn(3, y, short_loc(app, &p.loc), side.saturating_sub(4) as usize, text);
                 }
             }
@@ -446,7 +448,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     // Reordering: an accent line in the gap where the dragged repo / folder
     // will land (an underline on the row above it reads as a line between rows).
     if let (Some((_, y)), false) = (&app.sidebar_drag, app.sidebar_hidden) {
-        let line = Style::new().add_modifier(Modifier::UNDERLINED).underline_color(ACCENT);
+        let line = Style::new().add_modifier(Modifier::UNDERLINED).underline_color(t.accent);
         buf.set_style(Rect::new(1, *y, side.saturating_sub(2), 1), line);
     }
     if !app.sidebar_hidden {
@@ -487,9 +489,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
             x -= w;
             let style = if i == view.active {
-                Style::new().bg(Color::Indexed(24)).fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::new().bg(t.focus_bg).fg(t.focus_fg).add_modifier(Modifier::BOLD)
             } else {
-                Style::new().fg(Color::DarkGray)
+                Style::new().fg(t.dim)
             };
             buf.set_string(x, 0, label, style);
         }
@@ -520,7 +522,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 let inner = content_rect(outer, titled);
                 draw_screen(pane.parser.screen(), inner, buf);
                 if let Some(c) = app.copy.as_ref().filter(|c| c.pane == id) {
-                    cursor = draw_copy(c, pane, inner, buf);
+                    cursor = draw_copy(&app.theme, c, pane, inner, buf);
                     continue;
                 }
                 let screen = pane.parser.screen();
@@ -539,13 +541,14 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
 
     // Status line.
     let sy = rows - 1;
-    let bar = Style::new().bg(Color::Indexed(236)).fg(Color::White);
+    let bar = Style::new().bg(t.bar_bg).fg(t.bar_fg);
     buf.set_style(Rect::new(0, sy, cols, 1), bar);
     let text = match &app.mode {
         Mode::Prefix => app.keymap.help(&app.prefix.short),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Picker(_) => "type to filter · ↑↓ / ^p ^n select · enter go · esc cancel".into(),
         Mode::Menu { .. } => "↑↓ / j k select · enter run · esc close".into(),
+        Mode::ThemePicker { .. } => "↑↓ / j k preview · enter keep (saved to config) · esc revert".into(),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
         Mode::Copy => match app.copy.as_ref() {
             Some(c) => match (&c.search, &c.message) {
@@ -559,17 +562,20 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             .status_text()
             .unwrap_or_else(|| format!("{} ? keys", app.prefix.label)),
     };
-    let style = if matches!(app.mode, Mode::Normal) { bar } else { bar.fg(Color::Yellow) };
+    let style = if matches!(app.mode, Mode::Normal) { bar } else { bar.fg(t.alert) };
     buf.set_stringn(1, sy, &text, cols.saturating_sub(2) as usize, style);
     if let Some(q) = app.copy.as_ref().and_then(|c| c.search.as_ref()) {
         let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
     }
     if let Some(text) = app.toast_text() {
-        draw_toast(text, body, buf);
+        draw_toast(&app.theme, text, body, buf);
     }
     if let Mode::Menu { selected } = &app.mode {
         draw_menu(app, *selected, buf);
+    }
+    if let Mode::ThemePicker { selected, .. } = &app.mode {
+        draw_theme_picker(app, *selected, buf);
     }
     if let Mode::Picker(p) = &app.mode {
         cursor = draw_picker(app, p, body, buf);
@@ -582,7 +588,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         let jobs = format!(" {} ", app.jobs.join(" · "));
         let w = jobs.chars().count() as u16;
         if w < cols {
-            buf.set_string(cols - w, sy, jobs, bar.fg(Color::Cyan));
+            buf.set_string(cols - w, sy, jobs, bar.fg(t.jobs));
         }
     }
     cursor
@@ -590,6 +596,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
 
 /// A place with no panes: what it is, and the keys to start something or remove it.
 fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
+    let t = &app.theme;
     let key = |a: crate::keys::Action| app.keymap.hint(a, &app.prefix.short).unwrap_or_default();
     use crate::keys::Action as A;
     let (title, what) = match loc {
@@ -613,17 +620,17 @@ fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
     let width = 44.min(body.width.saturating_sub(4));
     let x = body.x + body.width.saturating_sub(width) / 2;
     let y = body.y + body.height.saturating_sub(height) / 3;
-    buf.set_stringn(x, y, &title, width as usize, Style::new().fg(Color::White).add_modifier(Modifier::BOLD));
-    buf.set_stringn(x, y + 1, what, width as usize, Style::new().fg(Color::DarkGray));
+    buf.set_stringn(x, y, &title, width as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+    buf.set_stringn(x, y + 1, what, width as usize, Style::new().fg(t.dim));
     for (i, (k, label)) in lines.iter().enumerate() {
         let ly = y + 3 + i as u16;
-        buf.set_stringn(x, ly, k, 10, Style::new().fg(ACCENT));
-        buf.set_stringn(x + 11, ly, label, width.saturating_sub(11) as usize, Style::new().fg(Color::Gray));
+        buf.set_stringn(x, ly, k, 10, Style::new().fg(t.accent));
+        buf.set_stringn(x + 11, ly, label, width.saturating_sub(11) as usize, Style::new().fg(t.text2));
     }
 }
 
 /// A small floating box at the bottom centre of the pane area.
-fn draw_toast(text: &str, body: Rect, buf: &mut Buffer) {
+fn draw_toast(t: &Theme, text: &str, body: Rect, buf: &mut Buffer) {
     use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
     let width = (text.chars().count() as u16 + 6).min(body.width);
     let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.bottom().saturating_sub(4), width, 3);
@@ -631,38 +638,76 @@ fn draw_toast(text: &str, body: Rect, buf: &mut Buffer) {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Color::Indexed(60)))
+        .border_style(Style::new().fg(t.toast_border))
         .render(area, buf);
-    buf.set_string(area.x + 2, area.y + 1, "●", Style::new().fg(ACCENT));
-    buf.set_stringn(area.x + 4, area.y + 1, text, width.saturating_sub(5) as usize, Style::new().fg(Color::White).add_modifier(Modifier::BOLD));
+    buf.set_string(area.x + 2, area.y + 1, "●", Style::new().fg(t.accent));
+    buf.set_stringn(area.x + 4, area.y + 1, text, width.saturating_sub(5) as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+}
+
+/// The theme list, each with a swatch of its main colours; the highlighted one
+/// is already applied to the whole UI as a preview.
+fn draw_theme_picker(app: &App, selected: usize, buf: &mut Buffer) {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let t = &app.theme;
+    let names = crate::theme::NAMES;
+    let width = 34.min(buf.area.width.saturating_sub(2));
+    let height = (names.len() as u16 + 2).min(buf.area.height.saturating_sub(2));
+    let area = Rect::new(buf.area.width.saturating_sub(width) / 2, 2, width, height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.menu_border))
+        .title(" theme ")
+        .render(area, buf);
+    let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
+    for (i, name) in names.iter().enumerate().take(inner.height as usize) {
+        let y = inner.y + i as u16;
+        let on = i == selected;
+        let base = if on { Style::new().bg(t.selected_bg) } else { Style::new() };
+        buf.set_style(Rect::new(inner.x, y, inner.width, 1), base);
+        if on {
+            buf.set_string(inner.x, y, "▌", base.fg(t.accent));
+        }
+        let text = if on { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
+        buf.set_stringn(inner.x + 2, y, name, inner.width.saturating_sub(10) as usize, text);
+        if let Some(theme) = crate::theme::builtin(name) {
+            let swatch = [theme.accent, theme.base_glyph, theme.slot_glyph, theme.working, theme.blocked, theme.done];
+            let x0 = inner.right().saturating_sub(swatch.len() as u16 + 1);
+            for (k, c) in swatch.iter().enumerate() {
+                buf.set_string(x0 + k as u16, y, "●", base.fg(*c));
+            }
+        }
+    }
 }
 
 /// The short menu: label left, its shortcut right.
 fn draw_menu(app: &App, selected: usize, buf: &mut Buffer) {
+    let t = &app.theme;
     use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
     let area = menu_area(app, buf.area.width, buf.area.height);
     Clear.render(area, buf);
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Color::Magenta))
+        .border_style(Style::new().fg(t.menu_border))
         .title(" menu ")
         .render(area, buf);
     let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
     for (i, (label, action)) in MENU.iter().enumerate().take(inner.height as usize) {
         let y = inner.y + i as u16;
         let on = i == selected;
-        let base = if on { Style::new().bg(SELECTED_BG) } else { Style::new() };
+        let base = if on { Style::new().bg(t.selected_bg) } else { Style::new() };
         buf.set_style(Rect::new(inner.x, y, inner.width, 1), base);
         if on {
-            buf.set_string(inner.x, y, "▌", base.fg(ACCENT));
+            buf.set_string(inner.x, y, "▌", base.fg(t.accent));
         }
-        let text = if on { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray) };
+        let text = if on { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
         buf.set_stringn(inner.x + 2, y, label, inner.width.saturating_sub(3) as usize, text);
         if let Some(hint) = app.keymap.hint(*action, &app.prefix.short) {
             let w = hint.chars().count() as u16;
             if w + label.chars().count() as u16 + 4 < inner.width {
-                buf.set_string(inner.right() - w - 1, y, hint, base.fg(Color::DarkGray));
+                buf.set_string(inner.right() - w - 1, y, hint, base.fg(t.dim));
             }
         }
     }
@@ -680,7 +725,7 @@ fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffe
     Clear.render(area, buf);
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(Color::Indexed(24)))
+        .border_style(Style::new().fg(app.theme.picker_border))
         .title(" go to ")
         .render(area, buf);
     let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
@@ -691,7 +736,7 @@ fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffe
     let visible = inner.height.saturating_sub(1) as usize;
     let first = p.selected.saturating_sub(visible.saturating_sub(1));
     if hits.is_empty() {
-        buf.set_stringn(inner.x, inner.y + 1, "no matches", inner.width as usize, Style::new().fg(Color::DarkGray));
+        buf.set_stringn(inner.x, inner.y + 1, "no matches", inner.width as usize, Style::new().fg(app.theme.dim));
     }
     for (row, item) in hits.iter().enumerate().skip(first).take(visible) {
         let y = inner.y + 1 + (row - first) as u16;
@@ -705,21 +750,21 @@ fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffe
             .panes
             .iter()
             .filter(|pane| pane.loc == item.loc)
-            .map(|pane| state_glyph(pane).0)
+            .map(|pane| state_glyph(&app.theme, pane).0)
             .filter(|g| *g != " ")
             .collect();
         let w = glyphs.chars().count() as u16;
         if w > 0 && w + 2 < inner.width {
-            buf.set_string(inner.right() - w - 1, y, glyphs, base.fg(Color::Yellow));
+            buf.set_string(inner.right() - w - 1, y, glyphs, base.fg(app.theme.working));
         }
     }
     Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
 }
 
 /// Selection highlight, scroll position and the copy cursor over a frozen pane.
-fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Position> {
+fn draw_copy(t: &Theme, c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let top = c.top(&pane.parser);
-    let sel = Style::new().bg(Color::Indexed(111)).fg(Color::Black);
+    let sel = Style::new().bg(t.copy_bg).fg(t.copy_fg);
     if let Some((a, b)) = c.selection() {
         for r in 0..area.height {
             let abs = top + r as usize;
@@ -739,7 +784,7 @@ fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Posi
     let tag = format!("[{}/{}]", c.offset, sb);
     let w = tag.chars().count() as u16;
     if w < area.width {
-        buf.set_string(area.right() - w, area.y, tag, Style::new().bg(Color::Yellow).fg(Color::Black));
+        buf.set_string(area.right() - w, area.y, tag, Style::new().bg(t.tag_bg).fg(t.tag_fg));
     }
     let row = c.cursor.0.checked_sub(top).filter(|r| *r < area.height as usize)?;
     (c.search.is_none()).then(|| Position::new(area.x + c.cursor.1.min(area.width - 1), area.y + row as u16))
@@ -748,12 +793,12 @@ fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Posi
 fn draw_title(app: &App, pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {
     let row = Rect::new(outer.x, outer.y, outer.width, 1);
     let style = if focused {
-        Style::new().bg(Color::Indexed(24)).fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::new().bg(app.theme.focus_bg).fg(app.theme.focus_fg).add_modifier(Modifier::BOLD)
     } else {
-        Style::new().bg(Color::Indexed(236)).fg(Color::Gray)
+        Style::new().bg(app.theme.title_bg).fg(app.theme.title_fg)
     };
     buf.set_style(row, style);
-    let (glyph, gstyle) = state_glyph(pane);
+    let (glyph, gstyle) = state_glyph(&app.theme, pane);
     buf.set_stringn(row.x + 1, row.y, glyph, 1, gstyle.patch(Style::new().bg(style.bg.unwrap_or(Color::Reset))));
     let text = match useful_title(pane) {
         Some(title) => format!("{} — {title}", pane_label(app, pane)),
