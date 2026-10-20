@@ -51,6 +51,15 @@ struct GlobalFile {
     claude_history: Option<bool>,
     prefix: Option<String>,
     mouse: Option<bool>,
+    /// TUI key bindings: action name → one spec or a list.
+    keys: Option<std::collections::BTreeMap<String, KeySpecs>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum KeySpecs {
+    One(String),
+    Many(Vec<String>),
 }
 
 /// Server-wide TUI settings from the global config (outside the per-repo [`Config`]).
@@ -60,11 +69,19 @@ pub struct TuiSettings {
     pub prefix: Option<String>,
     /// Mouse support (default on).
     pub mouse: bool,
+    /// Key binding overrides: action name → specs (empty = unbound).
+    pub keys: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
     let global: GlobalFile = read_toml(&env.global_config)?;
-    Ok(TuiSettings { prefix: global.prefix, mouse: global.mouse.unwrap_or(true) })
+    let keys = global
+        .keys
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, match v { KeySpecs::One(s) => vec![s], KeySpecs::Many(v) => v }))
+        .collect();
+    Ok(TuiSettings { prefix: global.prefix, mouse: global.mouse.unwrap_or(true), keys })
 }
 
 /// `<base>/.velmux.toml`

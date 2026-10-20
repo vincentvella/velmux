@@ -13,8 +13,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use vt100::MouseProtocolMode;
 
-use crate::copy::{self, Action, Copy};
+use crate::copy::{self, Action as CopyAction, Copy};
 use crate::herdr::{self, Plan, Target};
+use crate::keys::{Action, Keymap};
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::mouse::{self, Chunk, MouseEvent};
 use crate::pane::Term;
@@ -24,12 +25,6 @@ use crate::proto::{ClientMsg, ServerMsg};
 use crate::session::{self, Saved, SavedFolder, SavedPane, SavedView};
 use crate::{paths, ui};
 
-// Arrow keys after the prefix, mapped out of the byte range commands use.
-const KEY_UP: u8 = 0xF1;
-const KEY_DOWN: u8 = 0xF2;
-const KEY_RIGHT: u8 = 0xF3;
-const KEY_LEFT: u8 = 0xF4;
-const KEY_PGUP: u8 = 0xF5;
 
 pub enum Event {
     /// A new connection and its first message (`Hello` attaches).
@@ -103,6 +98,20 @@ struct LaunchOpts {
     command: Option<String>,
 }
 
+/// Bytes used by a key with no binding after the prefix (so its tail doesn't leak
+/// into the pane): a whole escape sequence, ESC + key, or one UTF-8 character.
+fn unbound_len(bytes: &[u8]) -> usize {
+    match bytes {
+        [0x1b, b'[', rest @ ..] => rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3),
+        [0x1b, _, ..] => 2,
+        [b, ..] if *b >= 0xc0 => {
+            let n = b.leading_ones() as usize;
+            n.min(bytes.len())
+        }
+        _ => 1,
+    }
+}
+
 pub enum Confirm {
     Release(Loc),
     Quit,
@@ -128,6 +137,8 @@ pub struct App {
     current: Option<Loc>,
     pub mode: Mode,
     pub prefix: Prefix,
+    pub keymap: Keymap,
+    pub sidebar_hidden: bool,
     /// Shown once a client attaches (e.g. an invalid `prefix` in config).
     startup_warning: Option<String>,
     pub jobs: Vec<String>,
@@ -177,7 +188,7 @@ pub fn serve() -> Result<()> {
 
     let (settings, mut warning) = match Env::from_process().and_then(|env| tui_settings(&env)) {
         Ok(s) => (s, None),
-        Err(e) => (TuiSettings { prefix: None, mouse: true }, Some(format!("config: {e:#}"))),
+        Err(e) => (TuiSettings { prefix: None, mouse: true, keys: Default::default() }, Some(format!("config: {e:#}"))),
     };
     let prefix = match settings.prefix.as_deref().map(Prefix::parse) {
         None => Prefix::default(),
@@ -190,7 +201,16 @@ pub fn serve() -> Result<()> {
     if let Some(w) = &warning {
         eprintln!("velmux: {w}");
     }
-    let mut app = App::new(tx, prefix, settings.mouse, warning);
+    let (keymap, key_warnings) = Keymap::build(prefix.byte, &settings.keys);
+    if !key_warnings.is_empty() {
+        let w = key_warnings.join("; ");
+        eprintln!("velmux: {w}");
+        warning = Some(match warning {
+            Some(prev) => format!("{prev}; {w}"),
+            None => w,
+        });
+    }
+    let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
     app.restore();
     let (mut last_detect, mut last_slots, mut last_render) =
         (Instant::now(), Instant::now(), Instant::now());
@@ -230,7 +250,7 @@ pub fn serve() -> Result<()> {
 }
 
 impl App {
-    fn new(events: Sender<Event>, prefix: Prefix, mouse: bool, startup_warning: Option<String>) -> App {
+    fn new(events: Sender<Event>, prefix: Prefix, keymap: Keymap, mouse: bool, startup_warning: Option<String>) -> App {
         App {
             projects: Vec::new(),
             panes: Vec::new(),
@@ -239,6 +259,8 @@ impl App {
             current: None,
             mode: Mode::Normal,
             prefix,
+            keymap,
+            sidebar_hidden: false,
             startup_warning,
             jobs: Vec::new(),
             status: None,
@@ -272,7 +294,7 @@ impl App {
     /// Outer rect of every pane in `loc`'s view, plus dividers (none when zoomed).
     pub fn view_rects(&self, loc: &Loc) -> (Vec<(u64, Rect)>, Vec<layout::Divider>) {
         let Some(view) = self.views.get(loc) else { return (Vec::new(), Vec::new()) };
-        let body = ui::pane_area(self.size.0, self.size.1);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
         match view.zoomed {
             Some(id) => (vec![(id, body)], Vec::new()),
             None => view.layout.rects(body),
@@ -677,7 +699,7 @@ impl App {
         }
         let (cols, rows) = self.size;
         let at = Position::new(ev.x, ev.y);
-        if ev.x < ui::sidebar_width(cols) {
+        if ev.x < ui::sidebar_width(cols, self.sidebar_hidden) {
             if ev.is_press() && ev.is_left() {
                 self.sidebar_click(ev.y);
             }
@@ -862,30 +884,36 @@ impl App {
     fn keys(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let consumed = match self.mode {
-                Mode::Normal => match bytes.iter().position(|&b| b == self.prefix.byte) {
-                    Some(at) => {
-                        self.send_to_pane(&bytes[..at]);
-                        self.mode = Mode::Prefix;
-                        at + 1
+                Mode::Normal => {
+                    // Whichever comes first: the prefix key or a root (prefix-less) binding.
+                    let prefix_at = bytes.iter().position(|&b| b == self.prefix.byte);
+                    let root = self.keymap.find_root(bytes).filter(|(at, ..)| prefix_at.is_none_or(|p| *at < p));
+                    match (root, prefix_at) {
+                        (Some((at, action, len)), _) => {
+                            self.send_to_pane(&bytes[..at]);
+                            self.run(action);
+                            at + len
+                        }
+                        (None, Some(at)) => {
+                            self.send_to_pane(&bytes[..at]);
+                            self.mode = Mode::Prefix;
+                            at + 1
+                        }
+                        (None, None) => {
+                            self.send_to_pane(bytes);
+                            bytes.len()
+                        }
                     }
-                    None => {
-                        self.send_to_pane(bytes);
-                        bytes.len()
-                    }
-                },
+                }
                 Mode::Prefix => {
                     self.mode = Mode::Normal;
-                    let (key, len) = match bytes {
-                        [0x1b, b'[', b'A', ..] => (KEY_UP, 3),
-                        [0x1b, b'[', b'B', ..] => (KEY_DOWN, 3),
-                        [0x1b, b'[', b'C', ..] => (KEY_RIGHT, 3),
-                        [0x1b, b'[', b'D', ..] => (KEY_LEFT, 3),
-                        [0x1b, b'[', b'5', b'~', ..] => (KEY_PGUP, 4),
-                        [b, ..] => (*b, 1),
-                        [] => unreachable!(),
-                    };
-                    self.command(key);
-                    len
+                    match self.keymap.after_prefix(bytes) {
+                        Some((action, len)) => {
+                            self.run(action);
+                            len
+                        }
+                        None => unbound_len(bytes),
+                    }
                 }
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
@@ -959,10 +987,13 @@ impl App {
         bytes.len()
     }
 
-    fn command(&mut self, key: u8) {
-        match key {
-            k if k == self.prefix.byte => self.send_to_pane(&[k]),
-            b'n' => {
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::SendPrefix => {
+                let b = self.prefix.byte;
+                self.send_to_pane(&[b]);
+            }
+            Action::ClaimSlot => {
                 if self.current_loc().is_none() {
                     self.say("not in a git repo — run velmux from inside one");
                 } else {
@@ -972,36 +1003,36 @@ impl App {
                     };
                 }
             }
-            b'a' => {
+            Action::AgentBase => {
                 if let Some(loc) = self.current_loc() {
                     // Claude in the base checkout; unclassified folders have no base.
                     let loc = if self.projects[loc.project].is_unclassified() { loc } else { Loc { slot: None, ..loc } };
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
-            b'c' => self.spawn_here(Kind::Shell, None),
-            b'e' => self.spawn_here(Kind::Editor, None),
-            b'|' | b'%' => self.spawn_here(Kind::Shell, Some(Dir::Right)),
-            b'-' | b'"' => self.spawn_here(Kind::Shell, Some(Dir::Down)),
-            b'j' => self.cycle(1),
-            b'k' => self.cycle(-1),
-            KEY_UP => self.move_focus(Toward::Up),
-            KEY_DOWN => self.move_focus(Toward::Down),
-            KEY_LEFT => self.move_focus(Toward::Left),
-            KEY_RIGHT => self.move_focus(Toward::Right),
-            b'H' => self.nudge(Dir::Right, -0.05),
-            b'L' => self.nudge(Dir::Right, 0.05),
-            b'K' => self.nudge(Dir::Down, -0.05),
-            b'J' => self.nudge(Dir::Down, 0.05),
-            b'z' => self.toggle_zoom(),
-            b'[' => self.enter_copy(false),
-            KEY_PGUP => self.enter_copy(true),
-            b'x' => {
+            Action::NewShell => self.spawn_here(Kind::Shell, None),
+            Action::NewEditor => self.spawn_here(Kind::Editor, None),
+            Action::SplitRight => self.spawn_here(Kind::Shell, Some(Dir::Right)),
+            Action::SplitDown => self.spawn_here(Kind::Shell, Some(Dir::Down)),
+            Action::NextPane => self.cycle(1),
+            Action::PrevPane => self.cycle(-1),
+            Action::FocusUp => self.move_focus(Toward::Up),
+            Action::FocusDown => self.move_focus(Toward::Down),
+            Action::FocusLeft => self.move_focus(Toward::Left),
+            Action::FocusRight => self.move_focus(Toward::Right),
+            Action::ResizeLeft => self.nudge(Dir::Right, -0.05),
+            Action::ResizeRight => self.nudge(Dir::Right, 0.05),
+            Action::ResizeUp => self.nudge(Dir::Down, -0.05),
+            Action::ResizeDown => self.nudge(Dir::Down, 0.05),
+            Action::Zoom => self.toggle_zoom(),
+            Action::CopyMode => self.enter_copy(false),
+            Action::CopyModePageUp => self.enter_copy(true),
+            Action::ClosePane => {
                 if let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
                     pane.kill();
                 }
             }
-            b'r' => match self.current_loc() {
+            Action::ReleaseSlot => match self.current_loc() {
                 Some(loc) if loc.slot.is_some() && !self.projects[loc.project].is_unclassified() => {
                     let label = format!(
                         "release {}? its panes close; uncommitted work is stashed",
@@ -1014,16 +1045,93 @@ impl App {
                 }
                 _ => self.say("focus a slot to release it (the base checkout is never released)"),
             },
-            b'd' => self.say_bye("detached — run `velmux` to reattach"),
-            b'Q' => {
+            Action::Detach => self.say_bye("detached — run `velmux` to reattach"),
+            Action::Quit => {
                 self.mode = Mode::Confirm { label: "stop the server? panes and Claude sessions are restored next time you run velmux".into(), action: Confirm::Quit }
             }
-            b'?' => self.say(format!(
-                "{} then: [ copy/scroll · n claim slot · a Claude@base · c/e shell/editor · |/- split · arrows move · HJKL resize · z zoom · j/k panes · 1-9 slot · r release · x close · d detach · Q quit · {0} literal",
-                self.prefix.short
-            )),
-            b'1'..=b'9' => self.jump_to_slot(format!("slot-{}", key - b'0')),
-            _ => {}
+            Action::Help => {
+                let help = self.keymap.help(&self.prefix.short);
+                self.say(help);
+            }
+            Action::Slot(n) => self.jump_to_slot(format!("slot-{n}")),
+            Action::Location(n) => self.goto_location(n as usize - 1),
+            Action::PrevLocation => self.step_location(-1),
+            Action::NextLocation => self.step_location(1),
+            Action::ToggleSidebar => {
+                self.sidebar_hidden = !self.sidebar_hidden;
+                self.relayout();
+            }
+            Action::Attention => self.next_attention(),
+            Action::NewTab | Action::NextTab | Action::PrevTab | Action::Tab(_) => {
+                self.say("tabs aren't available yet")
+            }
+        }
+    }
+
+    /// Locations that have panes, in sidebar order (what "location N" counts).
+    fn live_locations(&self) -> Vec<Loc> {
+        ui::rows(self)
+            .into_iter()
+            .filter_map(|r| match r {
+                ui::Row::Location(loc) if self.views.contains_key(&loc) => Some(loc),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn show_location(&mut self, loc: Loc) {
+        if self.copy.is_some() {
+            self.exit_copy();
+        }
+        self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
+        self.current = Some(loc);
+        self.full_redraw = true;
+    }
+
+    fn goto_location(&mut self, index: usize) {
+        match self.live_locations().into_iter().nth(index) {
+            Some(loc) => self.show_location(loc),
+            None => self.say(format!("no location {} (only locations with panes count)", index + 1)),
+        }
+    }
+
+    fn step_location(&mut self, step: isize) {
+        let locs = self.live_locations();
+        if locs.is_empty() {
+            return;
+        }
+        let at = self.current_loc().and_then(|c| locs.iter().position(|l| *l == c));
+        let next = match at {
+            Some(i) => (i as isize + step).rem_euclid(locs.len() as isize) as usize,
+            None => 0,
+        };
+        self.show_location(locs[next].clone());
+    }
+
+    /// Focus the next agent (after the current pane, wrapping) that's blocked on you
+    /// or finished while you weren't looking.
+    fn next_attention(&mut self) {
+        let order: Vec<usize> = ui::rows(self)
+            .into_iter()
+            .filter_map(|r| match r {
+                ui::Row::Pane(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        let start = self.focus.and_then(|f| order.iter().position(|&i| self.panes[i].id == f)).map_or(0, |i| i + 1);
+        let needs = |p: &Pane| p.unseen_done || p.state == Some(crate::detect::AgentState::Blocked);
+        let hit = (0..order.len()).map(|k| order[(start + k) % order.len()]).find(|&i| needs(&self.panes[i]));
+        match hit {
+            Some(i) => {
+                let (id, loc) = (self.panes[i].id, self.panes[i].loc.clone());
+                if self.copy.is_some() {
+                    self.exit_copy();
+                }
+                self.focus = Some(id);
+                self.current = Some(loc);
+                self.full_redraw = true;
+            }
+            None => self.say("nothing needs you right now"),
         }
     }
 
@@ -1161,7 +1269,7 @@ impl App {
                 env.push(("VELMUX_SLOT", id.clone()));
             }
         }
-        let body = ui::pane_area(self.size.0, self.size.1);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
         let id = self.next_pane;
         self.next_pane += 1;
         let launch = Launch { cwd: &cwd, command: command.as_deref(), env: &env };
@@ -1321,9 +1429,9 @@ impl App {
         };
         let (used, action) = c.key(bytes, &mut pane.parser);
         match action {
-            Action::Stay => {}
-            Action::Exit => self.exit_copy(),
-            Action::Yank(text) => {
+            CopyAction::Stay => {}
+            CopyAction::Exit => self.exit_copy(),
+            CopyAction::Yank(text) => {
                 let lines = text.lines().count().max(1);
                 self.set_clipboard(&text);
                 self.exit_copy();

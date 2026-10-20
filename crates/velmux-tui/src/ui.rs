@@ -10,13 +10,16 @@ use crate::layout::Dir;
 use crate::pane::{Kind, Loc, Pane};
 use crate::server::{App, Mode};
 
-pub fn sidebar_width(cols: u16) -> u16 {
+pub fn sidebar_width(cols: u16, hidden: bool) -> u16 {
+    if hidden {
+        return 0;
+    }
     32.min(cols / 3).max(12)
 }
 
 /// The rectangle every pane is sized to.
-pub fn pane_area(cols: u16, rows: u16) -> Rect {
-    let x = sidebar_width(cols) + 1;
+pub fn pane_area(cols: u16, rows: u16, hidden: bool) -> Rect {
+    let x = if hidden { 0 } else { sidebar_width(cols, false) + 1 };
     Rect::new(x, 1, cols.saturating_sub(x).max(1), rows.saturating_sub(2).max(1))
 }
 
@@ -109,13 +112,14 @@ pub fn pane_label(pane: &Pane) -> &'static str {
 pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let area = buf.area;
     let (cols, rows) = (area.width, area.height);
-    let side = sidebar_width(cols);
+    let side = sidebar_width(cols, app.sidebar_hidden);
     let focused = app.focused();
     let current = app.current_loc();
 
     // Sidebar.
     let dim = Style::new().fg(Color::DarkGray);
-    for (y, row) in sidebar_rows(app, rows) {
+    let sidebar = if app.sidebar_hidden { Vec::new() } else { sidebar_rows(app, rows) };
+    for (y, row) in sidebar {
         match row {
             Row::Project(p) => {
                 let name = app.projects[p].name();
@@ -157,12 +161,14 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
         }
     }
-    for y in 0..rows.saturating_sub(1) {
-        buf.set_string(side, y, "│", dim);
+    if !app.sidebar_hidden {
+        for y in 0..rows.saturating_sub(1) {
+            buf.set_string(side, y, "│", dim);
+        }
     }
 
     // Header + pane body.
-    let body = pane_area(cols, rows);
+    let body = pane_area(cols, rows, app.sidebar_hidden);
     let header = match (&focused, &current) {
         (Some(pane), _) => {
             let title = pane.title().trim();
@@ -232,7 +238,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let bar = Style::new().bg(Color::Indexed(236)).fg(Color::White);
     buf.set_style(Rect::new(0, sy, cols, 1), bar);
     let text = match &app.mode {
-        Mode::Prefix => "n slot · a agent@base · c/e shell/editor · |/- split · arrows move · z zoom · HJKL resize · j/k cycle · 1-9 slot · r release · x close · d detach · Q quit".to_string(),
+        Mode::Prefix => app.keymap.help(&app.prefix.short),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
         Mode::Copy => match app.copy.as_ref() {

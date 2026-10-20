@@ -70,6 +70,11 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Show key bindings; `--ghostty` prints the Ghostty keybinds for the root ones.
+    Keys {
+        #[arg(long)]
+        ghostty: bool,
+    },
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
     Server,
@@ -91,6 +96,7 @@ fn run() -> Result<()> {
     let cmd = match cli.cmd {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
+        Some(Cmd::Keys { ghostty }) => return velmux_tui::print_keys(ghostty),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
@@ -165,7 +171,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } => unreachable!(),
     }
     Ok(())
 }

@@ -5,6 +5,7 @@ mod client;
 mod copy;
 mod detect;
 mod herdr;
+mod keys;
 mod layout;
 mod mouse;
 mod pane;
@@ -15,6 +16,29 @@ mod session;
 mod ui;
 
 pub use client::attach;
+
+/// `velmux keys`: the effective bindings, or `--ghostty` for the terminal config
+/// that makes Cmd chords reach velmux's root (prefix-less) bindings.
+pub fn print_keys(ghostty: bool) -> anyhow::Result<()> {
+    let settings = velmux_pool::tui_settings(&velmux_pool::Env::from_process()?)?;
+    let prefix = match settings.prefix.as_deref() {
+        Some(spec) => prefix::Prefix::parse(spec)?,
+        None => prefix::Prefix::default(),
+    };
+    let (map, warnings) = keys::Keymap::build(prefix.byte, &settings.keys);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    if ghostty {
+        print!("{}", keys::ghostty_config(&map));
+        return Ok(());
+    }
+    println!("prefix: {}", prefix.label);
+    for (action, specs) in &map.specs {
+        println!("  {:<18} {}", keys::name_of(*action), specs.join("  "));
+    }
+    Ok(())
+}
 
 /// `velmux import-herdr`: plan from herdr's session file, then hand it to the
 /// server (or just print the plan with `dry_run`).
