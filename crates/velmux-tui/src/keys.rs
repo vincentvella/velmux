@@ -13,6 +13,9 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 
+/// A titled group of (key after the prefix, what it does).
+pub type HelpGroup = (&'static str, Vec<(String, &'static str)>);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Action {
     ClaimSlot,
@@ -471,37 +474,81 @@ impl Keymap {
         })
     }
 
-    /// One-line help: each action with its first prefix key (or root chord).
-    pub fn help(&self, prefix_short: &str) -> String {
-        let pick = |a: Action| {
-            self.specs.get(&a).and_then(|s| {
-                s.iter()
-                    .find(|x| x.starts_with("prefix+"))
-                    .or(s.first())
-                    .map(|x| x.replacen("prefix+", "", 1))
+    /// What the prefix popup lists: the key to press after the prefix for each
+    /// common action, in groups.
+    pub fn help_groups(&self) -> Vec<HelpGroup> {
+        use Action::*;
+        let groups: [(&str, &[(Action, &str)]); 3] = [
+            (
+                "spaces",
+                &[
+                    (AgentBase, "new claude"),
+                    (ClaimSlot, "claim a slot"),
+                    (ReleaseSlot, "release slot"),
+                    (Slot(0), "slot n"),
+                    (Base, "base"),
+                    (LocationPicker, "go to…"),
+                    (RenameLocation, "rename place"),
+                    (RemovePlace, "remove place"),
+                ],
+            ),
+            (
+                "panes",
+                &[
+                    (NewShell, "shell"),
+                    (SplitRight, "split right"),
+                    (SplitDown, "split down"),
+                    (NewTab, "new tab"),
+                    (RenameTab, "rename tab"),
+                    (Zoom, "zoom"),
+                    (CopyMode, "copy mode"),
+                    (ClosePane, "close"),
+                ],
+            ),
+            (
+                "velmux",
+                &[
+                    (Menu, "menu"),
+                    (Attention, "next waiting"),
+                    (ToggleSidebar, "sidebar"),
+                    (SidebarView, "spaces / agents"),
+                    (ThemePicker, "theme"),
+                    (Settings, "settings"),
+                    (Detach, "detach"),
+                    (Quit, "quit"),
+                ],
+            ),
+        ];
+        groups
+            .into_iter()
+            .map(|(title, items)| {
+                let keys = items
+                    .iter()
+                    .filter_map(|(a, label)| self.prefix_key(*a).map(|k| (k, *label)))
+                    .collect();
+                (title, keys)
             })
-        };
-        let parts: Vec<String> = [
-            (Action::Menu, "menu"),
-            (Action::AgentBase, "new"),
-            (Action::ClaimSlot, "claim"),
-            (Action::SplitRight, "split"),
-            (Action::NewTab, "tab"),
-            (Action::LocationPicker, "pick"),
-            (Action::Location(0), "go"),
-            (Action::Attention, "attention"),
-            (Action::ToggleSidebar, "sidebar"),
-            (Action::CopyMode, "copy"),
-            (Action::Zoom, "zoom"),
-            (Action::ReleaseSlot, "release"),
-            (Action::ClosePane, "close"),
-            (Action::Detach, "detach"),
-            (Action::Quit, "quit"),
-        ]
-        .into_iter()
-        .filter_map(|(a, label)| pick(a).map(|k| format!("{k} {label}")))
-        .collect();
-        format!("{prefix_short} then: {}", parts.join(" · "))
+            .collect()
+    }
+
+    /// The key after the prefix for `action`, prettified (`⌃t`, `1–9`).
+    fn prefix_key(&self, action: Action) -> Option<String> {
+        let spec = self.specs.get(&action)?.iter().find(|s| s.starts_with("prefix+") && !s.starts_with("prefix+alt+"))?;
+        let rest = &spec["prefix+".len()..];
+        let mut out = String::new();
+        let mut key = rest;
+        if rest.len() > 1 {
+            for part in rest.split('+') {
+                match part {
+                    "ctrl" => out.push('⌃'),
+                    "shift" => out.push('⇧'),
+                    _ => {}
+                }
+                key = part;
+            }
+        }
+        out.push_str(&key.replace("..", "–"));
+        Some(out)
     }
 }
 

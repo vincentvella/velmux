@@ -22,7 +22,7 @@ use `⌘⇧N` / `<prefix> n` / the menu.
 
 Run `velmux` with no arguments inside a repo. A background server owns every
 pane, so `<prefix> d` detaches and `velmux` reattaches with everything still
-running. The sidebar lists the base checkout and each slot, one row each, with
+running. Press the prefix and a popup lists every key you can press next. The sidebar lists the base checkout and each slot, one row each, with
 the state of their agents on the right: `●` working, `▲` blocked on you, `○`
 idle, `✓` finished while you were elsewhere. Each base checkout and slot has its own tabs, each a split
 layout, so a slot can show Claude beside a test-runner shell. The sidebar lists

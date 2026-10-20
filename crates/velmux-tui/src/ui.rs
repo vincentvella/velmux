@@ -21,7 +21,7 @@ pub fn sidebar_width(cols: u16, hidden: bool) -> u16 {
 /// The rectangle every pane is sized to.
 pub fn pane_area(cols: u16, rows: u16, hidden: bool) -> Rect {
     let x = if hidden { 0 } else { sidebar_width(cols, false) + 1 };
-    Rect::new(x, 1, cols.saturating_sub(x).max(1), rows.saturating_sub(2).max(1))
+    Rect::new(x, 1, cols.saturating_sub(x).max(1), rows.saturating_sub(1).max(1))
 }
 
 /// A pane's terminal area within its outer rect (minus the title row when split).
@@ -452,7 +452,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         buf.set_style(Rect::new(1, *y, side.saturating_sub(2), 1), line);
     }
     if !app.sidebar_hidden {
-        for y in 0..rows.saturating_sub(1) {
+        for y in 0..rows {
             buf.set_string(side, y, "│", dim);
         }
     }
@@ -539,39 +539,62 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
 
-    // Status line.
+    // Status line: the bottom row of the sidebar (or, with it hidden, the pane
+    // area's bottom row, only while there's something to say).
     let sy = rows - 1;
     let bar = Style::new().bg(t.bar_bg).fg(t.bar_fg);
-    buf.set_style(Rect::new(0, sy, cols, 1), bar);
-    let text = match &app.mode {
-        Mode::Prefix => app.keymap.help(&app.prefix.short),
-        Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
-        Mode::Picker(_) => "type to filter · ↑↓ / ^p ^n select · enter go · esc cancel".into(),
-        Mode::Menu { .. } => "↑↓ / j k select · enter run · esc close".into(),
-        Mode::ThemePicker { .. } => "↑↓ / j k preview · enter keep (saved to config) · esc revert".into(),
-        Mode::Confirm { label, .. } => format!("{label} [y/n]"),
+    let (text, style) = match &app.mode {
+        Mode::Prefix => (format!("{} …", app.prefix.label), bar.fg(t.accent).add_modifier(Modifier::BOLD)),
+        Mode::Picker(_) => ("enter go · esc cancel".into(), bar.fg(t.dim)),
+        Mode::Menu { .. } | Mode::ThemePicker { .. } => ("enter pick · esc close".into(), bar.fg(t.dim)),
+        Mode::Prompt { .. } => ("enter save · esc cancel".into(), bar.fg(t.dim)),
+        Mode::Confirm { .. } => ("y yes · n no".into(), bar.fg(t.dim)),
         Mode::Copy => match app.copy.as_ref() {
             Some(c) => match (&c.search, &c.message) {
-                (Some(q), _) => format!("search {} {q}", if c.search_up { "↑" } else { "↓" }),
-                (None, Some(m)) => m.clone(),
-                (None, None) => "COPY · hjkl/arrows · ^u ^d ^b ^f · g G · v/V select · y copy · / ? search · n N · q exit".into(),
+                (Some(q), _) => (format!("search {} {q}", if c.search_up { "↑" } else { "↓" }), bar.fg(t.alert)),
+                (None, Some(m)) => (m.clone(), bar.fg(t.alert)),
+                (None, None) => ("COPY · v select · y copy · / search · q exit".into(), bar.fg(t.alert)),
             },
-            None => String::new(),
+            None => (String::new(), bar),
         },
-        Mode::Normal => app
-            .status_text()
-            .unwrap_or_else(|| format!("{} ? keys", app.prefix.label)),
+        Mode::Normal => match app.status_text() {
+            Some(s) => (s, bar),
+            None if app.sidebar_hidden => (String::new(), bar),
+            None => (format!("{} for keys", app.prefix.label), bar.fg(t.dim)),
+        },
     };
-    let style = if matches!(app.mode, Mode::Normal) { bar } else { bar.fg(t.alert) };
-    buf.set_stringn(1, sy, &text, cols.saturating_sub(2) as usize, style);
-    if let Some(q) = app.copy.as_ref().and_then(|c| c.search.as_ref()) {
-        let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
-        cursor = Some(Position::new(x.min(cols - 1), sy));
+    let jobs = (!app.jobs.is_empty()).then(|| format!(" {} ", app.jobs.join(" · ")));
+    let strip = if app.sidebar_hidden {
+        (!text.is_empty() || jobs.is_some()).then(|| Rect::new(0, sy, cols, 1))
+    } else {
+        Some(Rect::new(0, sy, side, 1))
+    };
+    if let Some(strip) = strip {
+        buf.set_style(strip, bar);
+        // Clear what was drawn underneath (a pane's last row when the sidebar is hidden).
+        buf.set_string(strip.x, sy, " ".repeat(strip.width as usize), bar);
+        let jobs_w = jobs.as_ref().map_or(0, |j| j.chars().count() as u16);
+        let room = strip.width.saturating_sub(2 + jobs_w) as usize;
+        buf.set_stringn(strip.x + 1, sy, &text, room, style);
+        if let Some(j) = jobs {
+            if jobs_w < strip.width {
+                buf.set_string(strip.right() - jobs_w, sy, j, bar.fg(t.jobs));
+            }
+        }
+        if let Some(q) = app.copy.as_ref().and_then(|c| c.search.as_ref()) {
+            let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
+            cursor = Some(Position::new(x.min(strip.right().saturating_sub(1)), sy));
+        }
     }
+
     if let Some(text) = app.toast_text() {
         let area = draw_toast(&app.theme, text, body, buf);
         // The pane's cursor would show through the toast as a highlighted cell.
         cursor = cursor.filter(|p| !area.contains(*p));
+    }
+    if matches!(app.mode, Mode::Prefix) {
+        draw_which_key(app, body, buf);
+        cursor = None;
     }
     if let Mode::Menu { selected } = &app.mode {
         draw_menu(app, *selected, buf);
@@ -583,17 +606,122 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         cursor = draw_picker(app, p, body, buf);
     }
     if let Mode::Prompt { label, input, .. } = &app.mode {
-        let x = 1 + (label.chars().count() + 2 + input.chars().count()) as u16;
-        cursor = Some(Position::new(x.min(cols - 1), sy));
+        cursor = draw_prompt(t, label, input, body, buf);
     }
-    if !app.jobs.is_empty() {
-        let jobs = format!(" {} ", app.jobs.join(" · "));
-        let w = jobs.chars().count() as u16;
-        if w < cols {
-            buf.set_string(cols - w, sy, jobs, bar.fg(t.jobs));
-        }
+    if let Mode::Confirm { label, .. } = &app.mode {
+        draw_confirm(t, label, body, buf);
+        cursor = None;
     }
     cursor
+}
+
+/// A rounded box centred near the top of the pane area, cleared and titled.
+fn popup(t: &Theme, title: &str, width: u16, height: u16, body: Rect, buf: &mut Buffer) -> Rect {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let width = width.min(body.width.saturating_sub(2)).max(10);
+    let height = height.min(body.height);
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.y + body.height.saturating_sub(height) / 4, width, height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.menu_border))
+        .title(ratatui::text::Span::styled(format!(" {title} "), Style::new().fg(t.text).add_modifier(Modifier::BOLD)))
+        .render(area, buf);
+    Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), area.height.saturating_sub(2))
+}
+
+/// A text prompt as a popup; returns the cursor (end of the input).
+fn draw_prompt(t: &Theme, label: &str, input: &str, body: Rect, buf: &mut Buffer) -> Option<Position> {
+    let inner = popup(t, label, 52, 3, body, buf);
+    let chars: Vec<char> = input.chars().collect();
+    // Keep the end of a long input in view.
+    let room = inner.width.saturating_sub(1) as usize;
+    let shown: String = chars[chars.len().saturating_sub(room)..].iter().collect();
+    buf.set_string(inner.x, inner.y, &shown, Style::new().fg(t.text));
+    Some(Position::new(inner.x + shown.chars().count() as u16, inner.y))
+}
+
+/// A yes/no question as a popup.
+fn draw_confirm(t: &Theme, label: &str, body: Rect, buf: &mut Buffer) {
+    let width = (label.chars().count() as u16 + 6).clamp(30, 64);
+    let lines = wrap(label, width.saturating_sub(4) as usize);
+    let inner = popup(t, "confirm", width, lines.len() as u16 + 4, body, buf);
+    for (i, line) in lines.iter().enumerate() {
+        buf.set_stringn(inner.x, inner.y + i as u16, line, inner.width as usize, Style::new().fg(t.text));
+    }
+    let y = inner.y + lines.len() as u16 + 1;
+    let key = Style::new().fg(t.accent).add_modifier(Modifier::BOLD);
+    buf.set_string(inner.x, y, "y", key);
+    buf.set_string(inner.x + 2, y, "yes", Style::new().fg(t.text2));
+    buf.set_string(inner.x + 8, y, "n", key);
+    buf.set_string(inner.x + 10, y, "no", Style::new().fg(t.text2));
+}
+
+/// Greedy word wrap.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// After the prefix: every key you can press next, in groups side by side
+/// (stacked when the pane area is narrow), anchored to the bottom.
+fn draw_which_key(app: &App, body: Rect, buf: &mut Buffer) {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let t = &app.theme;
+    let groups = app.keymap.help_groups();
+    let key_w = groups.iter().flat_map(|(_, g)| g.iter().map(|(k, _)| k.chars().count())).max().unwrap_or(1) as u16;
+    let label_w = groups.iter().flat_map(|(_, g)| g.iter().map(|(_, l)| l.chars().count())).max().unwrap_or(1) as u16;
+    let col_w = key_w + 2 + label_w;
+    let gap = 4;
+    let fit = ((body.width.saturating_sub(4) + gap) / (col_w + gap)).max(1) as usize;
+    let per_row = fit.min(groups.len());
+    let bands: Vec<&[crate::keys::HelpGroup]> = groups.chunks(per_row).collect();
+    let band_h = |b: &[crate::keys::HelpGroup]| 2 + b.iter().map(|(_, g)| g.len()).max().unwrap_or(0) as u16;
+    let height = (bands.iter().map(|b| band_h(b)).sum::<u16>() + 1 + bands.len().saturating_sub(1) as u16).min(body.height);
+    let width = (per_row as u16 * (col_w + gap) - gap + 4).min(body.width);
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.bottom().saturating_sub(height + 1), width, height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.accent))
+        .title(ratatui::text::Span::styled(format!(" {} ", app.prefix.label), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)))
+        .title_bottom(ratatui::text::Span::styled(" esc cancel ", Style::new().fg(t.dim)))
+        .render(area, buf);
+    let mut y = area.y + 1;
+    for band in bands {
+        for (i, (title, items)) in band.iter().enumerate() {
+            let x = area.x + 2 + i as u16 * (col_w + gap);
+            if y >= area.bottom() - 1 {
+                break;
+            }
+            buf.set_string(x, y, *title, Style::new().fg(t.dim).add_modifier(Modifier::BOLD));
+            for (j, (key, label)) in items.iter().enumerate() {
+                let ky = y + 1 + j as u16;
+                if ky >= area.bottom() - 1 {
+                    break;
+                }
+                let kw = key.chars().count() as u16;
+                buf.set_string(x + key_w - kw, ky, key, Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
+                buf.set_string(x + key_w + 2, ky, *label, Style::new().fg(t.text2));
+            }
+        }
+        y += band_h(band) + 1;
+    }
 }
 
 /// A place with no panes: what it is, and the keys to start something or remove it.

@@ -1891,10 +1891,8 @@ impl App {
             Action::Quit => {
                 self.mode = Mode::Confirm { label: "stop the server? panes and Claude sessions are restored next time you run velmux".into(), action: Confirm::Quit }
             }
-            Action::Help => {
-                let help = self.keymap.help(&self.prefix.short);
-                self.say(help);
-            }
+            // Keep the prefix popup (with every key) open.
+            Action::Help => self.mode = Mode::Prefix,
             Action::Slot(n) => self.jump_in_space(n as usize),
             Action::Base => match self.current_loc() {
                 Some(loc) if !self.projects[loc.project].is_unclassified() => {
