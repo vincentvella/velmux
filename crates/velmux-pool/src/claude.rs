@@ -57,38 +57,13 @@ pub fn link(claude_dir: &Path, base: &Path, slot: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The session a pane in `cwd` should resume: the newest transcript recorded in
-/// `cwd` that is either `known` or was written since `since`, skipping sessions
-/// that belong to other panes (`exclude`). Catches `/clear`, which starts a new
-/// session without telling us.
-pub fn latest_session(
-    claude_dir: &Path,
-    cwd: &Path,
-    known: Option<&str>,
-    since: SystemTime,
-    exclude: &[String],
-) -> Option<String> {
-    let dir = project_dir(claude_dir, cwd);
-    let mut best: Option<(SystemTime, String)> = None;
-    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "jsonl") {
-            continue;
-        }
-        let Some(id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
-        if exclude.contains(&id) {
-            continue;
-        }
-        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else { continue };
-        let is_known = known == Some(id.as_str());
-        if !is_known && (mtime < since || transcript_cwd(&path).as_deref() != Some(cwd)) {
-            continue;
-        }
-        if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
-            best = Some((mtime, id));
-        }
-    }
-    best.map(|(_, id)| id)
+/// The session a running Claude process is on, from the record Claude keeps
+/// for every live instance (`<claude_dir>/sessions/<pid>.json`). Exact, works
+/// for Claudes started by hand, and needs no guessing from transcripts.
+pub fn running_session(claude_dir: &Path, pid: i32) -> Option<String> {
+    let text = std::fs::read_to_string(claude_dir.join("sessions").join(format!("{pid}.json"))).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    (v.get("pid")?.as_i64()? == pid as i64).then(|| v.get("sessionId")?.as_str().map(str::to_string))?
 }
 
 /// Whether a transcript for session `id` exists in any project dir (Claude
@@ -192,14 +167,6 @@ fn transcript_cwd(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    fn transcript(dir: &Path, id: &str, cwd: &str) {
-        let body = format!(
-            "{{\"type\":\"mode\",\"sessionId\":\"{id}\"}}\n{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n"
-        );
-        std::fs::write(dir.join(format!("{id}.jsonl")), body).unwrap();
-    }
 
     #[test]
     fn newest_under_finds_conversations_in_subfolders() {
@@ -247,31 +214,15 @@ mod tests {
     }
 
     #[test]
-    fn latest_session_prefers_newest_in_same_cwd() {
+    fn running_session_reads_claudes_pid_record() {
         let tmp = tempfile::tempdir().unwrap();
-        let claude = tmp.path();
-        let slot = Path::new("/w/.pools/app/slot-1");
-        let dir = project_dir(claude, slot);
+        let dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&dir).unwrap();
-        let start = SystemTime::now() - Duration::from_secs(5);
-
-        transcript(&dir, "aaa", "/w/.pools/app/slot-1");
-        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &[]).as_deref(), Some("aaa"));
-
-        // After /clear: a newer transcript for the same slot wins over the known id…
-        std::thread::sleep(Duration::from_millis(20));
-        transcript(&dir, "bbb", "/w/.pools/app/slot-1");
-        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &[]).as_deref(), Some("bbb"));
-        // …unless another pane owns it, or it ran in a different slot.
-        let others = vec!["bbb".to_string()];
-        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &others).as_deref(), Some("aaa"));
-        std::thread::sleep(Duration::from_millis(20));
-        transcript(&dir, "ccc", "/w/.pools/app/slot-2");
-        assert_eq!(latest_session(claude, slot, Some("aaa"), start, &others).as_deref(), Some("aaa"));
-
-        // Unknown and nothing recent: start fresh.
-        let later = SystemTime::now() + Duration::from_secs(60);
-        assert_eq!(latest_session(claude, slot, None, later, &[]), None);
+        std::fs::write(dir.join("4242.json"), r#"{"pid":4242,"sessionId":"abc-1","cwd":"/w"}"#).unwrap();
+        std::fs::write(dir.join("7.json"), r#"{"pid":8,"sessionId":"stale"}"#).unwrap();
+        assert_eq!(running_session(tmp.path(), 4242).as_deref(), Some("abc-1"));
+        assert_eq!(running_session(tmp.path(), 7), None, "pid must match the file");
+        assert_eq!(running_session(tmp.path(), 99), None);
     }
 
     #[test]

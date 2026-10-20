@@ -221,6 +221,8 @@ pub struct App {
     /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
     pending_out: Vec<u8>,
     mouse: bool,
+    /// Claude Code's config dir, for its per-process session records.
+    claude_dir: PathBuf,
     /// The editor pane opened by `settings`; config reloads when it closes.
     settings_pane: Option<u64>,
     /// Unfinished mouse sequence from the previous read.
@@ -343,6 +345,7 @@ impl App {
             copy: None,
             pending_out: Vec::new(),
             mouse,
+            claude_dir: Env::from_process().map(|e| e.claude_dir).unwrap_or_default(),
             settings_pane: None,
             input_carry: Vec::new(),
             drag: None,
@@ -627,7 +630,8 @@ impl App {
                             .filter_map(|id| self.pane(id))
                             .map(|p| SavedPane {
                                 id: p.id,
-                                kind: p.kind,
+                                // A shell where you started Claude comes back as that Claude.
+                                kind: if p.kind == Kind::Shell && p.session.is_some() { Kind::Agent } else { p.kind },
                                 claude_session: p.session.clone(),
                                 started_at: secs(p.started_at),
                                 cwd: p.cwd_override.clone(),
@@ -682,8 +686,6 @@ impl App {
         }
         self.refresh_slots();
 
-        let known: Vec<String> =
-            saved.views.iter().flat_map(|v| v.all_panes()).filter_map(|p| p.claude_session.clone()).collect();
         let mut taken: Vec<String> = Vec::new();
         let (mut panes, mut resumed) = (0, 0);
         for mut view in saved.views {
@@ -700,7 +702,9 @@ impl App {
                     continue;
                 }
             }
-            let Some(cwd) = self.loc_cwd(&loc) else { continue };
+            if self.loc_cwd(&loc).is_none() {
+                continue;
+            }
             let active = view.active_tab;
             let view_name = view.name.clone();
             let mut tabs = Vec::new();
@@ -708,18 +712,13 @@ impl App {
             let mut layout = Some(saved_tab.layout);
             let mut ids = HashMap::new();
             for p in saved_tab.panes {
-                let pane_cwd = p.cwd.clone().unwrap_or_else(|| cwd.clone());
+                // Exactly the recorded session (Claude resumes by id from any folder).
+                // Never guess from "newest transcript here": other live Claudes share folders.
                 let resume = match (&env, p.kind) {
-                    (Some(env), Kind::Agent) if p.command.is_none() => {
-                        let exclude: Vec<String> = known
-                            .iter()
-                            .filter(|k| Some(*k) != p.claude_session.as_ref())
-                            .chain(&taken)
-                            .cloned()
-                            .collect();
-                        let since = UNIX_EPOCH + Duration::from_secs(p.started_at.saturating_sub(10));
-                        claude::latest_session(&env.claude_dir, &pane_cwd, p.claude_session.as_deref(), since, &exclude)
-                    }
+                    (Some(env), Kind::Agent) if p.command.is_none() => p
+                        .claude_session
+                        .clone()
+                        .filter(|id| claude::session_exists(&env.claude_dir, id) && !taken.contains(id)),
                     _ => None,
                 };
                 if let Some(id) = &resume {
@@ -788,8 +787,15 @@ impl App {
     fn detect_all(&mut self) {
         let focus = self.focus;
         let mut changed = false;
+        let mut sessions_changed = false;
+        let claude_dir = self.claude_dir.clone();
         for pane in &mut self.panes {
-            changed |= pane.detect(focus == Some(pane.id));
+            let before = pane.session.clone();
+            changed |= pane.detect(focus == Some(pane.id), &claude_dir);
+            sessions_changed |= pane.session != before;
+        }
+        if sessions_changed {
+            self.save();
         }
         self.dirty |= changed || self.status.is_some();
     }

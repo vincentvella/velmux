@@ -46,18 +46,23 @@ pub fn expanded_project(app: &App) -> Option<usize> {
     app.current_loc().map(|l| l.project).or_else(|| (!app.projects.is_empty()).then_some(0))
 }
 
+/// Whether a project is shown expanded: the one you're in, and always the
+/// unclassified group (its folders are each their own space).
+pub fn is_open(app: &App, project: usize) -> bool {
+    expanded_project(app) == Some(project) || app.projects[project].is_unclassified()
+}
+
 /// What the sidebar shows: [`rows`] without individual panes (each location
 /// row carries its agents' states instead), every project but the current one
 /// collapsed to its header, and runs of free slots folded into one row.
 /// Navigation (location N, cycling, attention) keeps using the full [`rows`].
 pub fn display_rows(app: &App) -> Vec<Row> {
-    let open = expanded_project(app);
     let mut out: Vec<Row> = Vec::new();
     let mut project = None;
     for row in rows(app) {
         match &row {
             Row::Project(p) => project = Some(*p),
-            _ if project != open => continue,
+            _ if !project.is_some_and(|p| is_open(app, p)) => continue,
             Row::Pane(_) => continue,
             Row::Location(loc) if is_free_slot(app, loc) => {
                 if let Some(Row::FreeSlots { count, .. }) = out.last_mut() {
@@ -150,12 +155,11 @@ pub fn rows(app: &App) -> Vec<Row> {
 pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
     let mut out = Vec::new();
     let mut y = 0;
-    let open = expanded_project(app);
     let mut prev_collapsed = false;
     for row in display_rows(app) {
         // A blank line before each project, except between stacked collapsed ones.
         if let Row::Project(p) = row {
-            let collapsed = Some(p) != open;
+            let collapsed = !is_open(app, p);
             if y > 0 && !(collapsed && prev_collapsed) {
                 y += 1;
             }
@@ -230,7 +234,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         match row {
             Row::Project(p) => {
                 let name = app.projects[p].name();
-                if expanded_project(app) == Some(p) {
+                if is_open(app, p) {
                     buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
                 } else {
                     // Collapsed: name plus a summary of its agents.

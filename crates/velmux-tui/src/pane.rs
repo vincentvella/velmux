@@ -255,7 +255,10 @@ impl Pane {
     }
 
     /// Re-detect the foreground agent and its state. Returns true if anything changed.
-    pub fn detect(&mut self, focused: bool) -> bool {
+    /// Re-detect agent, state and foreground program; also learn which Claude
+    /// session is running here (from Claude's own pid record), so restore can
+    /// resume it, even if you started `claude` by hand or ran `/clear`.
+    pub fn detect(&mut self, focused: bool, claude_dir: &Path) -> bool {
         // A frozen pane shows scrolled history, not the agent's live screen.
         if self.frozen.is_some() {
             return false;
@@ -264,6 +267,16 @@ impl Pane {
         let agent = detect::foreground_agent(pgid);
         let fg = detect::foreground(pgid);
         let fg_changed = fg != self.fg;
+        let live = match (agent, fg.pid) {
+            (Some("claude"), Some(pid)) => velmux_pool::claude::running_session(claude_dir, pid),
+            _ => None,
+        };
+        match live {
+            Some(id) => self.session = Some(id),
+            // A shell whose Claude has exited is just a shell again.
+            None if agent.is_none() && self.kind == Kind::Shell => self.session = None,
+            None => {}
+        }
         self.fg = fg;
         let state = match agent {
             Some("claude") => {

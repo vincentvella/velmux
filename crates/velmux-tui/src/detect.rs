@@ -44,6 +44,8 @@ pub struct Foreground {
     pub program: Option<String>,
     /// Its working directory.
     pub cwd: Option<PathBuf>,
+    /// Its process id (for Claude, the key to its session record).
+    pub pid: Option<libc::pid_t>,
 }
 
 /// The pty's foreground job: the first non-shell process in the group (the
@@ -69,7 +71,7 @@ pub fn foreground(pgid: Option<libc::pid_t>) -> Foreground {
         .collect();
     let pick = named.iter().find(|(_, n)| !is_shell(n)).or(named.first());
     match pick {
-        Some((pid, name)) => Foreground { program: Some(name.clone()), cwd: process_cwd(*pid) },
+        Some((pid, name)) => Foreground { program: Some(name.clone()), cwd: process_cwd(*pid), pid: Some(*pid) },
         None => Foreground::default(),
     }
 }

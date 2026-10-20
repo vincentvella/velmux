@@ -67,11 +67,6 @@ impl SavedView {
             std::mem::take(&mut self.tabs)
         }
     }
-
-    pub fn all_panes(&self) -> impl Iterator<Item = &SavedPane> {
-        let tabbed = !self.tabs.is_empty();
-        self.tabs.iter().flat_map(|t| &t.panes).chain(self.panes.iter().filter(move |_| !tabbed))
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
