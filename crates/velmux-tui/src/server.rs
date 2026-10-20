@@ -1591,16 +1591,37 @@ impl App {
             _ => return,
         };
         let folder = self.projects[target.project].is_unclassified();
-        let mut items: Vec<(&'static str, Action)> = vec![("new conversation", Action::AgentBase)];
-        if !folder && target.slot.is_none() {
-            items.push(("claim a slot…", Action::ClaimSlot));
-        }
-        items.extend([("new shell", Action::NewShell), ("open editor", Action::NewEditor), ("name this place", Action::RenameLocation)]);
-        items.push(match (folder, target.slot.is_some()) {
-            (true, _) => ("remove folder", Action::RemovePlace),
-            (false, true) => ("release slot", Action::RemovePlace),
-            (false, false) => ("remove repo", Action::RemovePlace),
-        });
+        let items: Vec<(&'static str, Action)> = match (folder, target.slot.is_some()) {
+            // The space: start work (Claude plans in the base and claims its
+            // own slot), or take a slot yourself; manage the repo.
+            (false, false) => vec![
+                ("new conversation", Action::AgentBase),
+                ("claim a slot…", Action::ClaimSlot),
+                ("shell in base", Action::NewShell),
+                ("open base in editor", Action::NewEditor),
+                ("rename space", Action::RenameLocation),
+                ("remove repo", Action::RemovePlace),
+            ],
+            // A slot: work on what's already there, then hand it back.
+            (false, true) => vec![
+                ("claude in this slot", Action::AgentHere),
+                ("shell here", Action::NewShell),
+                ("new tab", Action::NewTab),
+                ("open in editor", Action::NewEditor),
+                ("copy path", Action::CopyPath),
+                ("rename slot", Action::RenameLocation),
+                ("release slot", Action::RemovePlace),
+            ],
+            (true, _) => vec![
+                ("claude here", Action::AgentHere),
+                ("shell here", Action::NewShell),
+                ("new tab", Action::NewTab),
+                ("open in editor", Action::NewEditor),
+                ("copy path", Action::CopyPath),
+                ("rename folder", Action::RenameLocation),
+                ("remove folder", Action::RemovePlace),
+            ],
+        };
         let title = self.loc_name(&target);
         self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { target, title, items, at: (x, y) }) };
     }
@@ -1959,6 +1980,18 @@ impl App {
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
+            Action::AgentHere => {
+                if let Some(loc) = self.current_loc() {
+                    self.spawn(loc, Kind::Agent, None);
+                }
+            }
+            Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
+                Some(path) => {
+                    self.set_clipboard(&path.to_string_lossy());
+                    self.toast("path copied");
+                }
+                None => self.say("no folder here"),
+            },
             Action::NewShell => self.spawn_here(Kind::Shell, None),
             Action::NewEditor => self.spawn_here(Kind::Editor, None),
             Action::SplitRight => self.spawn_here(Kind::Shell, Some(Dir::Right)),

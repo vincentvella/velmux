@@ -21,6 +21,10 @@ pub enum Action {
     ClaimSlot,
     ReleaseSlot,
     AgentBase,
+    /// Claude right where you are (in a slot, not the base).
+    AgentHere,
+    /// Copy the current place's folder path.
+    CopyPath,
     NewShell,
     NewEditor,
     SplitRight,
@@ -131,6 +135,8 @@ const NAMES: &[(&str, Action)] = &[
     ("quit", Action::Quit),
     ("help", Action::Help),
     ("send_prefix", Action::SendPrefix),
+    ("agent_here", Action::AgentHere),
+    ("copy_path", Action::CopyPath),
 ];
 
 fn indexed(a: Action) -> Option<fn(u8) -> Action> {
