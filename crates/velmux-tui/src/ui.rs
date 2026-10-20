@@ -251,9 +251,13 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 let is_current = current.as_ref() == Some(&loc);
                 let marker = if is_current { "›" } else { " " };
                 let unclassified = app.projects[loc.project].is_unclassified();
+                let name = app.views.get(&loc).and_then(|v| v.name.as_deref());
                 let (text, style) = match &loc.slot {
-                    Some(id) if unclassified => (format!("▸ {id}"), Style::new().fg(Color::Yellow)),
-                    None => ("◆ base".to_string(), Style::new().fg(Color::Magenta)),
+                    Some(id) if unclassified => (format!("▸ {}", name.unwrap_or(id)), Style::new().fg(Color::Yellow)),
+                    None => (format!("◆ {}", name.unwrap_or("base")), Style::new().fg(Color::Magenta)),
+                    Some(id) if name.is_some() => {
+                        (format!("▣ {} ({id})", name.unwrap_or_default()), Style::new().fg(Color::Cyan))
+                    }
                     Some(id) => {
                         let slot = app.projects[loc.project].slots.iter().find(|s| &s.id == id);
                         match slot {
@@ -305,7 +309,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     };
     // Tab bar, right-aligned in the header, when there's more than one; the
     // header text is clipped to leave it room.
-    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1 || v.name.is_some());
+    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1 || v.tabs.iter().any(|t| t.name.is_some()));
     let tab_label = |i: usize, t: &crate::server::Tab| match &t.name {
         Some(name) => format!(" {}:{name} ", i + 1),
         None => format!(" {} ", i + 1),

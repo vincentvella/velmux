@@ -50,6 +50,11 @@ pub enum Action {
     /// Fuzzy-pick any location to go to.
     LocationPicker,
     RenameTab,
+    /// Name the current location (base, slot or folder).
+    RenameLocation,
+    /// Edit the config in a new tab; it reloads when the editor closes.
+    Settings,
+    ReloadConfig,
     /// Jump to the next agent that's blocked or finished unseen.
     Attention,
     Detach,
@@ -93,6 +98,9 @@ const NAMES: &[(&str, Action)] = &[
     ("toggle_sidebar", Action::ToggleSidebar),
     ("location_picker", Action::LocationPicker),
     ("rename_tab", Action::RenameTab),
+    ("rename_location", Action::RenameLocation),
+    ("settings", Action::Settings),
+    ("reload_config", Action::ReloadConfig),
     ("attention", Action::Attention),
     ("detach", Action::Detach),
     ("quit", Action::Quit),
@@ -147,6 +155,9 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (ToggleSidebar, &["prefix+b", "super+b"]),
         (LocationPicker, &["prefix+w", "super+p"]),
         (RenameTab, &["prefix+T", "super+r"]),
+        (RenameLocation, &["prefix+W", "super+shift+r"]),
+        (Settings, &["prefix+s", "super+,"]),
+        (ReloadConfig, &["prefix+R"]),
         (Attention, &["prefix+o", "super+shift+u"]),
         (Detach, &["prefix+d"]),
         (Quit, &["prefix+Q"]),

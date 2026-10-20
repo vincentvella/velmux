@@ -6,6 +6,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 /// Turn on button + drag reporting with SGR coordinates in the client terminal.
 pub const ENABLE: &[u8] = b"\x1b[?1002h\x1b[?1006h";
+pub const DISABLE: &[u8] = b"\x1b[?1002l\x1b[?1006l";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {

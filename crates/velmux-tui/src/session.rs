@@ -45,6 +45,9 @@ pub struct SavedView {
     pub tabs: Vec<SavedTab>,
     #[serde(default)]
     pub active_tab: usize,
+    /// Name given with rename (or carried over from herdr).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -110,6 +110,9 @@ pub struct Plan {
 #[derive(Debug)]
 pub struct PlanView {
     pub label: String,
+    /// herdr's custom workspace name, kept as the location's name (repo targets;
+    /// folders already use it as their id).
+    pub name: Option<String>,
     pub target: Target,
     /// The location's root folder (base checkout, slot, or plain folder).
     pub root: PathBuf,
@@ -193,6 +196,7 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
             .map(|w| w.checkout_path)
             .or(identity_cwd)
             .or_else(|| tabs[active_tab].panes.values().next().map(|p| p.cwd.clone()));
+        let custom = custom_name.clone();
         let label = custom_name.unwrap_or_else(|| {
             anchor.as_ref().and_then(|a| a.file_name()).map_or(format!("workspace {}", n + 1), |f| f.to_string_lossy().into_owned())
         });
@@ -258,7 +262,8 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
             plan.skipped.push((label, "no panes".into()));
             continue;
         }
-        plan.views.push(PlanView { label, target, root, tabs: plan_tabs, active_tab: active });
+        let name = custom.filter(|_| matches!(target, Target::Repo { .. }));
+        plan.views.push(PlanView { label, name, target, root, tabs: plan_tabs, active_tab: active });
     }
     if with_latest_claude {
         add_latest_claude(&mut plan, env);

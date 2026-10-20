@@ -115,10 +115,28 @@ fn unbound_len(bytes: &[u8]) -> usize {
     }
 }
 
+/// Written by `settings` when there's no config yet.
+const CONFIG_TEMPLATE: &str = r#"# velmux global config. Save and quit the editor to apply (settings reloads it).
+
+# prefix = "C-b"              # TUI prefix: C-a, ctrl+space, ^], ...
+# mouse = true                # click / drag / wheel in the TUI
+# agent = "claude"            # command for agent panes
+# editor = "nvim"             # default: $VISUAL / $EDITOR
+# slots = 5                   # worktree slots per repo
+# claude_history = true       # group slot transcripts under the base repo
+
+# Rebind any action ("prefix+x", or prefix-less like "super+d"; [] unbinds).
+# `velmux keys` lists them all; `velmux keys --ghostty` prints terminal config.
+# [keys]
+# split_right = ["prefix+v", "super+d"]
+# location = "alt+1..9"
+"#;
+
 /// What a text prompt's answer is for.
 pub enum PromptFor {
     ClaimBranch,
     RenameTab,
+    RenameLocation,
 }
 
 pub enum Confirm {
@@ -152,11 +170,13 @@ impl Tab {
 pub struct View {
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// Name given with rename_location (shown instead of base / slot id).
+    pub name: Option<String>,
 }
 
 impl View {
     pub fn single(tab: Tab) -> View {
-        View { tabs: vec![tab], active: 0 }
+        View { tabs: vec![tab], active: 0, name: None }
     }
 
     pub fn tab_of(&self, pane: u64) -> Option<usize> {
@@ -201,6 +221,8 @@ pub struct App {
     /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
     pending_out: Vec<u8>,
     mouse: bool,
+    /// The editor pane opened by `settings`; config reloads when it closes.
+    settings_pane: Option<u64>,
     /// Unfinished mouse sequence from the previous read.
     input_carry: Vec<u8>,
     drag: Option<Drag>,
@@ -321,6 +343,7 @@ impl App {
             copy: None,
             pending_out: Vec::new(),
             mouse,
+            settings_pane: None,
             input_carry: Vec::new(),
             drag: None,
             full_redraw: true,
@@ -397,9 +420,12 @@ impl App {
 
     pub fn loc_name(&self, loc: &Loc) -> String {
         let project = &self.projects[loc.project];
-        match &loc.slot {
-            None => format!("{} › base", project.name()),
-            Some(id) => {
+        let name = self.views.get(loc).and_then(|v| v.name.as_deref());
+        match (&loc.slot, name) {
+            (None, Some(n)) => format!("{} › {n} (base)", project.name()),
+            (None, None) => format!("{} › base", project.name()),
+            (Some(id), _) if project.is_unclassified() => format!("unclassified › {}", name.unwrap_or(id)),
+            (Some(id), name) => {
                 let branch = project
                     .slots
                     .iter()
@@ -407,7 +433,10 @@ impl App {
                     .and_then(|s| s.branch.clone())
                     .map(|b| format!(" · {b}"))
                     .unwrap_or_default();
-                format!("{} › {id}{branch}", project.name())
+                match name {
+                    Some(n) => format!("{} › {n} ({id}{branch})", project.name()),
+                    None => format!("{} › {id}{branch}", project.name()),
+                }
             }
         }
     }
@@ -454,7 +483,13 @@ impl App {
                     }
                 }
             }
-            Event::PtyExit(id) => self.remove_pane(id),
+            Event::PtyExit(id) => {
+                self.remove_pane(id);
+                if self.settings_pane == Some(id) {
+                    self.settings_pane = None;
+                    self.reload_config();
+                }
+            }
             Event::Claimed { project, result } => {
                 self.jobs.retain(|j| j != "claiming");
                 self.refresh_slots();
@@ -608,6 +643,7 @@ impl App {
                     layout: tabs[0].layout.clone(),
                     panes: tabs[0].panes.clone(),
                     active_tab: view.active,
+                    name: view.name.clone(),
                     tabs,
                 }
             })
@@ -666,6 +702,7 @@ impl App {
             }
             let Some(cwd) = self.loc_cwd(&loc) else { continue };
             let active = view.active_tab;
+            let view_name = view.name.clone();
             let mut tabs = Vec::new();
             for saved_tab in view.take_tabs() {
             let mut layout = Some(saved_tab.layout);
@@ -707,7 +744,7 @@ impl App {
             }
             if !tabs.is_empty() {
                 let active = active.min(tabs.len() - 1);
-                self.views.insert(loc, View { tabs, active });
+                self.views.insert(loc, View { tabs, active, name: view_name });
             }
         }
         if panes > 0 && self.startup_warning.is_none() {
@@ -1081,6 +1118,14 @@ impl App {
                 PromptFor::ClaimBranch => self.claim((!answer.is_empty()).then_some(answer)),
                 PromptFor::RenameTab => {
                     if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
+                        // `View` derefs to its active tab: this names the tab.
+                        let tab: &mut Tab = view;
+                        tab.name = (!answer.is_empty()).then_some(answer);
+                    }
+                    self.relayout();
+                }
+                PromptFor::RenameLocation => {
+                    if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
                         view.name = (!answer.is_empty()).then_some(answer);
                     }
                     self.relayout();
@@ -1238,18 +1283,130 @@ impl App {
             }
             Action::RenameTab => match self.current_loc().and_then(|l| self.views.get(&l)) {
                 Some(view) => {
+                    let tab: &Tab = view;
                     self.mode = Mode::Prompt {
                         label: format!("rename tab {} (empty clears)", view.active + 1),
-                        input: view.name.clone().unwrap_or_default(),
+                        input: tab.name.clone().unwrap_or_default(),
                         purpose: PromptFor::RenameTab,
                     }
                 }
                 None => self.say("no tab here yet — open a pane first"),
             },
+            Action::RenameLocation => match self.current_loc() {
+                Some(loc) if self.views.contains_key(&loc) => {
+                    let current = self.views[&loc].name.clone().unwrap_or_default();
+                    self.mode = Mode::Prompt {
+                        label: format!("name {} (empty clears)", self.loc_name(&loc)),
+                        input: current,
+                        purpose: PromptFor::RenameLocation,
+                    }
+                }
+                _ => self.say("open a pane here first, then name it"),
+            },
+            Action::Settings => self.open_settings(),
+            Action::ReloadConfig => self.reload_config(),
             Action::NewTab => self.new_tab(),
             Action::NextTab => self.step_tab(1),
             Action::PrevTab => self.step_tab(-1),
             Action::Tab(n) => self.goto_tab(n as usize - 1),
+        }
+    }
+
+    /// Open the global config in the editor, in a new "settings" tab here
+    /// (creating it from a template first). Closing the editor reloads it.
+    fn open_settings(&mut self) {
+        let Some(loc) = self.current_loc() else {
+            return self.say("run velmux from inside a repo to open settings");
+        };
+        let path = match Env::from_process() {
+            Ok(env) => env.global_config,
+            Err(e) => return self.say(format!("settings: {e:#}")),
+        };
+        if !path.exists() {
+            let created = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, CONFIG_TEMPLATE));
+            if let Err(e) = created {
+                return self.say(format!("settings: can't create {}: {e}", path.display()));
+            }
+        }
+        let editor = self.projects[loc.project]
+            .cfg
+            .editor
+            .clone()
+            .or_else(|| std::env::var("VISUAL").ok())
+            .or_else(|| std::env::var("EDITOR").ok())
+            .unwrap_or_else(|| "vi".into());
+        let quoted = format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
+        // Plain exec: the pane closes with the editor, which triggers the reload.
+        let opts = LaunchOpts { command: Some(format!("exec {editor} {quoted}")), ..LaunchOpts::default() };
+        match self.launch(&loc, Kind::Editor, opts) {
+            Ok(id) => {
+                let mut tab = Tab::new(Layout::Leaf(id), None);
+                tab.name = Some("settings".into());
+                match self.views.get_mut(&loc) {
+                    Some(view) => {
+                        view.tabs.push(tab);
+                        view.active = view.tabs.len() - 1;
+                    }
+                    None => {
+                        self.views.insert(loc.clone(), View::single(tab));
+                    }
+                }
+                self.settings_pane = Some(id);
+                self.focus = Some(id);
+                self.current = Some(loc);
+                self.relayout();
+                self.say(format!("editing {} — save and quit to apply", path.display()));
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// Re-read the global and per-repo config: prefix, keys, mouse, agent,
+    /// editor, slots. No restart needed.
+    fn reload_config(&mut self) {
+        let env = match Env::from_process() {
+            Ok(env) => env,
+            Err(e) => return self.say(format!("reload failed: {e:#}")),
+        };
+        let settings = match tui_settings(&env) {
+            Ok(s) => s,
+            Err(e) => return self.say(format!("config error, kept the old settings: {e:#}")),
+        };
+        let mut warnings = Vec::new();
+        self.prefix = match settings.prefix.as_deref().map(Prefix::parse) {
+            None => Prefix::default(),
+            Some(Ok(p)) => p,
+            Some(Err(e)) => {
+                warnings.push(format!("{e:#}; using ctrl+b"));
+                Prefix::default()
+            }
+        };
+        let (keymap, key_warnings) = Keymap::build(self.prefix.byte, &settings.keys);
+        self.keymap = keymap;
+        warnings.extend(key_warnings);
+        if settings.mouse != self.mouse {
+            self.mouse = settings.mouse;
+            self.pending_out.extend_from_slice(if self.mouse { mouse::ENABLE } else { mouse::DISABLE });
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        for project in &mut self.projects {
+            match &project.pool {
+                Some(pool) => match Pool::discover(env.clone(), &pool.base) {
+                    Ok(fresh) => {
+                        project.cfg = fresh.cfg.clone();
+                        project.pool = Some(Arc::new(fresh));
+                    }
+                    Err(e) => warnings.push(format!("{}: {e:#}", project.name())),
+                },
+                None => project.cfg = Config::load(&env, &home).unwrap_or_else(|_| Config::defaults()),
+            }
+        }
+        self.refresh_slots();
+        self.full_redraw = true;
+        if warnings.is_empty() {
+            self.say(format!("config reloaded · prefix {}", self.prefix.label));
+        } else {
+            self.say(format!("config reloaded with warnings: {}", warnings.join("; ")));
         }
     }
 
@@ -1468,7 +1625,7 @@ impl App {
         let cfg = &project.cfg;
         let mut session = None;
         let command = match kind {
-            Kind::Agent if opts.command.is_some() => opts.command.clone(),
+            _ if opts.command.is_some() => opts.command.clone(),
             Kind::Agent if session::is_claude(&cfg.agent) => {
                 let agent = &cfg.agent;
                 Some(match resume {
@@ -1512,7 +1669,7 @@ impl App {
             .map_err(|e| format!("spawn failed: {e:#}"))?;
         pane.session = session;
         pane.cwd_override = cwd_override;
-        pane.command_override = opts.command.filter(|_| kind == Kind::Agent);
+        pane.command_override = opts.command;
         self.panes.push(pane);
         Ok(id)
     }
@@ -1580,7 +1737,7 @@ impl App {
             }
             imported += 1;
             let active = v.active_tab.min(tabs.len() - 1);
-            self.views.insert(loc, View { tabs, active });
+            self.views.insert(loc, View { tabs, active, name: v.name });
         }
         if let (None, Some((loc, pane))) = (self.focus, first) {
             self.focus = pane;
