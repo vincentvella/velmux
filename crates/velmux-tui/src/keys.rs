@@ -59,6 +59,10 @@ pub enum Action {
     ReloadConfig,
     /// Re-exec the server (new binary) keeping every pane running.
     RestartServer,
+    /// The short menu of common actions.
+    Menu,
+    /// Switch the sidebar between spaces and agents.
+    SidebarView,
     /// Jump to the next agent that's blocked or finished unseen.
     Attention,
     Detach,
@@ -107,6 +111,8 @@ const NAMES: &[(&str, Action)] = &[
     ("settings", Action::Settings),
     ("reload_config", Action::ReloadConfig),
     ("restart_server", Action::RestartServer),
+    ("menu", Action::Menu),
+    ("sidebar_view", Action::SidebarView),
     ("attention", Action::Attention),
     ("detach", Action::Detach),
     ("quit", Action::Quit),
@@ -167,6 +173,8 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (Settings, &["prefix+s", "super+,"]),
         (ReloadConfig, &["prefix+R"]),
         (RestartServer, &["prefix+ctrl+r"]),
+        (Menu, &["prefix+m"]),
+        (SidebarView, &["prefix+g"]),
         (Attention, &["prefix+o", "super+shift+u"]),
         (Detach, &["prefix+d"]),
         (Quit, &["prefix+Q"]),
@@ -464,6 +472,7 @@ impl Keymap {
             })
         };
         let parts: Vec<String> = [
+            (Action::Menu, "menu"),
             (Action::ClaimSlot, "claim"),
             (Action::AgentBase, "claude@base"),
             (Action::SplitRight, "split"),
@@ -483,6 +492,45 @@ impl Keymap {
         .filter_map(|(a, label)| pick(a).map(|k| format!("{k} {label}")))
         .collect();
         format!("{prefix_short} then: {}", parts.join(" · "))
+    }
+}
+
+impl Keymap {
+    /// The shortcut to show next to an action: a prefix-less chord if it has one
+    /// (`⌘⇧D`), else the prefix key sequence (`^a d`).
+    pub fn hint(&self, action: Action, prefix_short: &str) -> Option<String> {
+        let specs = self.specs.get(&action)?;
+        let pretty = |spec: &str| {
+            let mut mods = String::new();
+            let mut key = spec;
+            for part in spec.split('+') {
+                match part {
+                    "super" | "cmd" => mods.push('⌘'),
+                    "ctrl" => mods.push('⌃'),
+                    "alt" | "opt" => mods.push('⌥'),
+                    "shift" => mods.push('⇧'),
+                    _ => {}
+                }
+                key = part;
+            }
+            let key = match key {
+                "enter" => "↵".to_string(),
+                "left" => "←".into(),
+                "right" => "→".into(),
+                "up" => "↑".into(),
+                "down" => "↓".into(),
+                k if k.chars().count() == 1 && !mods.is_empty() => k.to_uppercase(),
+                k => k.to_string(),
+            };
+            format!("{mods}{key}")
+        };
+        if let Some(root) = specs.iter().find(|s| !s.starts_with("prefix+") && !s.contains("..")) {
+            return Some(pretty(root));
+        }
+        specs
+            .iter()
+            .find(|s| s.starts_with("prefix+") && !s.contains(".."))
+            .map(|s| format!("{prefix_short} {}", pretty(&s["prefix+".len()..])))
     }
 }
 
@@ -626,6 +674,15 @@ mod tests {
         assert_eq!(map.find_root(b"\x1b[116;9u"), None, "new_tab unbound");
         assert_eq!(warn.len(), 2, "{warn:?}");
         assert_eq!(map.after_prefix(b"\x01"), Some((Action::SendPrefix, 1)));
+    }
+
+    #[test]
+    fn hints_prefer_prefixless_chords() {
+        let (map, _) = Keymap::build(0x01, &BTreeMap::new());
+        assert_eq!(map.hint(Action::SplitRight, "^a").as_deref(), Some("⌘D"));
+        assert_eq!(map.hint(Action::Zoom, "^a").as_deref(), Some("⌘⇧↵"));
+        assert_eq!(map.hint(Action::Detach, "^a").as_deref(), Some("^a d"));
+        assert_eq!(map.hint(Action::RestartServer, "^a").as_deref(), Some("^a ⌃R"));
     }
 
     #[test]

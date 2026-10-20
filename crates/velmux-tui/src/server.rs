@@ -80,6 +80,8 @@ pub enum Mode {
     Prompt { label: String, input: String, purpose: PromptFor },
     /// Fuzzy location picker.
     Picker(Picker),
+    /// The short menu, with the highlighted row.
+    Menu { selected: usize },
     Confirm { label: String, action: Confirm },
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
@@ -207,6 +209,7 @@ pub struct App {
     pub prefix: Prefix,
     pub keymap: Keymap,
     pub sidebar_hidden: bool,
+    pub sidebar_view: ui::SidebarView,
     /// Shown once a client attaches (e.g. an invalid `prefix` in config).
     startup_warning: Option<String>,
     pub jobs: Vec<String>,
@@ -351,6 +354,7 @@ impl App {
             prefix,
             keymap,
             sidebar_hidden: false,
+            sidebar_view: ui::SidebarView::Spaces,
             startup_warning,
             jobs: Vec::new(),
             status: None,
@@ -991,14 +995,25 @@ impl App {
         if let Some(drag) = self.drag.take() {
             return self.continue_drag(drag, ev);
         }
+        let (cols, rows) = self.size;
+        let at = Position::new(ev.x, ev.y);
+        if let Mode::Menu { .. } = self.mode {
+            if ev.is_press() && ev.is_left() {
+                let area = ui::menu_area(self, cols, rows);
+                let item = (area.contains(at) && ev.y > area.y).then(|| (ev.y - area.y - 1) as usize);
+                self.mode = Mode::Normal;
+                if let Some(&(_, action)) = item.and_then(|i| ui::MENU.get(i)) {
+                    self.run(action);
+                }
+            }
+            return;
+        }
         if !matches!(self.mode, Mode::Normal | Mode::Copy) {
             return;
         }
-        let (cols, rows) = self.size;
-        let at = Position::new(ev.x, ev.y);
         if ev.x < ui::sidebar_width(cols, self.sidebar_hidden) {
             if ev.is_press() && ev.is_left() {
-                self.sidebar_click(ev.y);
+                self.sidebar_click(ev.x, ev.y);
             }
             return;
         }
@@ -1127,10 +1142,31 @@ impl App {
         rects.into_iter().find(|(p, _)| *p == id).map(|(_, r)| ui::content_rect(r, titled))
     }
 
-    fn sidebar_click(&mut self, y: u16) {
+    fn sidebar_click(&mut self, x: u16, y: u16) {
         let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else {
             return;
         };
+        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden);
+        match row {
+            ui::Row::TopBar => {
+                return self.run(if x < side / 2 { Action::ClaimSlot } else { Action::Menu });
+            }
+            ui::Row::ViewTabs => {
+                self.sidebar_view = if x <= ui::VIEW_SPLIT_X { ui::SidebarView::Spaces } else { ui::SidebarView::Agents };
+                self.full_redraw = true;
+                return;
+            }
+            ui::Row::Agent { pane, .. } => {
+                if self.copy.is_some() {
+                    self.exit_copy();
+                }
+                self.focus = Some(self.panes[pane].id);
+                self.current = Some(self.panes[pane].loc.clone());
+                self.full_redraw = true;
+                return;
+            }
+            _ => {}
+        }
         if self.copy.is_some() {
             self.exit_copy();
         }
@@ -1141,7 +1177,8 @@ impl App {
                 self.full_redraw = true;
                 return;
             }
-            ui::Row::Heading(_) | ui::Row::Divider => return,
+            ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
+            ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } => unreachable!("handled above"),
             ui::Row::Location(loc) => loc,
             ui::Row::Project(p) => {
                 // Open the project at its first location with panes, else its root.
@@ -1217,6 +1254,7 @@ impl App {
                 }
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Picker(_) => self.picker_input(bytes),
+                Mode::Menu { .. } => self.menu_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
                 Mode::Confirm { .. } => {
                     let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
@@ -1322,6 +1360,33 @@ impl App {
             })
             .map(|loc| picker::Item { label: self.loc_name(&loc), loc })
             .collect()
+    }
+
+    fn menu_input(&mut self, bytes: &[u8]) -> usize {
+        let Mode::Menu { selected } = &mut self.mode else { return bytes.len() };
+        let n = ui::MENU.len();
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, b'k'),
+            [0x1b, b'[', b'B', ..] => (3, b'j'),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, 0)
+            }
+            [b, ..] => (1, *b),
+            [] => return 0,
+        };
+        match key {
+            b'k' | 0x10 => *selected = (*selected + n - 1) % n,
+            b'j' | 0x0e => *selected = (*selected + 1) % n,
+            b'\r' | b'\n' => {
+                let action = ui::MENU[*selected].1;
+                self.mode = Mode::Normal;
+                self.run(action);
+            }
+            0x1b | 0x03 | b'q' => self.mode = Mode::Normal,
+            _ => {}
+        }
+        used
     }
 
     fn picker_input(&mut self, bytes: &[u8]) -> usize {
@@ -1481,6 +1546,14 @@ impl App {
             },
             Action::Settings => self.open_settings(),
             Action::ReloadConfig => self.reload_config(),
+            Action::Menu => self.mode = Mode::Menu { selected: 0 },
+            Action::SidebarView => {
+                self.sidebar_view = match self.sidebar_view {
+                    ui::SidebarView::Spaces => ui::SidebarView::Agents,
+                    ui::SidebarView::Agents => ui::SidebarView::Spaces,
+                };
+                self.full_redraw = true;
+            }
             Action::RestartServer => {
                 if let Err(e) = self.restart() {
                     self.say(format!("restart failed: {e:#}"));

@@ -42,7 +42,49 @@ pub enum Row {
     Heading(&'static str),
     /// Sidebar only: the rule between repos and folders.
     Divider,
+    /// Sidebar only: `⊕ new` and `≡ menu`.
+    TopBar,
+    /// Sidebar only: the `spaces · agents` switch.
+    ViewTabs,
+    Blank,
+    /// Sidebar agents view: an agent's two lines (location, then agent and task).
+    Agent { pane: usize, second: bool },
 }
+
+/// Which list the sidebar shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarView {
+    Spaces,
+    Agents,
+}
+
+/// The short menu (from the `≡ menu` button or `prefix+m`).
+pub const MENU: &[(&str, crate::keys::Action)] = {
+    use crate::keys::Action::*;
+    &[
+        ("new slot", ClaimSlot),
+        ("go to…", LocationPicker),
+        ("new tab", NewTab),
+        ("name this place", RenameLocation),
+        ("rename tab", RenameTab),
+        ("settings", Settings),
+        ("restart server", RestartServer),
+        ("detach", Detach),
+        ("stop server", Quit),
+    ]
+};
+
+/// Where the menu popup sits (anchored under the top bar).
+pub fn menu_area(app: &App, cols: u16, rows: u16) -> Rect {
+    let side = sidebar_width(cols, app.sidebar_hidden);
+    let width = 30.min(cols.saturating_sub(2)).max(side.saturating_sub(2).min(30));
+    let height = (MENU.len() as u16 + 2).min(rows.saturating_sub(2));
+    let x = if app.sidebar_hidden { 1 } else { side.saturating_sub(width).max(1) };
+    Rect::new(x, 1, width, height)
+}
+
+/// The sidebar's x where the `spaces` / `agents` labels split.
+pub const VIEW_SPLIT_X: u16 = 9;
 
 pub fn rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
@@ -111,12 +153,70 @@ pub fn display_rows(app: &App) -> Vec<Row> {
 /// Sidebar rows with their screen line, scrolled just enough to keep the
 /// current location visible. Shared by drawing and mouse hit-testing.
 pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
-    let rows = display_rows(app);
-    let usable = height.saturating_sub(1) as usize; // the status line
-    let current = app.current_loc();
-    let at = rows.iter().position(|r| matches!(r, Row::Location(l) if Some(l) == current.as_ref())).unwrap_or(0);
-    let start = (at + 1).saturating_sub(usable);
-    rows.into_iter().skip(start).take(usable).enumerate().map(|(y, r)| (y as u16, r)).collect()
+    // Fixed header: buttons, a rule, the view switch, a gap.
+    let header = [Row::TopBar, Row::Divider, Row::ViewTabs, Row::Blank];
+    let top = header.len();
+    let (body, at) = match app.sidebar_view {
+        SidebarView::Spaces => {
+            let rows = display_rows(app);
+            let current = app.current_loc();
+            let at = rows.iter().position(|r| matches!(r, Row::Location(l) if Some(l) == current.as_ref()));
+            (rows, at)
+        }
+        SidebarView::Agents => {
+            let rows = agent_rows(app);
+            let focus = app.focused().map(|p| p.id);
+            let at = rows.iter().position(|r| matches!(r, Row::Agent { pane, second: true } if Some(app.panes[*pane].id) == focus));
+            (rows, at)
+        }
+    };
+    let usable = (height.saturating_sub(1) as usize).saturating_sub(top); // minus the status line
+    let start = at.map_or(0, |at| (at + 1).saturating_sub(usable));
+    header
+        .into_iter()
+        .chain(body.into_iter().skip(start).take(usable))
+        .enumerate()
+        .map(|(y, r)| (y as u16, r))
+        .collect()
+}
+
+/// Every agent, the ones needing you first (blocked, finished unseen, working,
+/// idle), then in sidebar order. Two rows each.
+pub fn agent_rows(app: &App) -> Vec<Row> {
+    let order: Vec<usize> = rows(app)
+        .into_iter()
+        .filter_map(|r| match r {
+            Row::Pane(i) => Some(i),
+            _ => None,
+        })
+        .filter(|&i| app.panes[i].agent.is_some() || app.panes[i].kind == Kind::Agent)
+        .collect();
+    let rank = |i: usize| {
+        let p = &app.panes[i];
+        match (p.state, p.unseen_done) {
+            (Some(AgentState::Blocked), _) => 0,
+            (_, true) => 1,
+            (Some(AgentState::Working), _) => 2,
+            _ => 3,
+        }
+    };
+    let mut sorted: Vec<(usize, usize)> = order.into_iter().enumerate().collect();
+    sorted.sort_by_key(|&(n, i)| (rank(i), n));
+    sorted.into_iter().flat_map(|(_, i)| [Row::Agent { pane: i, second: false }, Row::Agent { pane: i, second: true }]).collect()
+}
+
+/// A location as a short label: `caliburr › feat/auth`, `kino › base`, `Helm`.
+pub fn short_loc(app: &App, loc: &Loc) -> String {
+    let project = &app.projects[loc.project];
+    let name = app.views.get(loc).and_then(|v| v.name.clone());
+    match &loc.slot {
+        Some(id) if project.is_unclassified() => name.unwrap_or_else(|| id.clone()),
+        None => format!("{} › {}", project.name(), name.unwrap_or_else(|| "base".into())),
+        Some(id) => {
+            let branch = project.slots.iter().find(|s| &s.id == id).and_then(|s| s.branch.clone());
+            format!("{} › {}", project.name(), name.or(branch).unwrap_or_else(|| id.clone()))
+        }
+    }
 }
 
 fn free_slots(app: &App, project: usize) -> usize {
@@ -293,7 +393,51 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
             }
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
-            Row::Pane(_) => {}
+            Row::Pane(_) | Row::Blank => {}
+            Row::TopBar => {
+                let gray = Style::new().fg(Color::Gray);
+                buf.set_string(1, y, "⊕", Style::new().fg(ACCENT));
+                buf.set_string(3, y, "new", gray);
+                let menu_open = matches!(app.mode, Mode::Menu { .. });
+                let label = "menu";
+                let x = side.saturating_sub(label.chars().count() as u16 + 3);
+                buf.set_string(x, y, "≡", Style::new().fg(if menu_open { ACCENT } else { Color::Magenta }));
+                buf.set_string(x + 2, y, label, if menu_open { gray.add_modifier(Modifier::BOLD) } else { gray });
+            }
+            Row::ViewTabs => {
+                let on = Style::new().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+                let off = Style::new().fg(Color::DarkGray);
+                let agents_on = app.sidebar_view == SidebarView::Agents;
+                buf.set_string(1, y, "spaces", if agents_on { off } else { on });
+                buf.set_string(8, y, "·", off);
+                buf.set_string(VIEW_SPLIT_X + 1, y, "agents", if agents_on { on } else { off });
+                // How many agents want you, even while looking at spaces.
+                let waiting = app.panes.iter().filter(|p| p.unseen_done || p.state == Some(AgentState::Blocked)).count();
+                if waiting > 0 {
+                    buf.set_string(VIEW_SPLIT_X + 8, y, format!("▲{waiting}"), Style::new().fg(Color::Red).add_modifier(Modifier::BOLD));
+                }
+            }
+            Row::Agent { pane, second } => {
+                let p = &app.panes[pane];
+                let selected = focused.map(|f| f.id) == Some(p.id);
+                let base = if selected { Style::new().bg(SELECTED_BG) } else { Style::new() };
+                if selected {
+                    buf.set_style(Rect::new(0, y, side, 1), base);
+                    buf.set_string(0, y, "▌", base.fg(ACCENT));
+                }
+                if second {
+                    let label = p.agent.unwrap_or("agent");
+                    let task = useful_title(p).map(|t| format!(" · {t}")).unwrap_or_default();
+                    let text = format!("{label}{task}");
+                    buf.set_stringn(3, y, text, side.saturating_sub(4) as usize, base.fg(Color::DarkGray));
+                } else {
+                    let (glyph, gstyle) = state_glyph(p);
+                    let glyph = if glyph == " " { "○" } else { glyph };
+                    buf.set_string(1, y, glyph, gstyle.patch(base));
+                    let text = if selected { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray).add_modifier(Modifier::BOLD) };
+                    buf.set_stringn(3, y, short_loc(app, &p.loc), side.saturating_sub(4) as usize, text);
+                }
+            }
         }
     }
     if !app.sidebar_hidden {
@@ -403,6 +547,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         Mode::Prefix => app.keymap.help(&app.prefix.short),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
         Mode::Picker(_) => "type to filter · ↑↓ / ^p ^n select · enter go · esc cancel".into(),
+        Mode::Menu { .. } => "↑↓ / j k select · enter run · esc close".into(),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
         Mode::Copy => match app.copy.as_ref() {
             Some(c) => match (&c.search, &c.message) {
@@ -422,6 +567,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
     }
+    if let Mode::Menu { selected } = &app.mode {
+        draw_menu(app, *selected, buf);
+    }
     if let Mode::Picker(p) = &app.mode {
         cursor = draw_picker(app, p, body, buf);
     }
@@ -437,6 +585,37 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
     cursor
+}
+
+/// The short menu: label left, its shortcut right.
+fn draw_menu(app: &App, selected: usize, buf: &mut Buffer) {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let area = menu_area(app, buf.area.width, buf.area.height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Magenta))
+        .title(" menu ")
+        .render(area, buf);
+    let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
+    for (i, (label, action)) in MENU.iter().enumerate().take(inner.height as usize) {
+        let y = inner.y + i as u16;
+        let on = i == selected;
+        let base = if on { Style::new().bg(SELECTED_BG) } else { Style::new() };
+        buf.set_style(Rect::new(inner.x, y, inner.width, 1), base);
+        if on {
+            buf.set_string(inner.x, y, "▌", base.fg(ACCENT));
+        }
+        let text = if on { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray) };
+        buf.set_stringn(inner.x + 2, y, label, inner.width.saturating_sub(3) as usize, text);
+        if let Some(hint) = app.keymap.hint(*action, &app.prefix.short) {
+            let w = hint.chars().count() as u16;
+            if w + label.chars().count() as u16 + 4 < inner.width {
+                buf.set_string(inner.right() - w - 1, y, hint, base.fg(Color::DarkGray));
+            }
+        }
+    }
 }
 
 /// The location picker, centred over the pane area. Returns the cursor (query end).
