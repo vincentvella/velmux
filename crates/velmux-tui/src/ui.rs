@@ -46,7 +46,8 @@ pub fn expanded_project(app: &App) -> Option<usize> {
     app.current_loc().map(|l| l.project).or_else(|| (!app.projects.is_empty()).then_some(0))
 }
 
-/// What the sidebar shows: [`rows`] with every project but the current one
+/// What the sidebar shows: [`rows`] without individual panes (each location
+/// row carries its agents' states instead), every project but the current one
 /// collapsed to its header, and runs of free slots folded into one row.
 /// Navigation (location N, cycling, attention) keeps using the full [`rows`].
 pub fn display_rows(app: &App) -> Vec<Row> {
@@ -57,6 +58,7 @@ pub fn display_rows(app: &App) -> Vec<Row> {
         match &row {
             Row::Project(p) => project = Some(*p),
             _ if project != open => continue,
+            Row::Pane(_) => continue,
             Row::Location(loc) if is_free_slot(app, loc) => {
                 if let Some(Row::FreeSlots { count, .. }) = out.last_mut() {
                     *count += 1;
@@ -85,7 +87,10 @@ fn is_free_slot(app: &App, loc: &Loc) -> bool {
 
 /// Agent-state glyphs for a collapsed project: (glyph, count, style), non-zero only.
 fn rollup(app: &App, project: usize) -> Vec<(&'static str, usize, Style)> {
-    let panes = app.panes.iter().filter(|p| p.loc.project == project);
+    rollup_of(app.panes.iter().filter(|p| p.loc.project == project))
+}
+
+fn rollup_of<'a>(panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, usize, Style)> {
     let (mut working, mut blocked, mut done, mut idle) = (0, 0, 0, 0);
     for p in panes {
         if p.unseen_done {
@@ -270,7 +275,23 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                         }
                     }
                 };
-                buf.set_stringn(0, y, format!("{marker}{text}"), side as usize, style);
+                // This location's agents, right-aligned (counts only when > 1).
+                let states: Vec<String> = rollup_of(app.panes.iter().filter(|p| p.loc == loc))
+                    .into_iter()
+                    .map(|(g, n, _)| if n > 1 { format!("{g}{n}") } else { g.to_string() })
+                    .collect();
+                let badge = states.join(" ");
+                let badge_w = badge.chars().count() as u16;
+                let room = if badge_w > 0 { side.saturating_sub(badge_w + 1) } else { side };
+                buf.set_stringn(0, y, format!("{marker}{text}"), room as usize, style);
+                if badge_w > 0 && badge_w + 4 < side {
+                    let mut x = side - badge_w;
+                    for (g, n, gstyle) in rollup_of(app.panes.iter().filter(|p| p.loc == loc)) {
+                        let part = if n > 1 { format!("{g}{n}") } else { g.to_string() };
+                        buf.set_string(x, y, &part, gstyle);
+                        x += part.chars().count() as u16 + 1;
+                    }
+                }
             }
             Row::Pane(i) => {
                 let pane = &app.panes[i];
