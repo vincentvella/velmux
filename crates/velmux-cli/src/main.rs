@@ -70,6 +70,8 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Restart the TUI server in place (new binary), keeping every pane running.
+    Restart,
     /// Show key bindings; `--ghostty` prints the Ghostty keybinds for the root ones.
     Keys {
         #[arg(long)]
@@ -99,6 +101,7 @@ fn run() -> Result<()> {
     let cmd = match cli.cmd {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
+        Some(Cmd::Restart) => return velmux_tui::restart_server(),
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, .. }) => return velmux_tui::print_keys(ghostty),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
@@ -175,7 +178,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart => unreachable!(),
     }
     Ok(())
 }

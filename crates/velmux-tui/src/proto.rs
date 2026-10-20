@@ -12,6 +12,8 @@ pub enum ClientMsg {
     Resize { cols: u16, rows: u16 },
     /// One-shot control request (no attach): import a herdr session file.
     ImportHerdr { path: PathBuf, with_latest_claude: bool },
+    /// One-shot control request: live-restart the server.
+    Restart,
 }
 
 pub enum ServerMsg {
@@ -64,6 +66,7 @@ impl ClientMsg {
             }
             ClientMsg::Input(bytes) => write_frame(w, 2, bytes),
             ClientMsg::Resize { cols, rows } => write_frame(w, 3, &size_bytes(*cols, *rows)),
+            ClientMsg::Restart => write_frame(w, 5, &[]),
             ClientMsg::ImportHerdr { path, with_latest_claude } => {
                 let mut p = vec![*with_latest_claude as u8];
                 p.extend_from_slice(path.as_os_str().as_encoded_bytes());
@@ -85,6 +88,7 @@ impl ClientMsg {
                 let (cols, rows) = parse_size(&p)?;
                 Ok(ClientMsg::Resize { cols, rows })
             }
+            5 => Ok(ClientMsg::Restart),
             4 if !p.is_empty() => Ok(ClientMsg::ImportHerdr {
                 with_latest_claude: p[0] == 1,
                 path: PathBuf::from(String::from_utf8_lossy(&p[1..]).into_owned()),

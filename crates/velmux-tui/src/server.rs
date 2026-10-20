@@ -221,6 +221,12 @@ pub struct App {
     /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
     pending_out: Vec<u8>,
     mouse: bool,
+    /// Restart in place when the binary changes.
+    auto_restart: bool,
+    /// The binary this server runs, and its mtime when we last looked.
+    exe: Option<(PathBuf, Option<SystemTime>)>,
+    /// A newer binary seen once; restart when it's unchanged on the next look.
+    exe_pending: Option<SystemTime>,
     /// Claude Code's config dir, for its per-process session records.
     claude_dir: PathBuf,
     /// The editor pane opened by `settings`; config reloads when it closes.
@@ -250,7 +256,7 @@ pub fn serve() -> Result<()> {
             std::thread::spawn(move || {
                 let Ok(first) = ClientMsg::read(&mut stream) else { return };
                 let ev = match first {
-                    ClientMsg::ImportHerdr { .. } => Event::Control(stream, first),
+                    ClientMsg::ImportHerdr { .. } | ClientMsg::Restart => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -260,7 +266,10 @@ pub fn serve() -> Result<()> {
 
     let (settings, mut warning) = match Env::from_process().and_then(|env| tui_settings(&env)) {
         Ok(s) => (s, None),
-        Err(e) => (TuiSettings { prefix: None, mouse: true, keys: Default::default() }, Some(format!("config: {e:#}"))),
+        Err(e) => (
+            TuiSettings { prefix: None, mouse: true, auto_restart: true, keys: Default::default() },
+            Some(format!("config: {e:#}")),
+        ),
     };
     let prefix = match settings.prefix.as_deref().map(Prefix::parse) {
         None => Prefix::default(),
@@ -283,7 +292,15 @@ pub fn serve() -> Result<()> {
         });
     }
     let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
-    app.restore();
+    app.auto_restart = settings.auto_restart;
+    match std::env::var_os("VELMUX_HANDOFF") {
+        Some(path) => {
+            // Don't pass it on to panes we start later.
+            std::env::remove_var("VELMUX_HANDOFF");
+            app.adopt(Path::new(&path));
+        }
+        None => app.restore(),
+    }
     let (mut last_detect, mut last_slots, mut last_render) =
         (Instant::now(), Instant::now(), Instant::now());
     loop {
@@ -301,6 +318,7 @@ pub fn serve() -> Result<()> {
         }
         if last_slots.elapsed() >= Duration::from_secs(2) {
             app.refresh_slots();
+            app.check_binary();
             last_slots = Instant::now();
         }
         if app.quit {
@@ -345,6 +363,12 @@ impl App {
             copy: None,
             pending_out: Vec::new(),
             mouse,
+            auto_restart: true,
+            exe: std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).map(|p| {
+                let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                (p, mtime)
+            }),
+            exe_pending: None,
             claude_dir: Env::from_process().map(|e| e.claude_dir).unwrap_or_default(),
             settings_pane: None,
             input_carry: Vec::new(),
@@ -464,6 +488,14 @@ impl App {
             Event::Control(mut stream, msg) => {
                 let reply = match msg {
                     ClientMsg::ImportHerdr { path, with_latest_claude } => self.import_herdr(&path, with_latest_claude),
+                    ClientMsg::Restart => {
+                        let _ = ServerMsg::Reply("restarting — panes keep running".into()).write(&mut stream);
+                        drop(stream);
+                        if let Err(e) = self.restart() {
+                            self.say(format!("restart failed: {e:#}"));
+                        }
+                        return;
+                    }
                     _ => "unsupported request".into(),
                 };
                 let _ = ServerMsg::Reply(reply).write(&mut stream);
@@ -562,7 +594,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart => {}
         }
     }
 
@@ -612,6 +644,12 @@ impl App {
     }
 
     fn save(&self) {
+        if let Err(e) = session::save(&self.snapshot()) {
+            eprintln!("velmux: saving session: {e:#}");
+        }
+    }
+
+    fn snapshot(&self) -> Saved {
         let secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let views = self
             .views
@@ -652,7 +690,7 @@ impl App {
                 }
             })
             .collect();
-        let saved = Saved {
+        Saved {
             version: 1,
             projects: self.projects.iter().filter_map(|p| p.base().map(Path::to_path_buf)).collect(),
             folders: self
@@ -662,16 +700,130 @@ impl App {
                 .map(|f| SavedFolder { id: f.id.clone(), path: f.path.clone() })
                 .collect(),
             views,
-        };
-        if let Err(e) = session::save(&saved) {
-            eprintln!("velmux: saving session: {e:#}");
         }
+    }
+
+    /// Restart in place: exec the (possibly rebuilt) binary, handing it every
+    /// pane's open pty so shells and agents keep running and screens survive.
+    /// The attached client reconnects by itself.
+    fn restart(&mut self) -> Result<()> {
+        let exe = match &self.exe {
+            Some((p, _)) => p.clone(),
+            None => std::env::current_exe()?,
+        };
+        // Never exec a binary that can't even start: the panes would die with us.
+        let ok = std::process::Command::new(&exe).arg("--version").output().is_ok_and(|o| o.status.success());
+        if !ok {
+            anyhow::bail!("{} doesn't run (still building?)", exe.display());
+        }
+        if self.copy.is_some() {
+            self.exit_copy();
+        }
+        let saved = self.snapshot();
+        let live: Vec<session::LivePane> = self.panes.iter_mut().filter_map(Pane::handoff).collect();
+        let handoff = session::Handoff { saved, live, focus: self.focus };
+        let path = session::handoff_file()?;
+        std::fs::write(&path, serde_json::to_vec(&handoff)?)?;
+        // Also save normally, so a failed hand-off still restores.
+        self.save();
+        self.say_bye("restarting");
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&exe).arg("__server").env("VELMUX_HANDOFF", &path).exec();
+        // Only reached if exec failed: carry on as before.
+        let _ = std::fs::remove_file(&path);
+        Err(err.into())
+    }
+
+    /// Live-restart when the binary on disk changes (e.g. `cargo build`), once
+    /// its mtime has held still between two looks so a half-written file is skipped.
+    fn check_binary(&mut self) {
+        if !self.auto_restart {
+            return;
+        }
+        let Some((path, seen)) = &self.exe else { return };
+        let now = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if now == *seen || now.is_none() {
+            self.exe_pending = None;
+            return;
+        }
+        if self.exe_pending != now {
+            self.exe_pending = now;
+            return;
+        }
+        // Remember it either way, so a binary that fails the check isn't retried forever.
+        if let Some((_, seen)) = &mut self.exe {
+            *seen = now;
+        }
+        self.exe_pending = None;
+        if let Err(e) = self.restart() {
+            self.say(format!("new velmux binary, but restart failed: {e:#}"));
+        }
+    }
+
+    /// Pick up from a live restart: re-create projects and layouts from the
+    /// hand-off, adopting each pane's still-open pty instead of starting anew.
+    fn adopt(&mut self, path: &Path) {
+        let handoff: Option<session::Handoff> =
+            std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let _ = std::fs::remove_file(path);
+        let Some(handoff) = handoff else { return self.restore() };
+        self.restore_projects(&handoff.saved);
+        let mut live: HashMap<u64, session::LivePane> = handoff.live.into_iter().map(|l| (l.id, l)).collect();
+        for mut view in handoff.saved.views {
+            let project = if view.folder {
+                self.projects.iter().position(Project::is_unclassified)
+            } else {
+                self.projects.iter().position(|p| p.base() == Some(view.project.as_path()))
+            };
+            let Some(project) = project else { continue };
+            let loc = Loc { project, slot: view.slot.clone() };
+            let (active, name) = (view.active_tab, view.name.clone());
+            let mut tabs = Vec::new();
+            for saved_tab in view.take_tabs() {
+                let mut layout = Some(saved_tab.layout);
+                for p in saved_tab.panes {
+                    let adopted = live.remove(&p.id).and_then(|l| {
+                        Pane::adopt(p.id, loc.clone(), p.kind, &l, self.events.clone()).ok()
+                    });
+                    match adopted {
+                        Some(mut pane) => {
+                            pane.session = p.claude_session;
+                            pane.started_at = UNIX_EPOCH + Duration::from_secs(p.started_at);
+                            pane.cwd_override = p.cwd;
+                            pane.command_override = p.command;
+                            self.next_pane = self.next_pane.max(p.id + 1);
+                            self.panes.push(pane);
+                        }
+                        None => layout = layout.and_then(|l| l.remove(p.id)),
+                    }
+                }
+                if let Some(layout) = layout {
+                    let mut tab = Tab::new(layout, None);
+                    tab.name = saved_tab.name;
+                    tabs.push(tab);
+                }
+            }
+            if !tabs.is_empty() {
+                let active = active.min(tabs.len() - 1);
+                self.views.insert(loc, View { tabs, active, name });
+            }
+        }
+        // Anything left over has nowhere to live: let it go.
+        for l in live.into_values() {
+            unsafe {
+                libc::kill(l.pid as libc::pid_t, libc::SIGHUP);
+                libc::close(l.fd);
+            }
+        }
+        self.focus = handoff.focus.filter(|f| self.pane(*f).is_some());
+        self.current = self.focused().map(|p| p.loc.clone());
+        self.startup_warning = Some(format!("restarted in place · {} pane(s) kept running", self.panes.len()));
+        self.relayout();
     }
 
     /// Bring back the projects, layouts and panes of the last server. Claude panes
     /// resume their conversation in the slot they ran in; slots released since are skipped.
-    fn restore(&mut self) {
-        let Some(saved) = session::load() else { return };
+    fn restore_projects(&mut self, saved: &Saved) {
         let env = Env::from_process().ok();
         for base in &saved.projects {
             let Some(pool) = env.clone().and_then(|e| Pool::discover(e, base).ok()) else { continue };
@@ -685,6 +837,12 @@ impl App {
             }
         }
         self.refresh_slots();
+    }
+
+    fn restore(&mut self) {
+        let Some(saved) = session::load() else { return };
+        let env = Env::from_process().ok();
+        self.restore_projects(&saved);
 
         let mut taken: Vec<String> = Vec::new();
         let (mut panes, mut resumed) = (0, 0);
@@ -754,6 +912,10 @@ impl App {
 
     /// Register the repo containing `cwd` and make it current.
     fn open_cwd(&mut self, cwd: &Path) {
+        // A client reconnecting after a restart sends no cwd: keep where you were.
+        if cwd.as_os_str().is_empty() {
+            return;
+        }
         let pool = match Env::from_process().and_then(|env| Pool::discover(env, cwd)) {
             Ok(pool) => pool,
             Err(_) => return,
@@ -1318,6 +1480,11 @@ impl App {
             },
             Action::Settings => self.open_settings(),
             Action::ReloadConfig => self.reload_config(),
+            Action::RestartServer => {
+                if let Err(e) = self.restart() {
+                    self.say(format!("restart failed: {e:#}"));
+                }
+            }
             Action::NewTab => self.new_tab(),
             Action::NextTab => self.step_tab(1),
             Action::PrevTab => self.step_tab(-1),

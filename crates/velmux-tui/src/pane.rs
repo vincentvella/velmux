@@ -139,8 +139,50 @@ impl Pane {
         let child = pair.slave.spawn_command(cmd).map_err(|e| anyhow!("spawn: {e}"))?;
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader().map_err(|e| anyhow!("reader: {e}"))?;
-        let writer = pair.master.take_writer().map_err(|e| anyhow!("writer: {e}"))?;
+        Pane::assemble(id, loc, kind, pair.master, child, (cols, rows), events)
+    }
+
+    /// Rebuild a pane from a pty kept open across a live restart.
+    pub fn adopt(id: u64, loc: Loc, kind: Kind, live: &crate::session::LivePane, events: Sender<Event>) -> Result<Pane> {
+        let master: Box<dyn MasterPty + Send> = Box::new(crate::pty_raw::RawMaster::new(live.fd));
+        let child: Box<dyn Child + Send + Sync> = Box::new(crate::pty_raw::RawChild::new(live.pid));
+        let mut pane = Pane::assemble(id, loc, kind, master, child, (live.cols, live.rows), events)?;
+        pane.parser.process(live.screen.as_bytes());
+        pane.parser.callbacks_mut().title = live.title.clone();
+        Ok(pane)
+    }
+
+    /// Keep this pane's pty open across `exec`, describing it for the next server.
+    pub fn handoff(&mut self) -> Option<crate::session::LivePane> {
+        if let Some(held) = self.frozen.take() {
+            self.parser.process(&held);
+        }
+        self.parser.screen_mut().set_scrollback(0);
+        let fd = self.master.as_raw_fd()?;
+        crate::pty_raw::keep_across_exec(fd).ok()?;
+        let (rows, cols) = self.parser.screen().size();
+        Some(crate::session::LivePane {
+            id: self.id,
+            fd,
+            pid: self.child.process_id()?,
+            rows: rows.get(),
+            cols: cols.get(),
+            screen: self.parser.screen().state_formatted(),
+            title: self.title().to_string(),
+        })
+    }
+
+    fn assemble(
+        id: u64,
+        loc: Loc,
+        kind: Kind,
+        master: Box<dyn MasterPty + Send>,
+        child: Box<dyn Child + Send + Sync>,
+        (cols, rows): (u16, u16),
+        events: Sender<Event>,
+    ) -> Result<Pane> {
+        let mut reader = master.try_clone_reader().map_err(|e| anyhow!("reader: {e}"))?;
+        let writer = master.take_writer().map_err(|e| anyhow!("writer: {e}"))?;
         std::thread::spawn(move || {
             let mut buf = [0u8; 64 * 1024];
             loop {
@@ -161,7 +203,7 @@ impl Pane {
             loc,
             kind,
             parser: vt100::Parser::new_with_callbacks(nz(rows), nz(cols), 5000, Term::default()),
-            master: pair.master,
+            master,
             writer,
             child,
             agent: None,

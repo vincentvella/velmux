@@ -39,6 +39,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `w` | location picker: type to fuzzy-filter, ↑↓ / `^p ^n`, enter to go |
 | `W` | name this location (base, slot or folder); empty clears |
 | `s` / `R` | settings: edit the config in a tab, applied when you quit the editor / reload config now |
+| `ctrl+r` | live restart: new binary, every pane keeps running |
 | `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
 | `1`–`9`, `0` | slot N of this repo (folder N when unclassified), its base |
 | `o` | jump to the next agent that's blocked or finished unseen |
@@ -100,38 +101,22 @@ alternate screen, which has no history; copy mode can still copy what's visible.
 ### Restore
 
 The server saves projects, layouts and panes as they change
-(`~/.local/state/velmux/session.json`). After a restart (`<prefix> Q`, an
-upgrade, a crash, a reboot) `velmux` brings them back: shells and editors
-reopen, and Claude panes run `claude --resume` **inside the slot they ran in**.
-velmux launches Claude with `--session-id`, so no hooks are needed; if you
-`/clear` mid-pane, restore picks the newest transcript recorded in that slot.
-Slots released in the meantime are skipped.
+(`~/.local/state/velmux/session.json`). After a cold start (`<prefix> Q`, a
+crash, a reboot) `velmux` brings them back: shells and editors reopen, and
+Claude panes run `claude --resume` **inside the slot they ran in**. Each pane's
+exact session comes from Claude's own per-process record
+(`~/.claude/sessions/<pid>.json`), so it follows `/clear` and also covers a
+Claude you started by hand in a shell, which comes back as Claude. Slots
+released in the meantime are skipped.
 
-### Import from herdr
+### Live restart (hot reload)
 
-```sh
-velmux import-herdr --dry-run      # show what would come over
-velmux import-herdr                # ~/.config/herdr/session.json
-velmux import-herdr --session work # a named herdr session
-velmux import-herdr --with-latest-claude  # also pick up Claude history (below)
-```
-
-Each herdr workspace inside a git repo becomes that repo's base view (or slot,
-if it lives in one), with its active tab's split layout. Workspaces outside any
-repo land in an **unclassified** group at the bottom of the sidebar, one entry
-per folder (no slots there). Panes keep their working directory; agent panes
-come back as agents, and Claude resumes the session herdr recorded (or starts
-fresh, noted in the summary, if that transcript is gone). Extra tabs and
-locations velmux already has panes in are skipped and listed.
-
-herdr only records a Claude session for panes that were running Claude when it
-saved. `--with-latest-claude` also pulls Claude history: for each imported
-workspace without a Claude pane, it adds one resuming the newest conversation
-that ran anywhere in that repo (subfolders included), split beside the
-imported layout. Unclassified folders only take conversations held in exactly
-that folder (so `~` doesn't claim everything), and conversations written to in
-the last two minutes are left alone since they're probably open. `--dry-run`
-shows each one's first prompt and age.
+`velmux restart` (or `<prefix> ctrl+r`) re-execs the server in place: every
+pane's pty is handed to the new process, so shells, builds and Claude keep
+running and screens are kept (scrollback isn't), and your terminal reconnects
+by itself. With `auto_restart` on (the default) this happens automatically when
+the velmux binary changes, so `cargo build --release` is all it takes to pick
+up a new build. A binary that won't start is never exec'd.
 
 ## CLI
 
@@ -142,6 +127,7 @@ velmux status [--json]
 velmux release [slot]           # stash if dirty → detach to base ref → clean, deps kept
 velmux open [slot]              # editor from config / $VISUAL / $EDITOR
 velmux gc                       # prune dead worktrees, recreate missing slots
+velmux restart                  # live-restart the TUI server (panes keep running)
 ```
 
 Reclaiming a branch restores the work parked when it was released, in
@@ -175,6 +161,7 @@ editor = "code"
 agent = "claude"                         # command for agent panes
 prefix = "C-b"                           # TUI prefix: C-a, ctrl+space, ^], …
 mouse = true                             # click / drag / wheel in the TUI
+auto_restart = true                      # live-restart when the velmux binary changes
 claude_history = true
 ```
 

@@ -57,6 +57,8 @@ pub enum Action {
     /// Edit the config in a new tab; it reloads when the editor closes.
     Settings,
     ReloadConfig,
+    /// Re-exec the server (new binary) keeping every pane running.
+    RestartServer,
     /// Jump to the next agent that's blocked or finished unseen.
     Attention,
     Detach,
@@ -104,6 +106,7 @@ const NAMES: &[(&str, Action)] = &[
     ("rename_location", Action::RenameLocation),
     ("settings", Action::Settings),
     ("reload_config", Action::ReloadConfig),
+    ("restart_server", Action::RestartServer),
     ("attention", Action::Attention),
     ("detach", Action::Detach),
     ("quit", Action::Quit),
@@ -163,6 +166,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (RenameLocation, &["prefix+W", "super+shift+r"]),
         (Settings, &["prefix+s", "super+,"]),
         (ReloadConfig, &["prefix+R"]),
+        (RestartServer, &["prefix+ctrl+r"]),
         (Attention, &["prefix+o", "super+shift+u"]),
         (Detach, &["prefix+d"]),
         (Quit, &["prefix+Q"]),

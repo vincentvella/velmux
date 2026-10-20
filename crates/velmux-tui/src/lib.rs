@@ -12,11 +12,23 @@ mod pane;
 mod picker;
 mod prefix;
 mod proto;
+mod pty_raw;
 mod server;
 mod session;
 mod ui;
 
 pub use client::attach;
+
+/// `velmux restart`: re-exec the running server (picking up a rebuilt binary)
+/// without stopping any pane.
+pub fn restart_server() -> anyhow::Result<()> {
+    if std::os::unix::net::UnixStream::connect(paths::socket()?).is_err() {
+        println!("no velmux server running");
+        return Ok(());
+    }
+    println!("{}", client::request(proto::ClientMsg::Restart)?);
+    Ok(())
+}
 
 /// `velmux keys --test`: show the bytes each key press sends and what velmux
 /// would do with them. Run it in a plain terminal tab (not inside velmux, which

@@ -35,17 +35,21 @@ pub fn attach(cwd: PathBuf) -> Result<()> {
 }
 
 fn pump(mut stream: UnixStream, writer: UnixStream) -> Result<String> {
-    let mut input = writer.try_clone()?;
+    // The writer is swapped out when the server restarts in place.
+    let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
+    let input = writer.clone();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut buf = [0u8; 4096];
         while let Ok(n) = stdin.read(&mut buf) {
-            if n == 0 || ClientMsg::Input(buf[..n].to_vec()).write(&mut input).is_err() {
+            if n == 0 {
                 break;
             }
+            // A failed write mid-restart just drops that keystroke.
+            let _ = ClientMsg::Input(buf[..n].to_vec()).write(&mut *input.lock().unwrap());
         }
     });
-    let mut resize = writer;
+    let resize = writer.clone();
     std::thread::spawn(move || {
         let mut last = terminal::size().unwrap_or((0, 0));
         loop {
@@ -53,9 +57,7 @@ fn pump(mut stream: UnixStream, writer: UnixStream) -> Result<String> {
             let now = terminal::size().unwrap_or(last);
             if now != last {
                 last = now;
-                if (ClientMsg::Resize { cols: now.0, rows: now.1 }).write(&mut resize).is_err() {
-                    break;
-                }
+                let _ = (ClientMsg::Resize { cols: now.0, rows: now.1 }).write(&mut *resize.lock().unwrap());
             }
         }
     });
@@ -67,9 +69,30 @@ fn pump(mut stream: UnixStream, writer: UnixStream) -> Result<String> {
                 stdout.write_all(&bytes)?;
                 stdout.flush()?;
             }
+            ServerMsg::Bye(reason) if reason == "restarting" => {
+                stream = reconnect()?;
+                let (cols, rows) = terminal::size().unwrap_or((80, 24));
+                let mut w = stream.try_clone()?;
+                // An empty cwd tells the server to keep your current place.
+                ClientMsg::Hello { cols, rows, cwd: PathBuf::new() }.write(&mut w)?;
+                *writer.lock().unwrap() = w;
+            }
             ServerMsg::Bye(reason) | ServerMsg::Reply(reason) => return Ok(reason),
         }
     }
+}
+
+/// Wait for the restarted server's socket (it re-binds after exec).
+fn reconnect() -> Result<UnixStream> {
+    let sock = paths::socket()?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(s) = UnixStream::connect(&sock) {
+            return Ok(s);
+        }
+    }
+    bail!("server didn't come back after restarting; see {}", paths::log()?.display())
 }
 
 /// Send a one-shot control request to the server (starting it if needed).

@@ -85,6 +85,31 @@ pub struct SavedPane {
     pub command: Option<String>,
 }
 
+/// State passed to the next server across a live restart.
+#[derive(Serialize, Deserialize)]
+pub struct Handoff {
+    pub saved: Saved,
+    pub live: Vec<LivePane>,
+    pub focus: Option<u64>,
+}
+
+/// A pane whose pty stays open across `exec`.
+#[derive(Serialize, Deserialize)]
+pub struct LivePane {
+    pub id: u64,
+    pub fd: i32,
+    pub pid: u32,
+    pub rows: u16,
+    pub cols: u16,
+    /// The screen and terminal modes, replayed into the new parser.
+    pub screen: String,
+    pub title: String,
+}
+
+pub fn handoff_file() -> Result<PathBuf> {
+    Ok(paths::state_dir()?.join("handoff.json"))
+}
+
 fn file() -> Result<PathBuf> {
     Ok(paths::state_dir()?.join("session.json"))
 }
