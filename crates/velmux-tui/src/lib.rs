@@ -18,6 +18,64 @@ mod ui;
 
 pub use client::attach;
 
+/// `velmux keys --test`: show the bytes each key press sends and what velmux
+/// would do with them. Run it in a plain terminal tab (not inside velmux, which
+/// would act on the keys first). ctrl+c exits.
+pub fn key_test() -> anyhow::Result<()> {
+    use std::io::{Read, Write};
+    let settings = velmux_pool::tui_settings(&velmux_pool::Env::from_process()?)?;
+    let prefix = match settings.prefix.as_deref() {
+        Some(spec) => prefix::Prefix::parse(spec)?,
+        None => prefix::Prefix::default(),
+    };
+    let (map, _) = keys::Keymap::build(prefix.byte, &settings.keys);
+    if std::env::var_os("VELMUX").is_some() {
+        eprintln!("note: this is a velmux pane, so velmux sees your keys first; run this in a plain terminal tab");
+    }
+    println!("press keys to see what your terminal sends (prefix is {}); ctrl+c to quit", prefix.label);
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    let mut buf = [0u8; 256];
+    let mut after_prefix = false;
+    loop {
+        let n = stdin.read(&mut buf)?;
+        let bytes = &buf[..n];
+        if bytes == [0x03] {
+            break;
+        }
+        let shown: String = bytes
+            .iter()
+            .map(|&b| match b {
+                0x1b => "ESC".to_string(),
+                0x20..=0x7e => (b as char).to_string(),
+                b => format!("\\x{b:02x}"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let verdict = if after_prefix {
+            after_prefix = false;
+            match map.after_prefix(bytes) {
+                Some((a, _)) => format!("after prefix → {a:?}"),
+                None => "after prefix → (unbound)".into(),
+            }
+        } else if bytes == [prefix.byte] {
+            after_prefix = true;
+            "prefix".into()
+        } else {
+            match map.find_root(bytes) {
+                Some((0, a, len)) if len == bytes.len() => format!("prefix-less → {a:?}"),
+                Some((at, a, _)) => format!("prefix-less → {a:?} (with extra bytes around it at {at})"),
+                None => "→ goes to the pane".into(),
+            }
+        };
+        write!(out, "{shown:<28} {verdict}\r\n")?;
+        out.flush()?;
+    }
+    crossterm::terminal::disable_raw_mode()?;
+    Ok(())
+}
+
 /// `velmux keys`: the effective bindings, or `--ghostty` for the terminal config
 /// that makes Cmd chords reach velmux's root (prefix-less) bindings.
 pub fn print_keys(ghostty: bool) -> anyhow::Result<()> {

@@ -74,6 +74,9 @@ enum Cmd {
     Keys {
         #[arg(long)]
         ghostty: bool,
+        /// Show what each key press sends and which binding it hits.
+        #[arg(long, conflicts_with = "ghostty")]
+        test: bool,
     },
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
@@ -96,7 +99,8 @@ fn run() -> Result<()> {
     let cmd = match cli.cmd {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
-        Some(Cmd::Keys { ghostty }) => return velmux_tui::print_keys(ghostty),
+        Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
+        Some(Cmd::Keys { ghostty, .. }) => return velmux_tui::print_keys(ghostty),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
