@@ -1191,8 +1191,19 @@ impl App {
             }
             return;
         }
-        if ev.y == 0 || ev.y + 1 >= rows {
+        if ev.y == 0 {
+            if ev.is_press() && ev.is_left() {
+                let body = ui::pane_area(cols, rows, self.sidebar_hidden);
+                match ui::tab_hit(self, body, ev.x) {
+                    Some(ui::TabHit::Tab(i)) => self.goto_tab(i),
+                    Some(ui::TabHit::New) => self.new_tab(),
+                    None => {}
+                }
+            }
             return;
+        }
+        if self.sidebar_hidden && ev.y + 1 >= rows && (self.status_text().is_some() || !self.jobs.is_empty()) {
+            return; // the status strip
         }
         let Some(loc) = self.current_loc() else { return };
         let (rects, dividers) = self.view_rects(&loc);

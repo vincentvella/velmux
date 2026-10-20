@@ -459,43 +459,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
 
     // Header + pane body.
     let body = pane_area(cols, rows, app.sidebar_hidden);
-    let header = match (&focused, &current) {
-        (Some(pane), _) => {
-            let title = useful_title(pane).map(|t| format!(" — {t}")).unwrap_or_default();
-            format!("{} · {}{title}", app.loc_name(&pane.loc), pane_label(app, pane))
-        }
-        (None, Some(loc)) => app.loc_name(loc),
-        (None, None) => "velmux".into(),
-    };
-    // Tab bar, right-aligned in the header, when there's more than one; the
-    // header text is clipped to leave it room.
-    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1 || v.tabs.iter().any(|t| t.name.is_some()));
-    let tab_label = |i: usize, t: &crate::server::Tab| match &t.name {
-        Some(name) => format!(" {}:{name} ", i + 1),
-        None => format!(" {} ", i + 1),
-    };
-    let bar_width: u16 = tabbed.map_or(0, |v| {
-        v.tabs.iter().enumerate().map(|(i, t)| tab_label(i, t).chars().count() as u16).sum::<u16>() + 1
-    });
-    let header_width = body.width.saturating_sub(bar_width) as usize;
-    buf.set_stringn(body.x, 0, header, header_width, Style::new().add_modifier(Modifier::BOLD));
-    if let Some(view) = tabbed {
-        let mut x = body.right();
-        for i in (0..view.tabs.len()).rev() {
-            let label = tab_label(i, &view.tabs[i]);
-            let w = label.chars().count() as u16;
-            if x < body.x + w {
-                break;
-            }
-            x -= w;
-            let style = if i == view.active {
-                Style::new().bg(t.focus_bg).fg(t.focus_fg).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(t.dim)
-            };
-            buf.set_string(x, 0, label, style);
-        }
-    }
+    draw_header(app, body, buf);
 
     let mut cursor = None;
     match current.as_ref().filter(|loc| app.views.contains_key(loc)) {
@@ -725,6 +689,122 @@ fn draw_which_key(app: &App, body: Rect, buf: &mut Buffer) {
             }
         }
         y += band_h(band) + 1;
+    }
+}
+
+/// What a click in the header row lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabHit {
+    Tab(usize),
+    New,
+}
+
+/// One tab in the header strip.
+struct TabCell {
+    rect: Rect,
+    hit: TabHit,
+    number: String,
+    label: String,
+    glyph: Option<(&'static str, Style)>,
+    active: bool,
+}
+
+/// Whether the current place shows a tab strip (more than one tab, or a named one).
+fn tabbed(app: &App) -> Option<&crate::server::View> {
+    let loc = app.current_loc()?;
+    app.views.get(&loc).filter(|v| v.tabs.len() > 1 || v.tabs.iter().any(|t| t.name.is_some()))
+}
+
+/// The header's clickable cells: each tab (left to right) and the `+` new tab
+/// button after them, or on its own at the right when there's a single tab.
+fn tab_cells(app: &App, body: Rect) -> Vec<TabCell> {
+    let t = &app.theme;
+    let y = 0;
+    let plus = |x: u16| TabCell {
+        rect: Rect::new(x, y, 3, 1),
+        hit: TabHit::New,
+        number: String::new(),
+        label: "+".into(),
+        glyph: None,
+        active: false,
+    };
+    let Some(view) = tabbed(app) else {
+        return if app.current_loc().is_some() && body.width > 3 { vec![plus(body.right() - 3)] } else { Vec::new() };
+    };
+    let mut cells = Vec::new();
+    let mut x = body.x;
+    for (i, tab) in view.tabs.iter().enumerate() {
+        let active = i == view.active;
+        let leaves = tab.layout.leaves();
+        let shown = if active { app.focused().map(|p| p.id).filter(|f| tab.layout.contains(*f)) } else { None }
+            .or(tab.last_focus.filter(|f| tab.layout.contains(*f)))
+            .or(leaves.first().copied());
+        let label = match (&tab.name, shown.and_then(|id| app.pane(id))) {
+            (Some(name), _) => name.clone(),
+            (None, Some(p)) => pane_label(app, p).split(" · ").next().unwrap_or_default().to_string(),
+            (None, None) => "tab".into(),
+        };
+        let label: String = label.chars().take(18).collect();
+        // The most urgent state in the tab, so background tabs still tell you.
+        let glyph = rollup_of(t, leaves.iter().filter_map(|id| app.pane(*id))).first().map(|(g, _, st)| (*g, *st));
+        let number = format!("{}", i + 1);
+        let width = 1 + number.chars().count() + 1 + label.chars().count() + glyph.map_or(0, |_| 2) + 1;
+        let width = width as u16;
+        if x + width + 3 > body.right() {
+            break;
+        }
+        cells.push(TabCell { rect: Rect::new(x, y, width, 1), hit: TabHit::Tab(i), number, label, glyph, active });
+        x += width;
+    }
+    cells.push(plus(x));
+    cells
+}
+
+/// What's under a click in the header row.
+pub fn tab_hit(app: &App, body: Rect, x: u16) -> Option<TabHit> {
+    tab_cells(app, body).into_iter().find(|c| x >= c.rect.x && x < c.rect.right()).map(|c| c.hit)
+}
+
+/// The header row: the tab strip (when there's more than one tab) and where
+/// you are, the focused pane and its title.
+fn draw_header(app: &App, body: Rect, buf: &mut Buffer) {
+    let t = &app.theme;
+    let header = match (app.focused(), app.current_loc()) {
+        (Some(pane), _) => {
+            let title = useful_title(pane).map(|t| format!(" — {t}")).unwrap_or_default();
+            format!("{} · {}{title}", app.loc_name(&pane.loc), pane_label(app, pane))
+        }
+        (None, Some(loc)) => app.loc_name(&loc),
+        (None, None) => "velmux".into(),
+    };
+    let cells = tab_cells(app, body);
+    for c in &cells {
+        let x = c.rect.x;
+        if c.hit == TabHit::New {
+            buf.set_string(x + 1, 0, "+", Style::new().fg(t.dim));
+            continue;
+        }
+        let base = if c.active { Style::new().bg(t.focus_bg) } else { Style::new() };
+        buf.set_style(c.rect, base);
+        let num = if c.active { base.fg(t.focus_fg) } else { base.fg(t.dim) };
+        let label = if c.active { base.fg(t.focus_fg).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
+        buf.set_string(x + 1, 0, &c.number, num);
+        let lx = x + 2 + c.number.chars().count() as u16;
+        buf.set_string(lx, 0, &c.label, label);
+        if let Some((g, st)) = c.glyph {
+            buf.set_string(lx + c.label.chars().count() as u16 + 1, 0, g, st.patch(base));
+        }
+    }
+    if tabbed(app).is_some() {
+        // Tabs on the left; where you are, dimmed, in the room that's left.
+        let from = cells.last().map_or(body.x, |c| c.rect.right()) + 2;
+        let room = body.right().saturating_sub(from) as usize;
+        let len = header.chars().count();
+        let x = if len < room { body.right() - len as u16 } else { from };
+        buf.set_stringn(x, 0, &header, room, Style::new().fg(t.dim));
+    } else {
+        let room = body.width.saturating_sub(4) as usize;
+        buf.set_stringn(body.x, 0, &header, room, Style::new().add_modifier(Modifier::BOLD));
     }
 }
 
