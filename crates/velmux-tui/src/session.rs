@@ -37,11 +37,39 @@ pub struct SavedView {
     pub slot: Option<String>,
     #[serde(default)]
     pub folder: bool,
+    /// The first tab (kept so older velmux can still read the file).
+    pub layout: Layout,
+    pub panes: Vec<SavedPane>,
+    /// Every tab; when present, `layout` / `panes` mirror the first one.
+    #[serde(default)]
+    pub tabs: Vec<SavedTab>,
+    #[serde(default)]
+    pub active_tab: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedTab {
     pub layout: Layout,
     pub panes: Vec<SavedPane>,
 }
 
-#[derive(Serialize, Deserialize)]
+impl SavedView {
+    /// The view's tabs, whether saved by this version or one without tabs.
+    pub fn take_tabs(&mut self) -> Vec<SavedTab> {
+        if self.tabs.is_empty() {
+            vec![SavedTab { layout: self.layout.clone(), panes: std::mem::take(&mut self.panes) }]
+        } else {
+            std::mem::take(&mut self.tabs)
+        }
+    }
+
+    pub fn all_panes(&self) -> impl Iterator<Item = &SavedPane> {
+        let tabbed = !self.tabs.is_empty();
+        self.tabs.iter().flat_map(|t| &t.panes).chain(self.panes.iter().filter(move |_| !tabbed))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SavedPane {
     pub id: u64,
     pub kind: Kind,

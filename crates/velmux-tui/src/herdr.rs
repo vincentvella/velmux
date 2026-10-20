@@ -111,10 +111,22 @@ pub struct PlanView {
     pub target: Target,
     /// The location's root folder (base checkout, slot, or plain folder).
     pub root: PathBuf,
+    pub tabs: Vec<PlanTab>,
+    pub active_tab: usize,
+}
+
+#[derive(Debug)]
+pub struct PlanTab {
     /// Leaves are herdr pane ids, remapped when the panes are created.
     pub layout: Layout,
     pub zoomed: Option<u64>,
     pub panes: Vec<PlanPane>,
+}
+
+impl PlanView {
+    pub fn panes(&self) -> impl Iterator<Item = &PlanPane> {
+        self.tabs.iter().flat_map(|t| &t.panes)
+    }
 }
 
 /// Where an imported workspace lands.
@@ -169,15 +181,15 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
         if let (true, Some(layout), Some(panes)) = (tabs.is_empty(), layout, panes) {
             tabs.push(Tab { layout, panes, zoomed, focused });
         }
-        let extra_tabs = tabs.len().saturating_sub(1);
-        let Some(tab) = (active_tab < tabs.len()).then(|| tabs.swap_remove(active_tab)).or_else(|| tabs.pop()) else {
+        if tabs.is_empty() {
             plan.skipped.push((format!("workspace {}", n + 1), "no tabs".into()));
             continue;
-        };
+        }
+        let active_tab = active_tab.min(tabs.len() - 1);
         let anchor = worktree_space
             .map(|w| w.checkout_path)
             .or(identity_cwd)
-            .or_else(|| tab.panes.values().next().map(|p| p.cwd.clone()));
+            .or_else(|| tabs[active_tab].panes.values().next().map(|p| p.cwd.clone()));
         let label = custom_name.unwrap_or_else(|| {
             anchor.as_ref().and_then(|a| a.file_name()).map_or(format!("workspace {}", n + 1), |f| f.to_string_lossy().into_owned())
         });
@@ -217,26 +229,33 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
             }
         };
 
-        let leaves = leaves(&tab.layout);
-        let mut panes = leaves
-            .iter()
-            .filter_map(|id| tab.panes.get(id).map(|p| plan_pane(*id as u64, p, &root)))
-            .collect::<Vec<_>>();
-        for p in &mut panes {
-            if p.resume.as_ref().is_some_and(|id| !claude::session_exists(&env.claude_dir, id)) {
-                p.resume = None;
-                p.note = Some("recorded Claude session no longer exists; starts fresh".into());
+        let mut plan_tabs = Vec::new();
+        let mut active = 0;
+        for (i, tab) in tabs.iter().enumerate() {
+            let mut panes = leaves(&tab.layout)
+                .iter()
+                .filter_map(|id| tab.panes.get(id).map(|p| plan_pane(*id as u64, p, &root)))
+                .collect::<Vec<_>>();
+            for p in &mut panes {
+                if p.resume.as_ref().is_some_and(|id| !claude::session_exists(&env.claude_dir, id)) {
+                    p.resume = None;
+                    p.note = Some("recorded Claude session no longer exists; starts fresh".into());
+                }
             }
+            if panes.is_empty() {
+                continue;
+            }
+            if i == active_tab {
+                active = plan_tabs.len();
+            }
+            let zoomed = tab.zoomed.then_some(tab.focused).flatten().map(u64::from);
+            plan_tabs.push(PlanTab { layout: convert(&tab.layout), zoomed, panes });
         }
-        if panes.is_empty() {
+        if plan_tabs.is_empty() {
             plan.skipped.push((label, "no panes".into()));
             continue;
         }
-        let zoomed = tab.zoomed.then_some(tab.focused).flatten().map(u64::from);
-        if extra_tabs > 0 {
-            plan.skipped.push((label.clone(), format!("{extra_tabs} other tab(s); velmux has one layout per location")));
-        }
-        plan.views.push(PlanView { label, target, root, layout: convert(&tab.layout), zoomed, panes });
+        plan.views.push(PlanView { label, target, root, tabs: plan_tabs, active_tab: active });
     }
     if with_latest_claude {
         add_latest_claude(&mut plan, env);
@@ -245,10 +264,10 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
 }
 
 fn add_latest_claude(plan: &mut Plan, env: &Env) {
-    let mut taken: Vec<String> = plan.views.iter().flat_map(|v| &v.panes).filter_map(|p| p.resume.clone()).collect();
+    let mut taken: Vec<String> = plan.views.iter().flat_map(|v| v.panes()).filter_map(|p| p.resume.clone()).collect();
     let before = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
     for v in &mut plan.views {
-        if v.panes.iter().any(|p| p.kind == Kind::Agent && p.command.is_none() && p.resume.is_some()) {
+        if v.panes().any(|p| p.kind == Kind::Agent && p.command.is_none() && p.resume.is_some()) {
             continue;
         }
         let search = claude::Search {
@@ -263,16 +282,18 @@ fn add_latest_claude(plan: &mut Plan, env: &Env) {
         let title: String = found.title.clone().unwrap_or_default().chars().take(48).collect();
         let ago = age(found.modified);
         // A Claude pane with nothing to resume picks the conversation up itself.
-        if let Some(p) = v.panes.iter_mut().find(|p| p.kind == Kind::Agent && p.command.is_none()) {
+        let idle = v.tabs.iter_mut().flat_map(|t| &mut t.panes).find(|p| p.kind == Kind::Agent && p.command.is_none());
+        if let Some(p) = idle {
             p.resume = Some(found.id);
             p.note = Some(format!("resumes latest Claude: \"{title}\" ({ago} ago)"));
             continue;
         }
-        let id = v.layout.leaves().into_iter().max().unwrap_or(0) + 1;
-        let old = std::mem::replace(&mut v.layout, Layout::Leaf(0));
-        v.layout = Layout::Split { dir: Dir::Right, ratio: 0.5, a: Box::new(old), b: Box::new(Layout::Leaf(id)) };
+        let id = v.tabs.iter().flat_map(|t| t.layout.leaves()).max().unwrap_or(0) + 1;
+        let tab = &mut v.tabs[v.active_tab];
+        let old = std::mem::replace(&mut tab.layout, Layout::Leaf(0));
+        tab.layout = Layout::Split { dir: Dir::Right, ratio: 0.5, a: Box::new(old), b: Box::new(Layout::Leaf(id)) };
         let note = format!("adds latest Claude: \"{title}\" ({ago} ago)");
-        v.panes.push(PlanPane {
+        tab.panes.push(PlanPane {
             id,
             kind: Kind::Agent,
             cwd: (found.cwd != v.root).then_some(found.cwd),
@@ -370,14 +391,15 @@ impl Plan {
                 ),
                 Target::Folder { id } => format!("unclassified › {id} ({})", v.root.display()),
             };
-            let agents = v.panes.iter().filter(|p| p.kind == Kind::Agent).count();
-            let resumes = v.panes.iter().filter(|p| p.resume.is_some()).count();
+            let agents = v.panes().filter(|p| p.kind == Kind::Agent).count();
+            let resumes = v.panes().filter(|p| p.resume.is_some()).count();
+            let tabs = if v.tabs.len() > 1 { format!("{} tabs, ", v.tabs.len()) } else { String::new() };
             out.push_str(&format!(
-                "  + {} → {place}: {} pane(s), {agents} agent(s), {resumes} Claude resume(s)\n",
+                "  + {} → {place}: {tabs}{} pane(s), {agents} agent(s), {resumes} Claude resume(s)\n",
                 v.label,
-                v.panes.len()
+                v.panes().count()
             ));
-            for note in v.panes.iter().filter_map(|p| p.note.as_ref()) {
+            for note in v.panes().filter_map(|p| p.note.as_ref()) {
                 out.push_str(&format!("      ↳ {note}\n"));
             }
         }
@@ -457,20 +479,22 @@ mod tests {
         // The folder outside any repo is kept, as unclassified.
         assert_eq!(plan.views[1].target, Target::Folder { id: "notes".into() });
         assert_eq!(plan.views[1].root, plain);
-        assert_eq!(v.zoomed, Some(2));
-        let Layout::Split { dir: Dir::Right, ratio, b, .. } = &v.layout else { panic!("{:?}", v.layout) };
+        // Both herdr tabs come over; the first is active.
+        assert_eq!((v.tabs.len(), v.active_tab), (2, 0));
+        let t = &v.tabs[0];
+        assert_eq!(t.zoomed, Some(2));
+        let Layout::Split { dir: Dir::Right, ratio, b, .. } = &t.layout else { panic!("{:?}", t.layout) };
         assert!((ratio - 0.6).abs() < 1e-6);
         assert!(matches!(b.as_ref(), Layout::Split { dir: Dir::Down, .. }));
 
-        let p: HashMap<u64, &PlanPane> = v.panes.iter().map(|p| (p.id, p)).collect();
+        let p: HashMap<u64, &PlanPane> = t.panes.iter().map(|p| (p.id, p)).collect();
         assert_eq!((p[&1].kind, p[&1].resume.as_deref(), p[&1].cwd.as_ref()), (Kind::Agent, Some("abc-123"), None));
         assert_eq!((p[&2].kind, p[&2].cwd.as_deref()), (Kind::Shell, Some(repo.join("packages/web").as_path())));
         assert_eq!((p[&3].kind, p[&3].command.as_deref()), (Kind::Agent, Some(r"codex resume 'it'\''s'")));
 
         let reasons: Vec<&str> = plan.skipped.iter().map(|(_, r)| r.as_str()).collect();
-        assert_eq!(reasons.len(), 3, "{reasons:?}");
-        assert!(reasons[0].contains("other tab"));
-        assert!(reasons[1].contains("already maps") && reasons[2].contains("already maps"), "{reasons:?}");
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert!(reasons[0].contains("already maps") && reasons[1].contains("already maps"), "{reasons:?}");
     }
 
     #[test]
@@ -507,11 +531,11 @@ mod tests {
         let ids: Vec<_> = plan.views.iter().map(|v| v.target.clone()).collect();
         assert_eq!(ids, [Target::Folder { id: "Notes".into() }, Target::Folder { id: "Notes-2".into() }]);
         // The stale pane picks up the folder's own conversation, never the nested one.
-        let first = &plan.views[0].panes[0];
-        assert_eq!((first.resume.as_deref(), plan.views[0].panes.len()), (Some("home-1"), 1));
+        let first = &plan.views[0].tabs[0].panes[0];
+        assert_eq!((first.resume.as_deref(), plan.views[0].panes().count()), (Some("home-1"), 1));
         // The second workspace finds nothing left at exactly `home`.
-        assert_eq!(plan.views[1].panes.len(), 1);
-        assert_eq!(plan.views[1].panes[0].resume, None);
+        assert_eq!(plan.views[1].panes().count(), 1);
+        assert_eq!(plan.views[1].tabs[0].panes[0].resume, None);
     }
 
     #[test]
@@ -535,9 +559,9 @@ mod tests {
         std::fs::write(&file, session.to_string()).unwrap();
 
         let without = plan(&file, &env, false).unwrap();
-        assert_eq!(without.views[0].panes.len(), 1);
+        assert_eq!(without.views[0].panes().count(), 1);
         let with = plan(&file, &env, true).unwrap();
-        let v = &with.views[0];
+        let v = &with.views[0].tabs[0];
         assert_eq!(v.layout.leaves(), vec![1, 2]);
         let added = &v.panes[1];
         assert_eq!((added.kind, added.resume.as_deref(), added.cwd.as_deref()), (Kind::Agent, Some("sess-1"), Some(web.as_path())));

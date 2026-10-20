@@ -22,7 +22,7 @@ use crate::pane::Term;
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::prefix::Prefix;
 use crate::proto::{ClientMsg, ServerMsg};
-use crate::session::{self, Saved, SavedFolder, SavedPane, SavedView};
+use crate::session::{self, Saved, SavedFolder, SavedPane, SavedTab, SavedView};
 use crate::{paths, ui};
 
 
@@ -122,11 +122,49 @@ struct Client {
     stream: UnixStream,
 }
 
-/// The panes of one location (base or slot), tiled.
-pub struct View {
+/// One tab: a tiled set of panes.
+pub struct Tab {
     pub layout: Layout,
     /// Show only this pane, full size.
     pub zoomed: Option<u64>,
+    /// Pane to focus when switching back to this tab.
+    pub last_focus: Option<u64>,
+}
+
+impl Tab {
+    pub fn new(layout: Layout, zoomed: Option<u64>) -> Tab {
+        Tab { layout, zoomed, last_focus: None }
+    }
+}
+
+/// The tabs of one location (base, slot or folder). Derefs to the active tab, so
+/// layout operations act on what's on screen.
+pub struct View {
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+}
+
+impl View {
+    pub fn single(tab: Tab) -> View {
+        View { tabs: vec![tab], active: 0 }
+    }
+
+    pub fn tab_of(&self, pane: u64) -> Option<usize> {
+        self.tabs.iter().position(|t| t.layout.contains(pane))
+    }
+}
+
+impl std::ops::Deref for View {
+    type Target = Tab;
+    fn deref(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+}
+
+impl std::ops::DerefMut for View {
+    fn deref_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
 }
 
 pub struct App {
@@ -487,15 +525,23 @@ impl App {
 
     /// Size every pane to its rect in its location's layout.
     fn relayout(&mut self) {
-        let locs: Vec<Loc> = self.views.keys().cloned().collect();
-        for loc in locs {
-            let titled = self.titled(&loc);
-            let (rects, _) = self.view_rects(&loc);
-            for (id, outer) in rects {
-                let inner = ui::content_rect(outer, titled);
-                if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
-                    pane.resize(inner.width, inner.height);
-                }
+        self.reveal_focus();
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        // Every tab, not just the visible one, so switching tabs never shows a stale size.
+        let mut sizes = Vec::new();
+        for view in self.views.values() {
+            for tab in &view.tabs {
+                let titled = tab.zoomed.is_none() && tab.layout.leaves().len() > 1;
+                let rects = match tab.zoomed {
+                    Some(id) => vec![(id, body)],
+                    None => tab.layout.rects(body).0,
+                };
+                sizes.extend(rects.into_iter().map(|(id, r)| (id, ui::content_rect(r, titled))));
+            }
+        }
+        for (id, inner) in sizes {
+            if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
+                pane.resize(inner.width, inner.height);
             }
         }
         self.full_redraw = true;
@@ -504,30 +550,55 @@ impl App {
         self.save();
     }
 
+    /// Make the focused pane's tab the visible one (focus can move by sidebar,
+    /// attention jump, cycling…), and remember it as that tab's focus.
+    fn reveal_focus(&mut self) {
+        let Some(id) = self.focus else { return };
+        let Some(loc) = self.pane(id).map(|p| p.loc.clone()) else { return };
+        if let Some(view) = self.views.get_mut(&loc) {
+            if let Some(t) = view.tab_of(id) {
+                view.active = t;
+                view.tabs[t].last_focus = Some(id);
+            }
+        }
+    }
+
     fn save(&self) {
         let secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let views = self
             .views
             .iter()
-            .map(|(loc, view)| SavedView {
-                project: self.projects[loc.project].base().map(Path::to_path_buf).unwrap_or_default(),
-                slot: loc.slot.clone(),
-                folder: self.projects[loc.project].is_unclassified(),
-                layout: view.layout.clone(),
-                panes: view
-                    .layout
-                    .leaves()
-                    .into_iter()
-                    .filter_map(|id| self.pane(id))
-                    .map(|p| SavedPane {
-                        id: p.id,
-                        kind: p.kind,
-                        claude_session: p.session.clone(),
-                        started_at: secs(p.started_at),
-                        cwd: p.cwd_override.clone(),
-                        command: p.command_override.clone(),
+            .map(|(loc, view)| {
+                let tabs: Vec<SavedTab> = view
+                    .tabs
+                    .iter()
+                    .map(|tab| SavedTab {
+                        layout: tab.layout.clone(),
+                        panes: tab
+                            .layout
+                            .leaves()
+                            .into_iter()
+                            .filter_map(|id| self.pane(id))
+                            .map(|p| SavedPane {
+                                id: p.id,
+                                kind: p.kind,
+                                claude_session: p.session.clone(),
+                                started_at: secs(p.started_at),
+                                cwd: p.cwd_override.clone(),
+                                command: p.command_override.clone(),
+                            })
+                            .collect(),
                     })
-                    .collect(),
+                    .collect();
+                SavedView {
+                    project: self.projects[loc.project].base().map(Path::to_path_buf).unwrap_or_default(),
+                    slot: loc.slot.clone(),
+                    folder: self.projects[loc.project].is_unclassified(),
+                    layout: tabs[0].layout.clone(),
+                    panes: tabs[0].panes.clone(),
+                    active_tab: view.active,
+                    tabs,
+                }
             })
             .collect();
         let saved = Saved {
@@ -565,17 +636,17 @@ impl App {
         self.refresh_slots();
 
         let known: Vec<String> =
-            saved.views.iter().flat_map(|v| &v.panes).filter_map(|p| p.claude_session.clone()).collect();
+            saved.views.iter().flat_map(|v| v.all_panes()).filter_map(|p| p.claude_session.clone()).collect();
         let mut taken: Vec<String> = Vec::new();
         let (mut panes, mut resumed) = (0, 0);
-        for view in saved.views {
+        for mut view in saved.views {
             let project = if view.folder {
                 self.projects.iter().position(Project::is_unclassified)
             } else {
                 self.projects.iter().position(|p| p.base() == Some(view.project.as_path()))
             };
             let Some(project) = project else { continue };
-            let loc = Loc { project, slot: view.slot };
+            let loc = Loc { project, slot: view.slot.clone() };
             if let (false, Some(id)) = (view.folder, &loc.slot) {
                 let in_use = self.projects[project].slots.iter().any(|s| &s.id == id && s.status == Status::InUse);
                 if !in_use {
@@ -583,9 +654,12 @@ impl App {
                 }
             }
             let Some(cwd) = self.loc_cwd(&loc) else { continue };
-            let mut layout = Some(view.layout);
+            let active = view.active_tab;
+            let mut tabs = Vec::new();
+            for saved_tab in view.take_tabs() {
+            let mut layout = Some(saved_tab.layout);
             let mut ids = HashMap::new();
-            for p in view.panes {
+            for p in saved_tab.panes {
                 let pane_cwd = p.cwd.clone().unwrap_or_else(|| cwd.clone());
                 let resume = match (&env, p.kind) {
                     (Some(env), Kind::Agent) if p.command.is_none() => {
@@ -615,7 +689,12 @@ impl App {
                 }
             }
             if let Some(layout) = layout {
-                self.views.insert(loc, View { layout: layout.remap(&ids), zoomed: None });
+                tabs.push(Tab::new(layout.remap(&ids), None));
+            }
+            }
+            if !tabs.is_empty() {
+                let active = active.min(tabs.len() - 1);
+                self.views.insert(loc, View { tabs, active });
             }
         }
         if panes > 0 && self.startup_warning.is_none() {
@@ -1062,10 +1141,60 @@ impl App {
                 self.relayout();
             }
             Action::Attention => self.next_attention(),
-            Action::NewTab | Action::NextTab | Action::PrevTab | Action::Tab(_) => {
-                self.say("tabs aren't available yet")
-            }
+            Action::NewTab => self.new_tab(),
+            Action::NextTab => self.step_tab(1),
+            Action::PrevTab => self.step_tab(-1),
+            Action::Tab(n) => self.goto_tab(n as usize - 1),
         }
+    }
+
+    /// A new tab in the current location, starting with a shell.
+    fn new_tab(&mut self) {
+        let Some(loc) = self.current_loc() else {
+            return self.say("not in a git repo — run velmux from inside one");
+        };
+        match self.launch(&loc, Kind::Shell, LaunchOpts::default()) {
+            Ok(id) => {
+                let tab = Tab::new(Layout::Leaf(id), None);
+                match self.views.get_mut(&loc) {
+                    Some(view) => {
+                        view.tabs.push(tab);
+                        view.active = view.tabs.len() - 1;
+                    }
+                    None => {
+                        self.views.insert(loc.clone(), View::single(tab));
+                    }
+                }
+                self.focus = Some(id);
+                self.current = Some(loc);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    fn goto_tab(&mut self, index: usize) {
+        let Some(loc) = self.current_loc() else { return };
+        let Some(view) = self.views.get_mut(&loc) else { return };
+        if index >= view.tabs.len() {
+            let n = view.tabs.len();
+            return self.say(format!("no tab {} ({n} open)", index + 1));
+        }
+        view.active = index;
+        let tab = &view.tabs[index];
+        self.focus = tab.last_focus.filter(|f| tab.layout.contains(*f)).or_else(|| tab.layout.leaves().first().copied());
+        if self.copy.is_some() {
+            self.exit_copy();
+        }
+        self.full_redraw = true;
+    }
+
+    fn step_tab(&mut self, step: isize) {
+        let Some(loc) = self.current_loc() else { return };
+        let Some(view) = self.views.get(&loc) else { return };
+        let n = view.tabs.len() as isize;
+        let next = (view.active as isize + step).rem_euclid(n) as usize;
+        self.goto_tab(next);
     }
 
     /// Locations that have panes, in sidebar order (what "location N" counts).
@@ -1083,7 +1212,7 @@ impl App {
         if self.copy.is_some() {
             self.exit_copy();
         }
-        self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
+        self.focus = self.views.get(&loc).and_then(|v| v.last_focus.or_else(|| v.layout.leaves().first().copied()));
         self.current = Some(loc);
         self.full_redraw = true;
     }
@@ -1317,10 +1446,12 @@ impl App {
                 skipped.push((v.label, "velmux already has panes there".into()));
                 continue;
             }
-            let mut layout = Some(v.layout);
+            let mut tabs = Vec::new();
+            for plan_tab in v.tabs {
+            let mut layout = Some(plan_tab.layout);
             let mut ids = HashMap::new();
-            let resumes = v.panes.iter().filter(|p| p.resume.is_some()).count();
-            for p in v.panes {
+            let resumes = plan_tab.panes.iter().filter(|p| p.resume.is_some()).count();
+            for p in plan_tab.panes {
                 let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command };
                 match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
@@ -1330,12 +1461,18 @@ impl App {
                 }
             }
             let Some(layout) = layout else { continue };
-            let zoomed = v.zoomed.and_then(|z| ids.get(&z).copied());
+            let zoomed = plan_tab.zoomed.and_then(|z| ids.get(&z).copied());
             panes += ids.len();
             resumed += resumes;
-            imported += 1;
             first.get_or_insert((loc.clone(), layout.leaves().first().and_then(|l| ids.get(l).copied())));
-            self.views.insert(loc, View { layout: layout.remap(&ids), zoomed });
+            tabs.push(Tab::new(layout.remap(&ids), zoomed));
+            }
+            if tabs.is_empty() {
+                continue;
+            }
+            imported += 1;
+            let active = v.active_tab.min(tabs.len() - 1);
+            self.views.insert(loc, View { tabs, active });
         }
         if let (None, Some((loc, pane))) = (self.focus, first) {
             self.focus = pane;
@@ -1355,7 +1492,7 @@ impl App {
     fn insert_into_view(&mut self, loc: &Loc, id: u64, dir: Option<Dir>) {
         let (rects, _) = self.view_rects(loc);
         let Some(view) = self.views.get_mut(loc) else {
-            self.views.insert(loc.clone(), View { layout: Layout::Leaf(id), zoomed: None });
+            self.views.insert(loc.clone(), View::single(Tab::new(Layout::Leaf(id), None)));
             return;
         };
         view.zoomed = None;
@@ -1490,15 +1627,24 @@ impl App {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let mut pane = self.panes.remove(i);
         pane.reap();
-        if let Some(view) = self.views.remove(&pane.loc) {
-            if let Some(layout) = view.layout.remove(id) {
-                let zoomed = view.zoomed.filter(|z| *z != id);
-                self.views.insert(pane.loc.clone(), View { layout, zoomed });
+        if let Some(mut view) = self.views.remove(&pane.loc) {
+            if let Some(t) = view.tab_of(id) {
+                let tab = view.tabs.remove(t);
+                if let Some(layout) = tab.layout.remove(id) {
+                    let zoomed = tab.zoomed.filter(|z| *z != id);
+                    view.tabs.insert(t, Tab { layout, zoomed, last_focus: tab.last_focus.filter(|f| *f != id) });
+                } else if view.active >= t && view.active > 0 {
+                    view.active -= 1; // the tab closed; stay on its neighbour
+                }
+            }
+            if !view.tabs.is_empty() {
+                view.active = view.active.min(view.tabs.len() - 1);
+                self.views.insert(pane.loc.clone(), view);
             }
         }
         if self.focus == Some(id) {
-            // Prefer another pane in the same place, else nothing.
-            self.focus = self.views.get(&pane.loc).and_then(|v| v.layout.leaves().first().copied());
+            // Prefer the tab's last focus, another pane in the same place, else nothing.
+            self.focus = self.views.get(&pane.loc).and_then(|v| v.last_focus.or_else(|| v.layout.leaves().first().copied()));
             self.current = Some(pane.loc);
         }
         self.relayout();
@@ -1547,6 +1693,7 @@ impl App {
 
     fn render(&mut self) {
         self.dirty = false;
+        self.reveal_focus();
         if self.client.is_none() {
             return;
         }

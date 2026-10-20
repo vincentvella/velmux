@@ -156,7 +156,11 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                     Style::new()
                 };
                 buf.set_stringn(3, y, glyph, 1, gstyle);
-                let label = format!(" {} ", pane_label(pane));
+                let tab = app.views.get(&pane.loc).filter(|v| v.tabs.len() > 1).and_then(|v| v.tab_of(pane.id));
+                let label = match tab {
+                    Some(t) => format!(" {}:{} ", t + 1, pane_label(pane)),
+                    None => format!(" {} ", pane_label(pane)),
+                };
                 buf.set_stringn(4, y, label, side.saturating_sub(4) as usize, style);
             }
         }
@@ -178,7 +182,29 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         (None, Some(loc)) => app.loc_name(loc),
         (None, None) => "velmux".into(),
     };
-    buf.set_stringn(body.x, 0, header, body.width as usize, Style::new().add_modifier(Modifier::BOLD));
+    // Tab bar, right-aligned in the header, when there's more than one; the
+    // header text is clipped to leave it room.
+    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1);
+    let bar_width: u16 = tabbed.map_or(0, |v| (1..=v.tabs.len()).map(|i| format!(" {i} ").len() as u16).sum::<u16>() + 1);
+    let header_width = body.width.saturating_sub(bar_width) as usize;
+    buf.set_stringn(body.x, 0, header, header_width, Style::new().add_modifier(Modifier::BOLD));
+    if let Some(view) = tabbed {
+        let mut x = body.right();
+        for i in (0..view.tabs.len()).rev() {
+            let label = format!(" {} ", i + 1);
+            let w = label.chars().count() as u16;
+            if x < body.x + w {
+                break;
+            }
+            x -= w;
+            let style = if i == view.active {
+                Style::new().bg(Color::Indexed(24)).fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
+            buf.set_string(x, 0, label, style);
+        }
+    }
 
     let mut cursor = None;
     match current.as_ref().filter(|loc| app.views.contains_key(loc)) {
