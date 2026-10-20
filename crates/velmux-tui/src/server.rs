@@ -7,20 +7,21 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use velmux_pool::{claude, tui_settings, ClaimOpts, Env, Pool, SlotView, Status, TuiSettings};
+use velmux_pool::{claude, tui_settings, ClaimOpts, Config, Env, Pool, SlotView, Status, TuiSettings};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use vt100::MouseProtocolMode;
 
 use crate::copy::{self, Action, Copy};
+use crate::herdr::{self, Plan, Target};
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::mouse::{self, Chunk, MouseEvent};
 use crate::pane::Term;
 use crate::pane::{Kind, Launch, Loc, Pane};
 use crate::prefix::Prefix;
 use crate::proto::{ClientMsg, ServerMsg};
-use crate::session::{self, Saved, SavedPane, SavedView};
+use crate::session::{self, Saved, SavedFolder, SavedPane, SavedView};
 use crate::{paths, ui};
 
 // Arrow keys after the prefix, mapped out of the byte range commands use.
@@ -31,7 +32,10 @@ const KEY_LEFT: u8 = 0xF4;
 const KEY_PGUP: u8 = 0xF5;
 
 pub enum Event {
-    Client(UnixStream),
+    /// A new connection and its first message (`Hello` attaches).
+    Client(UnixStream, ClientMsg),
+    /// A one-shot control connection.
+    Control(UnixStream, ClientMsg),
     FromClient(u64, ClientMsg),
     ClientGone(u64),
     PtyOutput(u64, Vec<u8>),
@@ -40,9 +44,38 @@ pub enum Event {
     Released { project: usize, slot: String, result: Result<String, String> },
 }
 
+/// A git repo with its pool, or the "unclassified" group of plain folders.
 pub struct Project {
-    pub pool: Arc<Pool>,
+    /// `None` for the unclassified group.
+    pub pool: Option<Arc<Pool>>,
+    /// The repo's config, or global defaults for unclassified folders.
+    pub cfg: Config,
     pub slots: Vec<SlotView>,
+    /// Unclassified only: its folders, addressed by id in `Loc::slot`.
+    pub folders: Vec<Folder>,
+}
+
+pub struct Folder {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+impl Project {
+    fn repo(pool: Pool) -> Project {
+        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), folders: Vec::new() }
+    }
+
+    pub fn name(&self) -> &str {
+        self.pool.as_ref().map_or("unclassified", |p| p.name.as_str())
+    }
+
+    pub fn base(&self) -> Option<&Path> {
+        self.pool.as_ref().map(|p| p.base.as_path())
+    }
+
+    pub fn is_unclassified(&self) -> bool {
+        self.pool.is_none()
+    }
 }
 
 pub enum Mode {
@@ -60,6 +93,14 @@ enum Drag {
     Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
     /// Selecting text; copy mode opens on the first motion, copies on release.
     Select { pane: u64, origin: (u16, u16), moved: bool },
+}
+
+/// Overrides for a new pane (restore and import).
+#[derive(Default)]
+struct LaunchOpts {
+    resume: Option<String>,
+    cwd: Option<PathBuf>,
+    command: Option<String>,
 }
 
 pub enum Confirm {
@@ -119,10 +160,18 @@ pub fn serve() -> Result<()> {
     let (tx, rx) = channel();
     let accept_tx = tx.clone();
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if accept_tx.send(Event::Client(stream)).is_err() {
-                break;
-            }
+        for mut stream in listener.incoming().flatten() {
+            // Read the first frame off the accept thread so control requests never
+            // disturb the attached client.
+            let tx = accept_tx.clone();
+            std::thread::spawn(move || {
+                let Ok(first) = ClientMsg::read(&mut stream) else { return };
+                let ev = match first {
+                    ClientMsg::ImportHerdr { .. } => Event::Control(stream, first),
+                    _ => Event::Client(stream, first),
+                };
+                let _ = tx.send(ev);
+            });
         }
     });
 
@@ -241,13 +290,45 @@ impl App {
         self.focused()
             .map(|p| p.loc.clone())
             .or_else(|| self.current.clone())
-            .or_else(|| (!self.projects.is_empty()).then_some(Loc { project: 0, slot: None }))
+            .or_else(|| {
+                let project = self.projects.iter().position(|p| !p.is_unclassified())?;
+                Some(Loc { project, slot: None })
+            })
+    }
+
+    /// The unclassified group, created on first use.
+    fn unclassified(&mut self) -> usize {
+        if let Some(i) = self.projects.iter().position(Project::is_unclassified) {
+            return i;
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        // Global settings (agent, editor) apply; a broken config falls back to defaults.
+        let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
+        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), folders: Vec::new() });
+        self.projects.len() - 1
+    }
+
+    /// Add (or find) folder `path` in the unclassified group; returns its location.
+    fn folder_loc(&mut self, wanted_id: &str, path: &Path) -> Loc {
+        let project = self.unclassified();
+        let folders = &mut self.projects[project].folders;
+        if let Some(f) = folders.iter().find(|f| f.id == wanted_id && f.path == path) {
+            return Loc { project, slot: Some(f.id.clone()) };
+        }
+        let mut id = wanted_id.to_string();
+        let mut n = 2;
+        while folders.iter().any(|f| f.id == id) {
+            id = format!("{wanted_id}-{n}");
+            n += 1;
+        }
+        folders.push(Folder { id: id.clone(), path: path.to_path_buf() });
+        Loc { project, slot: Some(id) }
     }
 
     pub fn loc_name(&self, loc: &Loc) -> String {
         let project = &self.projects[loc.project];
         match &loc.slot {
-            None => format!("{} › base", project.pool.name),
+            None => format!("{} › base", project.name()),
             Some(id) => {
                 let branch = project
                     .slots
@@ -256,7 +337,7 @@ impl App {
                     .and_then(|s| s.branch.clone())
                     .map(|b| format!(" · {b}"))
                     .unwrap_or_default();
-                format!("{} › {id}{branch}", project.pool.name)
+                format!("{} › {id}{branch}", project.name())
             }
         }
     }
@@ -277,7 +358,14 @@ impl App {
 
     fn handle(&mut self, ev: Event) {
         match ev {
-            Event::Client(stream) => self.attach(stream),
+            Event::Client(stream, first) => self.attach(stream, first),
+            Event::Control(mut stream, msg) => {
+                let reply = match msg {
+                    ClientMsg::ImportHerdr { path, with_latest_claude } => self.import_herdr(&path, with_latest_claude),
+                    _ => "unsupported request".into(),
+                };
+                let _ = ServerMsg::Reply(reply).write(&mut stream);
+            }
             Event::FromClient(conn, msg) => {
                 if self.client.as_ref().map(|c| c.conn) == Some(conn) {
                     self.on_client(msg);
@@ -327,7 +415,7 @@ impl App {
         }
     }
 
-    fn attach(&mut self, stream: UnixStream) {
+    fn attach(&mut self, stream: UnixStream, first: ClientMsg) {
         self.say_bye("attached from another terminal");
         let conn = self.next_conn;
         self.next_conn += 1;
@@ -342,6 +430,7 @@ impl App {
             let _ = tx.send(Event::ClientGone(conn));
         });
         self.client = Some(Client { conn, stream });
+        self.on_client(first);
     }
 
     fn say_bye(&mut self, reason: &str) {
@@ -364,6 +453,8 @@ impl App {
             }
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
+            // Only valid as the first message of a control connection.
+            ClientMsg::ImportHerdr { .. } => {}
         }
     }
 
@@ -397,8 +488,9 @@ impl App {
             .views
             .iter()
             .map(|(loc, view)| SavedView {
-                project: self.projects[loc.project].pool.base.clone(),
+                project: self.projects[loc.project].base().map(Path::to_path_buf).unwrap_or_default(),
                 slot: loc.slot.clone(),
+                folder: self.projects[loc.project].is_unclassified(),
                 layout: view.layout.clone(),
                 panes: view
                     .layout
@@ -410,13 +502,21 @@ impl App {
                         kind: p.kind,
                         claude_session: p.session.clone(),
                         started_at: secs(p.started_at),
+                        cwd: p.cwd_override.clone(),
+                        command: p.command_override.clone(),
                     })
                     .collect(),
             })
             .collect();
         let saved = Saved {
             version: 1,
-            projects: self.projects.iter().map(|p| p.pool.base.clone()).collect(),
+            projects: self.projects.iter().filter_map(|p| p.base().map(Path::to_path_buf)).collect(),
+            folders: self
+                .projects
+                .iter()
+                .flat_map(|p| &p.folders)
+                .map(|f| SavedFolder { id: f.id.clone(), path: f.path.clone() })
+                .collect(),
             views,
         };
         if let Err(e) = session::save(&saved) {
@@ -431,8 +531,13 @@ impl App {
         let env = Env::from_process().ok();
         for base in &saved.projects {
             let Some(pool) = env.clone().and_then(|e| Pool::discover(e, base).ok()) else { continue };
-            if !self.projects.iter().any(|p| p.pool.base == pool.base) {
-                self.projects.push(Project { pool: Arc::new(pool), slots: Vec::new() });
+            if !self.projects.iter().any(|p| p.base() == Some(pool.base.as_path())) {
+                self.projects.push(Project::repo(pool));
+            }
+        }
+        for f in &saved.folders {
+            if f.path.is_dir() {
+                self.folder_loc(&f.id, &f.path);
             }
         }
         self.refresh_slots();
@@ -442,9 +547,14 @@ impl App {
         let mut taken: Vec<String> = Vec::new();
         let (mut panes, mut resumed) = (0, 0);
         for view in saved.views {
-            let Some(project) = self.projects.iter().position(|p| p.pool.base == view.project) else { continue };
+            let project = if view.folder {
+                self.projects.iter().position(Project::is_unclassified)
+            } else {
+                self.projects.iter().position(|p| p.base() == Some(view.project.as_path()))
+            };
+            let Some(project) = project else { continue };
             let loc = Loc { project, slot: view.slot };
-            if let Some(id) = &loc.slot {
+            if let (false, Some(id)) = (view.folder, &loc.slot) {
                 let in_use = self.projects[project].slots.iter().any(|s| &s.id == id && s.status == Status::InUse);
                 if !in_use {
                     continue;
@@ -454,8 +564,9 @@ impl App {
             let mut layout = Some(view.layout);
             let mut ids = HashMap::new();
             for p in view.panes {
+                let pane_cwd = p.cwd.clone().unwrap_or_else(|| cwd.clone());
                 let resume = match (&env, p.kind) {
-                    (Some(env), Kind::Agent) => {
+                    (Some(env), Kind::Agent) if p.command.is_none() => {
                         let exclude: Vec<String> = known
                             .iter()
                             .filter(|k| Some(*k) != p.claude_session.as_ref())
@@ -463,7 +574,7 @@ impl App {
                             .cloned()
                             .collect();
                         let since = UNIX_EPOCH + Duration::from_secs(p.started_at.saturating_sub(10));
-                        claude::latest_session(&env.claude_dir, &cwd, p.claude_session.as_deref(), since, &exclude)
+                        claude::latest_session(&env.claude_dir, &pane_cwd, p.claude_session.as_deref(), since, &exclude)
                     }
                     _ => None,
                 };
@@ -471,7 +582,8 @@ impl App {
                     taken.push(id.clone());
                 }
                 let resuming = resume.is_some();
-                match self.launch(&loc, p.kind, resume) {
+                let opts = LaunchOpts { resume, cwd: p.cwd, command: p.command };
+                match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
                         ids.insert(p.id, new);
                         panes += 1;
@@ -496,15 +608,15 @@ impl App {
             Ok(pool) => pool,
             Err(_) => return,
         };
-        let index = match self.projects.iter().position(|p| p.pool.base == pool.base) {
+        let index = match self.projects.iter().position(|p| p.base() == Some(pool.base.as_path())) {
             Some(i) => i,
             None => {
-                self.projects.push(Project { pool: Arc::new(pool), slots: Vec::new() });
+                self.projects.push(Project::repo(pool));
                 self.projects.len() - 1
             }
         };
         self.refresh_slots();
-        let slot = self.projects[index].pool.slot_of(cwd).ok().flatten();
+        let slot = self.projects[index].pool.as_ref().and_then(|p| p.slot_of(cwd).ok().flatten());
         let loc = Loc { project: index, slot };
         if self.focused().is_none_or(|p| p.loc != loc) {
             self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
@@ -515,7 +627,7 @@ impl App {
 
     pub fn refresh_slots(&mut self) {
         for project in &mut self.projects {
-            if let Ok(slots) = project.pool.status() {
+            if let Some(Ok(slots)) = project.pool.as_ref().map(|p| p.status()) {
                 project.slots = slots;
             }
         }
@@ -711,7 +823,10 @@ impl App {
                 return;
             }
             ui::Row::Location(loc) => loc,
-            ui::Row::Project(p) => Loc { project: p, slot: None },
+            ui::Row::Project(p) => {
+                let first = self.projects[p].folders.first().map(|f| f.id.clone());
+                Loc { project: p, slot: if self.projects[p].is_unclassified() { first } else { None } }
+            }
         };
         self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
         self.current = Some(loc);
@@ -859,7 +974,9 @@ impl App {
             }
             b'a' => {
                 if let Some(loc) = self.current_loc() {
-                    self.spawn(Loc { project: loc.project, slot: None }, Kind::Agent, None);
+                    // Claude in the base checkout; unclassified folders have no base.
+                    let loc = if self.projects[loc.project].is_unclassified() { loc } else { Loc { slot: None, ..loc } };
+                    self.spawn(loc, Kind::Agent, None);
                 }
             }
             b'c' => self.spawn_here(Kind::Shell, None),
@@ -885,12 +1002,15 @@ impl App {
                 }
             }
             b'r' => match self.current_loc() {
-                Some(loc) if loc.slot.is_some() => {
+                Some(loc) if loc.slot.is_some() && !self.projects[loc.project].is_unclassified() => {
                     let label = format!(
                         "release {}? its panes close; uncommitted work is stashed",
                         self.loc_name(&loc)
                     );
                     self.mode = Mode::Confirm { label, action: Confirm::Release(loc) };
+                }
+                Some(loc) if self.projects[loc.project].is_unclassified() => {
+                    self.say("unclassified folders have no slots to release")
                 }
                 _ => self.say("focus a slot to release it (the base checkout is never released)"),
             },
@@ -912,10 +1032,10 @@ impl App {
             Confirm::Quit => self.quit = true,
             Confirm::Release(loc) => {
                 let Some(slot) = loc.slot.clone() else { return };
+                let Some(pool) = self.projects[loc.project].pool.clone() else { return };
                 for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
                     pane.kill();
                 }
-                let pool = self.projects[loc.project].pool.clone();
                 let tx = self.events.clone();
                 let project = loc.project;
                 self.jobs.push(format!("releasing {slot}"));
@@ -943,7 +1063,9 @@ impl App {
 
     fn claim(&mut self, branch: Option<String>) {
         let Some(loc) = self.current_loc() else { return };
-        let pool = self.projects[loc.project].pool.clone();
+        let Some(pool) = self.projects[loc.project].pool.clone() else {
+            return self.say("unclassified folders aren't git repos, so they have no slots");
+        };
         let tx = self.events.clone();
         self.jobs.push("claiming".into());
         std::thread::spawn(move || {
@@ -970,7 +1092,7 @@ impl App {
 
     /// Open a pane in `loc`, splitting the focused pane there (`dir`, or along its longer side).
     fn spawn(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>) {
-        match self.launch(&loc, kind, None) {
+        match self.launch(&loc, kind, LaunchOpts::default()) {
             Ok(id) => {
                 self.insert_into_view(&loc, id, dir);
                 self.focus = Some(id);
@@ -984,21 +1106,28 @@ impl App {
 
     fn loc_cwd(&self, loc: &Loc) -> Option<PathBuf> {
         let project = self.projects.get(loc.project)?;
-        match &loc.slot {
-            None => Some(project.pool.base.clone()),
-            Some(id) => project.slots.iter().find(|s| &s.id == id).map(|s| s.path.clone()),
+        match (&project.pool, &loc.slot) {
+            (Some(pool), None) => Some(pool.base.clone()),
+            (Some(_), Some(id)) => project.slots.iter().find(|s| &s.id == id).map(|s| s.path.clone()),
+            (None, Some(id)) => project.folders.iter().find(|f| &f.id == id).map(|f| f.path.clone()),
+            (None, None) => None,
         }
     }
 
     /// Start a pane process in `loc` (not yet placed in a view). Claude agents get a
     /// known session id, or resume `resume`.
-    fn launch(&mut self, loc: &Loc, kind: Kind, resume: Option<String>) -> Result<u64, String> {
-        let cwd = self.loc_cwd(loc).ok_or_else(|| format!("{} not found", self.loc_name(loc)))?;
-        let pool = &self.projects[loc.project].pool;
+    fn launch(&mut self, loc: &Loc, kind: Kind, opts: LaunchOpts) -> Result<u64, String> {
+        let root = self.loc_cwd(loc).ok_or_else(|| format!("{} not found", self.loc_name(loc)))?;
+        let cwd_override = opts.cwd.filter(|c| c.is_dir() && *c != root);
+        let cwd = cwd_override.clone().unwrap_or(root);
+        let resume = opts.resume;
+        let project = &self.projects[loc.project];
+        let cfg = &project.cfg;
         let mut session = None;
         let command = match kind {
-            Kind::Agent if session::is_claude(&pool.cfg.agent) => {
-                let agent = &pool.cfg.agent;
+            Kind::Agent if opts.command.is_some() => opts.command.clone(),
+            Kind::Agent if session::is_claude(&cfg.agent) => {
+                let agent = &cfg.agent;
                 Some(match resume {
                     Some(id) => {
                         session = Some(id.clone());
@@ -1011,11 +1140,10 @@ impl App {
                     }
                 })
             }
-            Kind::Agent => Some(pool.cfg.agent.clone()),
+            Kind::Agent => Some(cfg.agent.clone()),
             Kind::Shell => None,
             Kind::Editor => {
-                let editor = pool
-                    .cfg
+                let editor = cfg
                     .editor
                     .clone()
                     .or_else(|| std::env::var("VISUAL").ok())
@@ -1024,9 +1152,14 @@ impl App {
                 Some(format!("{editor} ."))
             }
         };
-        let mut env = vec![("VELMUX_BASE", pool.base.to_string_lossy().into_owned())];
-        if let Some(id) = &loc.slot {
-            env.push(("VELMUX_SLOT", id.clone()));
+        let path_var = std::env::var_os("PATH");
+        let command = command.map(|c| session::resolve_program(&c, path_var.as_deref()));
+        let mut env = Vec::new();
+        if let Some(base) = project.base() {
+            env.push(("VELMUX_BASE", base.to_string_lossy().into_owned()));
+            if let Some(id) = &loc.slot {
+                env.push(("VELMUX_SLOT", id.clone()));
+            }
         }
         let body = ui::pane_area(self.size.0, self.size.1);
         let id = self.next_pane;
@@ -1035,8 +1168,80 @@ impl App {
         let mut pane = Pane::spawn(id, loc.clone(), kind, launch, (body.width, body.height), self.events.clone())
             .map_err(|e| format!("spawn failed: {e:#}"))?;
         pane.session = session;
+        pane.cwd_override = cwd_override;
+        pane.command_override = opts.command.filter(|_| kind == Kind::Agent);
         self.panes.push(pane);
         Ok(id)
+    }
+
+    /// Import a herdr session: one view per mapped workspace, skipping locations
+    /// velmux already has panes in. Returns a summary for the caller.
+    fn import_herdr(&mut self, path: &Path, with_latest_claude: bool) -> String {
+        let plan = match Env::from_process().and_then(|env| herdr::plan(path, &env, with_latest_claude)) {
+            Ok(plan) => plan,
+            Err(e) => return format!("import failed: {e:#}"),
+        };
+        let Plan { views, mut skipped } = plan;
+        let (mut imported, mut panes, mut resumed) = (0, 0, 0);
+        let mut first = None;
+        for v in views {
+            let loc = match &v.target {
+                Target::Folder { id } => self.folder_loc(id, &v.root),
+                Target::Repo { base, slot } => {
+                    let project = match self.projects.iter().position(|p| p.base() == Some(base.as_path())) {
+                        Some(i) => i,
+                        None => match Env::from_process().and_then(|env| Pool::discover(env, base)) {
+                            Ok(pool) => {
+                                self.projects.push(Project::repo(pool));
+                                self.refresh_slots();
+                                self.projects.len() - 1
+                            }
+                            Err(e) => {
+                                skipped.push((v.label, format!("{e:#}")));
+                                continue;
+                            }
+                        },
+                    };
+                    Loc { project, slot: slot.clone() }
+                }
+            };
+            if self.views.contains_key(&loc) {
+                skipped.push((v.label, "velmux already has panes there".into()));
+                continue;
+            }
+            let mut layout = Some(v.layout);
+            let mut ids = HashMap::new();
+            let resumes = v.panes.iter().filter(|p| p.resume.is_some()).count();
+            for p in v.panes {
+                let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command };
+                match self.launch(&loc, p.kind, opts) {
+                    Ok(new) => {
+                        ids.insert(p.id, new);
+                    }
+                    Err(_) => layout = layout.and_then(|l| l.remove(p.id)),
+                }
+            }
+            let Some(layout) = layout else { continue };
+            let zoomed = v.zoomed.and_then(|z| ids.get(&z).copied());
+            panes += ids.len();
+            resumed += resumes;
+            imported += 1;
+            first.get_or_insert((loc.clone(), layout.leaves().first().and_then(|l| ids.get(l).copied())));
+            self.views.insert(loc, View { layout: layout.remap(&ids), zoomed });
+        }
+        if let (None, Some((loc, pane))) = (self.focus, first) {
+            self.focus = pane;
+            self.current = Some(loc);
+        }
+        self.relayout();
+        let mut out = format!(
+            "imported {imported} workspace(s), {panes} pane(s), {resumed} Claude resume(s) from {}\n",
+            path.display()
+        );
+        for (label, why) in skipped {
+            out.push_str(&format!("  - skipped {label}: {why}\n"));
+        }
+        out
     }
 
     fn insert_into_view(&mut self, loc: &Loc, id: u64, dir: Option<Dir>) {

@@ -10,11 +10,15 @@ pub enum ClientMsg {
     Hello { cols: u16, rows: u16, cwd: PathBuf },
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+    /// One-shot control request (no attach): import a herdr session file.
+    ImportHerdr { path: PathBuf, with_latest_claude: bool },
 }
 
 pub enum ServerMsg {
     Output(Vec<u8>),
     Bye(String),
+    /// Answer to a control request.
+    Reply(String),
 }
 
 fn write_frame(w: &mut impl Write, tag: u8, payload: &[u8]) -> io::Result<()> {
@@ -60,6 +64,11 @@ impl ClientMsg {
             }
             ClientMsg::Input(bytes) => write_frame(w, 2, bytes),
             ClientMsg::Resize { cols, rows } => write_frame(w, 3, &size_bytes(*cols, *rows)),
+            ClientMsg::ImportHerdr { path, with_latest_claude } => {
+                let mut p = vec![*with_latest_claude as u8];
+                p.extend_from_slice(path.as_os_str().as_encoded_bytes());
+                write_frame(w, 4, &p)
+            }
         }
     }
 
@@ -76,6 +85,10 @@ impl ClientMsg {
                 let (cols, rows) = parse_size(&p)?;
                 Ok(ClientMsg::Resize { cols, rows })
             }
+            4 if !p.is_empty() => Ok(ClientMsg::ImportHerdr {
+                with_latest_claude: p[0] == 1,
+                path: PathBuf::from(String::from_utf8_lossy(&p[1..]).into_owned()),
+            }),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown client frame")),
         }
     }
@@ -86,6 +99,7 @@ impl ServerMsg {
         match self {
             ServerMsg::Output(bytes) => write_frame(w, 1, bytes),
             ServerMsg::Bye(reason) => write_frame(w, 2, reason.as_bytes()),
+            ServerMsg::Reply(text) => write_frame(w, 3, text.as_bytes()),
         }
     }
 
@@ -94,6 +108,7 @@ impl ServerMsg {
         match tag {
             1 => Ok(ServerMsg::Output(p)),
             2 => Ok(ServerMsg::Bye(String::from_utf8_lossy(&p).into_owned())),
+            3 => Ok(ServerMsg::Reply(String::from_utf8_lossy(&p).into_owned())),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown server frame")),
         }
     }

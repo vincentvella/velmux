@@ -67,8 +67,18 @@ fn pump(mut stream: UnixStream, writer: UnixStream) -> Result<String> {
                 stdout.write_all(&bytes)?;
                 stdout.flush()?;
             }
-            ServerMsg::Bye(reason) => return Ok(reason),
+            ServerMsg::Bye(reason) | ServerMsg::Reply(reason) => return Ok(reason),
         }
+    }
+}
+
+/// Send a one-shot control request to the server (starting it if needed).
+pub fn request(msg: ClientMsg) -> Result<String> {
+    let mut stream = connect_or_spawn()?;
+    msg.write(&mut stream)?;
+    match ServerMsg::read(&mut stream)? {
+        ServerMsg::Reply(text) | ServerMsg::Bye(text) => Ok(text),
+        ServerMsg::Output(_) => bail!("unexpected output from server"),
     }
 }
 

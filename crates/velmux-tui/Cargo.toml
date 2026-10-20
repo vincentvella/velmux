@@ -16,3 +16,6 @@ vt100 = "0.18"
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

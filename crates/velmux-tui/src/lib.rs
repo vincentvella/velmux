@@ -4,6 +4,7 @@
 mod client;
 mod copy;
 mod detect;
+mod herdr;
 mod layout;
 mod mouse;
 mod pane;
@@ -14,6 +15,33 @@ mod session;
 mod ui;
 
 pub use client::attach;
+
+/// `velmux import-herdr`: plan from herdr's session file, then hand it to the
+/// server (or just print the plan with `dry_run`).
+pub fn import_herdr(
+    file: Option<std::path::PathBuf>,
+    session: Option<&str>,
+    with_latest_claude: bool,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let path = match file {
+        Some(f) => f,
+        None => herdr::default_path(session)?,
+    };
+    let path = path.canonicalize().with_context(|| format!("no herdr session at {}", path.display()))?;
+    if dry_run {
+        let plan = herdr::plan(&path, &velmux_pool::Env::from_process()?, with_latest_claude)?;
+        print!("would import from {}:\n{}", path.display(), plan.describe());
+        return Ok(());
+    }
+    let reply = client::request(proto::ClientMsg::ImportHerdr { path, with_latest_claude })?;
+    print!("{reply}");
+    if !reply.starts_with("imported 0 ") && !reply.starts_with("import failed") {
+        println!("run `velmux` to see them");
+    }
+    Ok(())
+}
 pub use server::serve;
 
 pub mod paths {

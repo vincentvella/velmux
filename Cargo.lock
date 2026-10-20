@@ -1831,6 +1831,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "tempfile",
  "velmux-pool",
  "vt100",
 ]

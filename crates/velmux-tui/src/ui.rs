@@ -38,10 +38,19 @@ pub enum Row {
 
 pub fn rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
-    for (p, project) in app.projects.iter().enumerate() {
+    // Repos first, then the unclassified group of plain folders.
+    let mut order: Vec<usize> = (0..app.projects.len()).collect();
+    order.sort_by_key(|&p| app.projects[p].is_unclassified());
+    for p in order {
+        let project = &app.projects[p];
         out.push(Row::Project(p));
-        let mut locs = vec![Loc { project: p, slot: None }];
-        locs.extend(project.slots.iter().map(|s| Loc { project: p, slot: Some(s.id.clone()) }));
+        let locs: Vec<Loc> = if project.is_unclassified() {
+            project.folders.iter().map(|f| Loc { project: p, slot: Some(f.id.clone()) }).collect()
+        } else {
+            let mut locs = vec![Loc { project: p, slot: None }];
+            locs.extend(project.slots.iter().map(|s| Loc { project: p, slot: Some(s.id.clone()) }));
+            locs
+        };
         for loc in locs {
             let panes: Vec<usize> = app
                 .panes
@@ -109,13 +118,15 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     for (y, row) in sidebar_rows(app, rows) {
         match row {
             Row::Project(p) => {
-                let name = &app.projects[p].pool.name;
+                let name = app.projects[p].name();
                 buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
             }
             Row::Location(loc) => {
                 let is_current = current.as_ref() == Some(&loc);
                 let marker = if is_current { "›" } else { " " };
+                let unclassified = app.projects[loc.project].is_unclassified();
                 let (text, style) = match &loc.slot {
+                    Some(id) if unclassified => (format!("▸ {id}"), Style::new().fg(Color::Yellow)),
                     None => ("◆ base".to_string(), Style::new().fg(Color::Magenta)),
                     Some(id) => {
                         let slot = app.projects[loc.project].slots.iter().find(|s| &s.id == id);
