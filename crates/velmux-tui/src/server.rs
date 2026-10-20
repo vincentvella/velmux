@@ -51,6 +51,9 @@ pub struct Project {
     pub slots: Vec<SlotView>,
     /// Unclassified only: its folders, addressed by id in `Loc::slot`.
     pub folders: Vec<Folder>,
+    /// Removed from the sidebar. Kept in place (locations refer to projects by
+    /// index), skipped everywhere and not saved; opening it again brings it back.
+    pub removed: bool,
 }
 
 pub struct Folder {
@@ -60,7 +63,7 @@ pub struct Folder {
 
 impl Project {
     fn repo(pool: Pool) -> Project {
-        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), folders: Vec::new() }
+        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), folders: Vec::new(), removed: false }
     }
 
     pub fn name(&self) -> &str {
@@ -168,6 +171,8 @@ pub enum PromptFor {
 
 pub enum Confirm {
     Release(Loc),
+    RemoveFolder(Loc),
+    RemoveRepo(usize),
     Quit,
 }
 
@@ -430,6 +435,7 @@ impl App {
         let mut order: Vec<usize> = self.project_order.iter().copied().filter(|&p| p < self.projects.len()).collect();
         let missing: Vec<usize> = (0..self.projects.len()).filter(|p| !order.contains(p)).collect();
         order.extend(missing);
+        order.retain(|&p| !self.projects[p].removed);
         order
     }
 
@@ -459,7 +465,7 @@ impl App {
             .map(|p| p.loc.clone())
             .or_else(|| self.current.clone())
             .or_else(|| {
-                let project = self.projects.iter().position(|p| !p.is_unclassified())?;
+                let project = self.projects.iter().position(|p| !p.is_unclassified() && !p.removed)?;
                 Some(Loc { project, slot: None })
             })
     }
@@ -472,7 +478,7 @@ impl App {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         // Global settings (agent, editor) apply; a broken config falls back to defaults.
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
-        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), folders: Vec::new() });
+        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), folders: Vec::new(), removed: false });
         self.projects.len() - 1
     }
 
@@ -721,6 +727,7 @@ impl App {
         let views = self
             .views
             .iter()
+            .filter(|(loc, _)| !self.projects[loc.project].removed)
             .map(|(loc, view)| {
                 let tabs: Vec<SavedTab> = view
                     .tabs
@@ -993,7 +1000,10 @@ impl App {
             Err(_) => return,
         };
         let index = match self.projects.iter().position(|p| p.base() == Some(pool.base.as_path())) {
-            Some(i) => i,
+            Some(i) => {
+                self.projects[i].removed = false;
+                i
+            }
             None => {
                 self.projects.push(Project::repo(pool));
                 self.projects.len() - 1
@@ -1727,6 +1737,21 @@ impl App {
             Action::Settings => self.open_settings(),
             Action::ReloadConfig => self.reload_config(),
             Action::Menu => self.mode = Mode::Menu { selected: 0 },
+            Action::RemovePlace => match self.current_loc() {
+                None => self.say("nothing to remove here"),
+                Some(loc) if self.projects[loc.project].is_unclassified() => {
+                    let n = self.panes.iter().filter(|p| p.loc == loc).count();
+                    let label = format!("remove {} from velmux? {n} pane(s) close", self.loc_name(&loc));
+                    self.mode = Mode::Confirm { label, action: Confirm::RemoveFolder(loc) };
+                }
+                Some(loc) if loc.slot.is_some() => self.run(Action::ReleaseSlot),
+                Some(loc) => {
+                    let n = self.panes.iter().filter(|p| p.loc.project == loc.project).count();
+                    let name = self.projects[loc.project].name();
+                    let label = format!("remove {name} from velmux? {n} pane(s) close; its slots stay on disk");
+                    self.mode = Mode::Confirm { label, action: Confirm::RemoveRepo(loc.project) };
+                }
+            },
             Action::SidebarView => {
                 self.sidebar_view = match self.sidebar_view {
                     ui::SidebarView::Spaces => ui::SidebarView::Agents,
@@ -1964,7 +1989,45 @@ impl App {
         match action {
             Confirm::Quit => self.quit = true,
             Confirm::Release(loc) => self.release_location(loc),
+            Confirm::RemoveFolder(loc) => {
+                self.close_panes_where(|p| p.loc == loc);
+                if let (Some(id), Some(project)) = (&loc.slot, self.projects.get_mut(loc.project)) {
+                    project.folders.retain(|f| &f.id != id);
+                }
+                self.views.remove(&loc);
+                self.leave(&loc);
+                self.say(format!("removed {}", loc.slot.unwrap_or_default()));
+            }
+            Confirm::RemoveRepo(project) => {
+                self.close_panes_where(|p| p.loc.project == project);
+                self.views.retain(|l, _| l.project != project);
+                self.projects[project].removed = true;
+                let name = self.projects[project].name().to_string();
+                self.leave(&Loc { project, slot: None });
+                self.say(format!("removed {name} from velmux (its slots are untouched; run velmux there to bring it back)"));
+            }
         }
+    }
+
+    fn close_panes_where(&mut self, pick: impl Fn(&Pane) -> bool) {
+        for pane in self.panes.iter_mut().filter(|p| pick(p)) {
+            pane.kill();
+        }
+    }
+
+    /// After removing a place: if you were there, go to the first remaining one.
+    fn leave(&mut self, gone: &Loc) {
+        let here = self.current_loc();
+        let was_here = here.as_ref().is_some_and(|c| c == gone || (gone.slot.is_none() && c.project == gone.project && self.projects[c.project].removed));
+        if was_here || self.focused().is_some_and(|p| p.loc == *gone) {
+            self.current = None;
+            self.focus = None;
+            if let Some(loc) = self.live_locations().into_iter().next() {
+                self.show_location(loc);
+            }
+        }
+        self.save();
+        self.full_redraw = true;
     }
 
     /// `velmux release` inside a pane: move it back to its repo's base, then
@@ -2181,7 +2244,10 @@ impl App {
                 Target::Folder { id } => self.folder_loc(id, &v.root),
                 Target::Repo { base, slot } => {
                     let project = match self.projects.iter().position(|p| p.base() == Some(base.as_path())) {
-                        Some(i) => i,
+                        Some(i) => {
+                            self.projects[i].removed = false;
+                            i
+                        }
                         None => match Env::from_process().and_then(|env| Pool::discover(env, base)) {
                             Ok(pool) => {
                                 self.projects.push(Project::repo(pool));

@@ -70,6 +70,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         ("rename tab", RenameTab),
         ("settings", Settings),
         ("restart server", RestartServer),
+        ("remove this place", RemovePlace),
         ("detach", Detach),
         ("stop server", Quit),
     ]
@@ -90,6 +91,7 @@ pub const VIEW_SPLIT_X: u16 = 9;
 pub fn rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
     // Repos in display order, then the unclassified group of plain folders.
+    // (ordered_projects already leaves out removed repos.)
     let mut order = app.ordered_projects();
     order.sort_by_key(|&p| app.projects[p].is_unclassified());
     for p in order {
@@ -531,18 +533,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             }
         }
         None => {
-            let p = &app.prefix.label;
-            let lines = [
-                "No pane focused.".to_string(),
-                String::new(),
-                format!("{p} a   Claude in the base checkout"),
-                format!("{p} n   claim a slot and start Claude there"),
-                format!("{p} c   shell here    {p} e   editor here"),
-                format!("{p} ?   all keys"),
-            ];
-            for (i, l) in lines.iter().enumerate() {
-                buf.set_stringn(body.x + 2, body.y + 1 + i as u16, l, body.width as usize, dim);
-            }
+            draw_empty(app, current.as_ref(), body, buf);
         }
     }
 
@@ -592,6 +583,40 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
     cursor
+}
+
+/// A place with no panes: what it is, and the keys to start something or remove it.
+fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
+    let key = |a: crate::keys::Action| app.keymap.hint(a, &app.prefix.short).unwrap_or_default();
+    use crate::keys::Action as A;
+    let (title, what) = match loc {
+        Some(l) if app.projects[l.project].is_unclassified() => (app.loc_name(l), "a folder outside any repo"),
+        Some(l) if l.slot.is_some() => (app.loc_name(l), "a claimed slot"),
+        Some(l) => (app.loc_name(l), "the repo's base checkout"),
+        None => ("velmux".to_string(), "run velmux inside a git repo to add it"),
+    };
+    let mut lines: Vec<(String, String)> = Vec::new();
+    if loc.is_some() {
+        lines.push((key(A::AgentBase), "new Claude conversation".into()));
+        lines.push((key(A::NewShell), "shell here".into()));
+        lines.push((key(A::LocationPicker), "go somewhere else".into()));
+        let remove = match loc {
+            Some(l) if l.slot.is_some() && !app.projects[l.project].is_unclassified() => "release this slot",
+            _ => "remove this place",
+        };
+        lines.push((key(A::RemovePlace), remove.into()));
+    }
+    let height = 3 + lines.len() as u16;
+    let width = 44.min(body.width.saturating_sub(4));
+    let x = body.x + body.width.saturating_sub(width) / 2;
+    let y = body.y + body.height.saturating_sub(height) / 3;
+    buf.set_stringn(x, y, &title, width as usize, Style::new().fg(Color::White).add_modifier(Modifier::BOLD));
+    buf.set_stringn(x, y + 1, what, width as usize, Style::new().fg(Color::DarkGray));
+    for (i, (k, label)) in lines.iter().enumerate() {
+        let ly = y + 3 + i as u16;
+        buf.set_stringn(x, ly, k, 10, Style::new().fg(ACCENT));
+        buf.set_stringn(x + 11, ly, label, width.saturating_sub(11) as usize, Style::new().fg(Color::Gray));
+    }
 }
 
 /// The short menu: label left, its shortcut right.

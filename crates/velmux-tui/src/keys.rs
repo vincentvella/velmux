@@ -61,6 +61,9 @@ pub enum Action {
     RestartServer,
     /// The short menu of common actions.
     Menu,
+    /// Remove the current place: a folder or a repo from the sidebar (its
+    /// panes close), or release a slot.
+    RemovePlace,
     /// Switch the sidebar between spaces and agents.
     SidebarView,
     /// Jump to the next agent that's blocked or finished unseen.
@@ -112,6 +115,7 @@ const NAMES: &[(&str, Action)] = &[
     ("reload_config", Action::ReloadConfig),
     ("restart_server", Action::RestartServer),
     ("menu", Action::Menu),
+    ("remove_place", Action::RemovePlace),
     ("sidebar_view", Action::SidebarView),
     ("attention", Action::Attention),
     ("detach", Action::Detach),
@@ -175,6 +179,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (ReloadConfig, &["prefix+R"]),
         (RestartServer, &["prefix+ctrl+r"]),
         (Menu, &["prefix+m"]),
+        (RemovePlace, &["prefix+X", "super+shift+backspace"]),
         (SidebarView, &["prefix+g"]),
         (Attention, &["prefix+o", "super+shift+u"]),
         (Detach, &["prefix+d"]),
@@ -516,6 +521,7 @@ impl Keymap {
             }
             let key = match key {
                 "enter" => "↵".to_string(),
+                "backspace" => "⌫".into(),
                 "left" => "←".into(),
                 "right" => "→".into(),
                 "up" => "↑".into(),

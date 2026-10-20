@@ -55,6 +55,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `W` | name this location (base, slot or folder); empty clears |
 | `s` / `R` | settings: edit the config in a tab, applied when you quit the editor / reload config now |
 | `ctrl+r` | live restart: new binary, every pane keeps running |
+| `X` | remove this place: a folder, or a repo from the sidebar (its slots stay on disk); in a slot, release it |
 | `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
 | `1`–`9`, `0` | slot N of this repo (folder N when unclassified), its base |
 | `o` | jump to the next agent that's blocked or finished unseen |
@@ -74,7 +75,8 @@ new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
 `super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
 close, `super+shift+enter` zoom, `super+alt+arrows` focus, `super+b` sidebar,
 `super+shift+u` attention, `super+p` location picker, `super+r` rename tab,
-`super+shift+r` name the location, `super+,` settings. These use CSI-u sequences that apps never receive, so
+`super+shift+r` name the location, `super+,` settings, `super+shift+backspace`
+remove this place. These use CSI-u sequences that apps never receive, so
 they can't clash with app keys, but your terminal must be told to send them:
 
 ```sh
