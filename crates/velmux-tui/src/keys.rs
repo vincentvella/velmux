@@ -511,6 +511,15 @@ pub fn ghostty_config(map: &Keymap) -> String {
             a => name_of(*a).to_string(),
         };
         out.push_str(&format!("keybind = {}={value}  # {label}\n", name.join("+")));
+        // Ghostty also matches the character form (`super+1`) of a digit key; bind
+        // it too so an older `super+1=…` line can't win.
+        if let Key::Char(c) = chord.key {
+            if c.is_ascii_digit() {
+                name.pop();
+                name.push(c.to_string());
+                out.push_str(&format!("keybind = {}={value}  # {label}\n", name.join("+")));
+            }
+        }
     }
     out
 }
@@ -591,6 +600,7 @@ mod tests {
         let g = ghostty_config(&map);
         assert!(g.contains("keybind = super+t=csi:116;9u  # new_tab"), "{g}");
         assert!(g.contains("keybind = super+digit_2=csi:50;9u  # location 2"));
+        assert!(g.contains("keybind = super+2=csi:50;9u  # location 2"));
         assert!(g.contains("keybind = ctrl+digit_1=csi:49;5u  # tab 1"));
         assert!(g.contains("keybind = super+alt+arrow_left=csi:1;11D  # focus_left"));
         assert!(g.contains("keybind = super+ctrl+bracket_left=csi:91;13u  # prev_location"));
