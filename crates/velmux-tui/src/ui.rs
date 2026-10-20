@@ -678,7 +678,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// After the prefix: every key you can press next, in groups side by side
-/// (stacked when the pane area is narrow), anchored to the bottom.
+/// (stacked when the pane area is narrow).
 fn draw_which_key(app: &App, body: Rect, buf: &mut Buffer) {
     use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
     let t = &app.theme;
@@ -690,10 +690,14 @@ fn draw_which_key(app: &App, body: Rect, buf: &mut Buffer) {
     let fit = ((body.width.saturating_sub(4) + gap) / (col_w + gap)).max(1) as usize;
     let per_row = fit.min(groups.len());
     let bands: Vec<&[crate::keys::HelpGroup]> = groups.chunks(per_row).collect();
-    let band_h = |b: &[crate::keys::HelpGroup]| 2 + b.iter().map(|(_, g)| g.len()).max().unwrap_or(0) as u16;
-    let height = (bands.iter().map(|b| band_h(b)).sum::<u16>() + 1 + bands.len().saturating_sub(1) as u16).min(body.height);
+    let band_h = |b: &[crate::keys::HelpGroup]| 1 + b.iter().map(|(_, g)| g.len()).max().unwrap_or(0) as u16;
+    // Borders, each band (title + rows), a blank line between bands.
+    let height = (bands.iter().map(|b| band_h(b)).sum::<u16>() + 2 + bands.len().saturating_sub(1) as u16).min(body.height);
     let width = (per_row as u16 * (col_w + gap) - gap + 4).min(body.width);
-    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.bottom().saturating_sub(height + 1), width, height);
+    // In the lower part of the pane area but well clear of the bottom, where
+    // Claude's input box sits.
+    let y = body.y + body.height.saturating_sub(height) * 3 / 5;
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, y, width, height);
     Clear.render(area, buf);
     Block::default()
         .borders(Borders::ALL)

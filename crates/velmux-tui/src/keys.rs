@@ -478,44 +478,55 @@ impl Keymap {
     /// common action, in groups.
     pub fn help_groups(&self) -> Vec<HelpGroup> {
         use Action::*;
-        let groups: [(&str, &[(Action, &str)]); 3] = [
+        let one = |a: Action| vec![a];
+        let groups = [
             (
                 "spaces",
-                &[
-                    (AgentBase, "new claude"),
-                    (ClaimSlot, "claim a slot"),
-                    (ReleaseSlot, "release slot"),
-                    (Slot(0), "slot n"),
-                    (Base, "base"),
-                    (LocationPicker, "go to…"),
-                    (RenameLocation, "rename place"),
-                    (RemovePlace, "remove place"),
+                vec![
+                    (one(AgentBase), "new claude"),
+                    (one(ClaimSlot), "claim a slot"),
+                    (one(ReleaseSlot), "release slot"),
+                    (one(Slot(0)), "slot n"),
+                    (one(Base), "base"),
+                    (one(LocationPicker), "go to…"),
+                    (one(RenameLocation), "rename place"),
+                    (one(RemovePlace), "remove place"),
                 ],
             ),
             (
                 "panes",
-                &[
-                    (NewShell, "shell"),
-                    (SplitRight, "split right"),
-                    (SplitDown, "split down"),
-                    (NewTab, "new tab"),
-                    (RenameTab, "rename tab"),
-                    (Zoom, "zoom"),
-                    (CopyMode, "copy mode"),
-                    (ClosePane, "close"),
+                vec![
+                    (one(NewShell), "shell"),
+                    (one(SplitRight), "split right"),
+                    (one(SplitDown), "split down"),
+                    (one(NewTab), "new tab"),
+                    (one(RenameTab), "rename tab"),
+                    (one(Zoom), "zoom"),
+                    (one(CopyMode), "copy mode"),
+                    (one(ClosePane), "close"),
+                ],
+            ),
+            (
+                "move",
+                vec![
+                    (vec![FocusLeft, FocusUp, FocusDown, FocusRight], "focus"),
+                    (vec![ResizeLeft, ResizeDown, ResizeUp, ResizeRight], "resize"),
+                    (vec![NextPane, PrevPane], "next / prev pane"),
+                    (vec![NextTab, PrevTab], "next / prev tab"),
+                    (vec![NextLocation, PrevLocation], "next / prev place"),
                 ],
             ),
             (
                 "velmux",
-                &[
-                    (Menu, "menu"),
-                    (Attention, "next waiting"),
-                    (ToggleSidebar, "sidebar"),
-                    (SidebarView, "spaces / agents"),
-                    (ThemePicker, "theme"),
-                    (Settings, "settings"),
-                    (Detach, "detach"),
-                    (Quit, "quit"),
+                vec![
+                    (one(Menu), "menu"),
+                    (one(Attention), "next waiting"),
+                    (one(ToggleSidebar), "sidebar"),
+                    (one(SidebarView), "spaces / agents"),
+                    (one(ThemePicker), "theme"),
+                    (one(Settings), "settings"),
+                    (one(Detach), "detach"),
+                    (one(Quit), "quit"),
                 ],
             ),
         ];
@@ -523,8 +534,14 @@ impl Keymap {
             .into_iter()
             .map(|(title, items)| {
                 let keys = items
-                    .iter()
-                    .filter_map(|(a, label)| self.prefix_key(*a).map(|k| (k, *label)))
+                    .into_iter()
+                    .filter_map(|(actions, label)| {
+                        // A set of single keys reads as one (`←↑↓→`, `HJKL`); otherwise `j/k`.
+                        let keys: Option<Vec<String>> = actions.iter().map(|a| self.prefix_key(*a)).collect();
+                        let keys = keys?;
+                        let sep = if keys.len() > 2 && keys.iter().all(|k| k.chars().count() == 1) { "" } else { "/" };
+                        Some((keys.join(sep), label))
+                    })
                     .collect();
                 (title, keys)
             })
@@ -547,7 +564,15 @@ impl Keymap {
                 key = part;
             }
         }
-        out.push_str(&key.replace("..", "–"));
+        let key = match key {
+            "left" => "←".to_string(),
+            "right" => "→".into(),
+            "up" => "↑".into(),
+            "down" => "↓".into(),
+            "tab" => "⇥".into(),
+            k => k.replace("..", "–"),
+        };
+        out.push_str(&key);
         Some(out)
     }
 }
