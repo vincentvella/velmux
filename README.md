@@ -17,9 +17,10 @@ pane, so `<prefix> d` detaches and `velmux` reattaches with everything still
 running. The sidebar lists the base checkout and each slot, one row each, with
 the state of their agents on the right: `●` working, `▲` blocked on you, `○`
 idle, `✓` finished while you were elsewhere. Each base checkout and slot has its own tabs, each a split
-layout, so a slot can show Claude beside a test-runner shell. Only the project
-you're in is expanded; others collapse to one line with an agent summary
-(e.g. `▸ caliburr ▲1 ○3`). Panes are labelled by what's running and where
+layout, so a slot can show Claude beside a test-runner shell. The sidebar lists
+each repo with its base and claimed slots (branch first, slot number dimmed;
+free slots are a count on the repo's line), then the folders outside any repo
+below a divider. Nothing collapses, so the layout never shifts as you move. Panes are labelled by what's running and where
 (`shell · packages/web`, `bun`, `nvim`).
 
 The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.

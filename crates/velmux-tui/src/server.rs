@@ -1141,7 +1141,8 @@ impl App {
                 self.full_redraw = true;
                 return;
             }
-            ui::Row::Location(loc) | ui::Row::FreeSlots { first: loc, .. } => loc,
+            ui::Row::Heading(_) | ui::Row::Divider => return,
+            ui::Row::Location(loc) => loc,
             ui::Row::Project(p) => {
                 // Open the project at its first location with panes, else its root.
                 let live = self.live_locations().into_iter().find(|l| l.project == p);

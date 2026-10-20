@@ -33,91 +33,15 @@ pub fn content_rect(outer: Rect, titled: bool) -> Rect {
 }
 
 /// One sidebar line. Panes nest under the base/slot they run in.
+/// One row of [`rows`] (navigation order) or of the sidebar.
 pub enum Row {
     Project(usize),
     Location(Loc),
     Pane(usize),
-    /// A run of free slots folded into one row; `first` is where a click goes.
-    FreeSlots { count: usize, first: Loc },
-}
-
-/// The project shown expanded: the one you're in (or the first).
-pub fn expanded_project(app: &App) -> Option<usize> {
-    app.current_loc().map(|l| l.project).or_else(|| (!app.projects.is_empty()).then_some(0))
-}
-
-/// Whether a project is shown expanded: the one you're in, and always the
-/// unclassified group (its folders are each their own space).
-pub fn is_open(app: &App, project: usize) -> bool {
-    expanded_project(app) == Some(project) || app.projects[project].is_unclassified()
-}
-
-/// What the sidebar shows: [`rows`] without individual panes (each location
-/// row carries its agents' states instead), every project but the current one
-/// collapsed to its header, and runs of free slots folded into one row.
-/// Navigation (location N, cycling, attention) keeps using the full [`rows`].
-pub fn display_rows(app: &App) -> Vec<Row> {
-    let mut out: Vec<Row> = Vec::new();
-    let mut project = None;
-    for row in rows(app) {
-        match &row {
-            Row::Project(p) => project = Some(*p),
-            _ if !project.is_some_and(|p| is_open(app, p)) => continue,
-            Row::Pane(_) => continue,
-            Row::Location(loc) if is_free_slot(app, loc) => {
-                if let Some(Row::FreeSlots { count, .. }) = out.last_mut() {
-                    *count += 1;
-                    continue;
-                }
-                out.push(Row::FreeSlots { count: 1, first: loc.clone() });
-                continue;
-            }
-            _ => {}
-        }
-        out.push(row);
-    }
-    out
-}
-
-fn is_free_slot(app: &App, loc: &Loc) -> bool {
-    let project = &app.projects[loc.project];
-    match (&loc.slot, project.is_unclassified()) {
-        (Some(id), false) => {
-            !app.views.contains_key(loc)
-                && project.slots.iter().any(|s| &s.id == id && s.status == Status::Free)
-        }
-        _ => false,
-    }
-}
-
-/// Agent-state glyphs for a collapsed project: (glyph, count, style), non-zero only.
-fn rollup(app: &App, project: usize) -> Vec<(&'static str, usize, Style)> {
-    rollup_of(app.panes.iter().filter(|p| p.loc.project == project))
-}
-
-fn rollup_of<'a>(panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, usize, Style)> {
-    let (mut working, mut blocked, mut done, mut idle) = (0, 0, 0, 0);
-    for p in panes {
-        if p.unseen_done {
-            done += 1;
-            continue;
-        }
-        match p.state {
-            Some(AgentState::Working) => working += 1,
-            Some(AgentState::Blocked) => blocked += 1,
-            Some(AgentState::Idle) => idle += 1,
-            None => {}
-        }
-    }
-    [
-        ("▲", blocked, Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        ("✓", done, Style::new().fg(Color::Green)),
-        ("●", working, Style::new().fg(Color::Yellow)),
-        ("○", idle, Style::new().fg(Color::DarkGray)),
-    ]
-    .into_iter()
-    .filter(|(_, n, _)| *n > 0)
-    .collect()
+    /// Sidebar only: a section heading.
+    Heading(&'static str),
+    /// Sidebar only: the rule between repos and folders.
+    Divider,
 }
 
 pub fn rows(app: &App) -> Vec<Row> {
@@ -150,30 +74,148 @@ pub fn rows(app: &App) -> Vec<Row> {
     out
 }
 
-/// Sidebar rows with the screen line each is drawn on (a blank line separates
-/// projects). Shared by drawing and mouse hit-testing.
-pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
+/// The sidebar, top to bottom: each repo (its name, then its base and claimed
+/// slots), then a divider and the folders outside any repo. Nothing collapses,
+/// so moving around never changes the layout; free slots are a count on the
+/// repo's line rather than rows of their own.
+pub fn display_rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
-    let mut y = 0;
-    let mut prev_collapsed = false;
-    for row in display_rows(app) {
-        // A blank line before each project, except between stacked collapsed ones.
-        if let Row::Project(p) = row {
-            let collapsed = !is_open(app, p);
-            if y > 0 && !(collapsed && prev_collapsed) {
-                y += 1;
+    let repos: Vec<usize> = (0..app.projects.len()).filter(|&p| !app.projects[p].is_unclassified()).collect();
+    if !repos.is_empty() {
+        out.push(Row::Heading("REPOS"));
+    }
+    for p in repos {
+        out.push(Row::Project(p));
+        out.push(Row::Location(Loc { project: p, slot: None }));
+        for s in &app.projects[p].slots {
+            let loc = Loc { project: p, slot: Some(s.id.clone()) };
+            if s.status == Status::InUse || app.views.contains_key(&loc) {
+                out.push(Row::Location(loc));
             }
-            prev_collapsed = collapsed;
-        } else {
-            prev_collapsed = false;
         }
-        if y + 1 >= height {
-            break;
-        }
-        out.push((y, row));
-        y += 1;
+    }
+    let folders: Vec<Loc> = app
+        .projects
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.is_unclassified())
+        .flat_map(|(i, p)| p.folders.iter().map(move |f| Loc { project: i, slot: Some(f.id.clone()) }))
+        .collect();
+    if !folders.is_empty() {
+        out.push(Row::Divider);
+        out.extend(folders.into_iter().map(Row::Location));
     }
     out
+}
+
+/// Sidebar rows with their screen line, scrolled just enough to keep the
+/// current location visible. Shared by drawing and mouse hit-testing.
+pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
+    let rows = display_rows(app);
+    let usable = height.saturating_sub(1) as usize; // the status line
+    let current = app.current_loc();
+    let at = rows.iter().position(|r| matches!(r, Row::Location(l) if Some(l) == current.as_ref())).unwrap_or(0);
+    let start = (at + 1).saturating_sub(usable);
+    rows.into_iter().skip(start).take(usable).enumerate().map(|(y, r)| (y as u16, r)).collect()
+}
+
+fn free_slots(app: &App, project: usize) -> usize {
+    app.projects[project]
+        .slots
+        .iter()
+        .filter(|s| {
+            s.status == Status::Free && !app.views.contains_key(&Loc { project, slot: Some(s.id.clone()) })
+        })
+        .count()
+}
+
+/// Agent-state glyphs for some panes: (glyph, count, style), non-zero only.
+fn rollup_of<'a>(panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'static str, usize, Style)> {
+    let (mut working, mut blocked, mut done, mut idle) = (0, 0, 0, 0);
+    for p in panes {
+        if p.unseen_done {
+            done += 1;
+            continue;
+        }
+        match p.state {
+            Some(AgentState::Working) => working += 1,
+            Some(AgentState::Blocked) => blocked += 1,
+            Some(AgentState::Idle) => idle += 1,
+            None => {}
+        }
+    }
+    [
+        ("▲", blocked, Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ("✓", done, Style::new().fg(Color::Green)),
+        ("●", working, Style::new().fg(Color::Yellow)),
+        ("○", idle, Style::new().fg(Color::DarkGray)),
+    ]
+    .into_iter()
+    .filter(|(_, n, _)| *n > 0)
+    .collect()
+}
+
+const ACCENT: Color = Color::Indexed(39);
+const SELECTED_BG: Color = Color::Indexed(236);
+
+/// One location row: glyph, label (name, branch or folder), a dim slot number,
+/// and its agents' states on the right. The current one gets a highlight bar.
+fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
+    let base = if selected { Style::new().bg(SELECTED_BG) } else { Style::new() };
+    if selected {
+        buf.set_style(Rect::new(0, y, side, 1), base);
+        buf.set_string(0, y, "▌", base.fg(ACCENT));
+    }
+    let project = &app.projects[loc.project];
+    let name = app.views.get(loc).and_then(|v| v.name.clone());
+    let (glyph, glyph_color, label, number, dirty) = match &loc.slot {
+        None => (Some("◆"), Color::Magenta, name.unwrap_or_else(|| "base".into()), None, false),
+        Some(id) if project.is_unclassified() => (None, Color::Reset, name.unwrap_or_else(|| id.clone()), None, false),
+        Some(id) => {
+            let slot = project.slots.iter().find(|s| &s.id == id);
+            let branch = slot.and_then(|s| s.branch.clone()).unwrap_or_else(|| "detached".into());
+            let n = id.trim_start_matches("slot-").to_string();
+            (Some("▣"), Color::Cyan, name.unwrap_or(branch), Some(n), slot.is_some_and(|s| s.dirty))
+        }
+    };
+    let text = if selected { base.fg(Color::White).add_modifier(Modifier::BOLD) } else { base.fg(Color::Gray) };
+    let dim = base.fg(Color::DarkGray);
+
+    // Right side first, so the label knows how much room it has.
+    let badges = rollup_of(app.panes.iter().filter(|p| p.loc == *loc));
+    let badge_text: Vec<String> =
+        badges.iter().map(|(g, n, _)| if *n > 1 { format!("{g}{n}") } else { g.to_string() }).collect();
+    let badge_w = badge_text.iter().map(|b| b.chars().count() as u16).sum::<u16>() + badge_text.len().saturating_sub(1) as u16;
+    let right_edge = side.saturating_sub(1);
+    if badge_w > 0 && badge_w + 6 < side {
+        let mut x = right_edge - badge_w;
+        for ((_, _, style), t) in badges.iter().zip(&badge_text) {
+            buf.set_string(x, y, t, style.patch(base));
+            x += t.chars().count() as u16 + 1;
+        }
+    }
+    let mut x = 3;
+    if let Some(g) = glyph {
+        buf.set_string(x, y, g, base.fg(glyph_color));
+        x += 2;
+    }
+    let suffix = number.map(|n| format!(" ·{n}")).unwrap_or_default();
+    let room = right_edge.saturating_sub(badge_w + 1).saturating_sub(x) as usize;
+    let room_for_label = room.saturating_sub(suffix.chars().count() + dirty as usize);
+    let shown: String = if label.chars().count() > room_for_label {
+        label.chars().take(room_for_label.saturating_sub(1)).chain(std::iter::once('…')).collect()
+    } else {
+        label
+    };
+    buf.set_string(x, y, &shown, text);
+    x += shown.chars().count() as u16;
+    if dirty {
+        buf.set_string(x, y, "*", base.fg(Color::Yellow));
+        x += 1;
+    }
+    if !suffix.is_empty() {
+        buf.set_stringn(x, y, &suffix, right_edge.saturating_sub(x) as usize, dim);
+    }
 }
 
 fn state_glyph(pane: &Pane) -> (&'static str, Style) {
@@ -232,88 +274,26 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let sidebar = if app.sidebar_hidden { Vec::new() } else { sidebar_rows(app, rows) };
     for (y, row) in sidebar {
         match row {
+            Row::Heading(title) => {
+                buf.set_stringn(1, y, title, side as usize, dim.add_modifier(Modifier::BOLD));
+            }
+            Row::Divider => {
+                buf.set_string(1, y, "─".repeat(side.saturating_sub(2) as usize), dim);
+            }
             Row::Project(p) => {
-                let name = app.projects[p].name();
-                if is_open(app, p) {
-                    buf.set_stringn(0, y, name, side as usize, Style::new().add_modifier(Modifier::BOLD));
-                } else {
-                    // Collapsed: name plus a summary of its agents.
-                    let label = format!("▸ {name}");
-                    buf.set_stringn(0, y, &label, side as usize, Style::new().fg(Color::Gray));
-                    let mut x = label.chars().count() as u16 + 1;
-                    for (glyph, n, style) in rollup(app, p) {
-                        let part = format!("{glyph}{n}");
-                        let w = part.chars().count() as u16;
-                        if x + w > side {
-                            break;
-                        }
-                        buf.set_string(x, y, &part, style);
-                        x += w + 1;
-                    }
+                let here = current.as_ref().is_some_and(|c| c.project == p);
+                let style = Style::new().add_modifier(Modifier::BOLD).fg(if here { Color::White } else { Color::Gray });
+                let free = free_slots(app, p);
+                let right = if free > 0 { format!("{free} free") } else { String::new() };
+                let rw = right.chars().count() as u16;
+                let room = side.saturating_sub(rw + 3) as usize;
+                buf.set_stringn(1, y, app.projects[p].name(), room, style);
+                if rw > 0 {
+                    buf.set_string(side.saturating_sub(rw + 1), y, right, dim);
                 }
             }
-            Row::FreeSlots { count, .. } => {
-                let text = if count == 1 { " □ 1 free slot".to_string() } else { format!(" □ {count} free slots") };
-                buf.set_stringn(0, y, text, side as usize, dim);
-            }
-            Row::Location(loc) => {
-                let is_current = current.as_ref() == Some(&loc);
-                let marker = if is_current { "›" } else { " " };
-                let unclassified = app.projects[loc.project].is_unclassified();
-                let name = app.views.get(&loc).and_then(|v| v.name.as_deref());
-                let (text, style) = match &loc.slot {
-                    Some(id) if unclassified => (format!("▸ {}", name.unwrap_or(id)), Style::new().fg(Color::Yellow)),
-                    None => (format!("◆ {}", name.unwrap_or("base")), Style::new().fg(Color::Magenta)),
-                    Some(id) if name.is_some() => {
-                        (format!("▣ {} ({id})", name.unwrap_or_default()), Style::new().fg(Color::Cyan))
-                    }
-                    Some(id) => {
-                        let slot = app.projects[loc.project].slots.iter().find(|s| &s.id == id);
-                        match slot {
-                            Some(s) if s.status == Status::InUse => {
-                                let branch = s.branch.as_deref().unwrap_or("detached");
-                                let dirty = if s.dirty { "*" } else { "" };
-                                (format!("▣ {id} {branch}{dirty}"), Style::new().fg(Color::Cyan))
-                            }
-                            _ => (format!("□ {id} free"), dim),
-                        }
-                    }
-                };
-                // This location's agents, right-aligned (counts only when > 1).
-                let states: Vec<String> = rollup_of(app.panes.iter().filter(|p| p.loc == loc))
-                    .into_iter()
-                    .map(|(g, n, _)| if n > 1 { format!("{g}{n}") } else { g.to_string() })
-                    .collect();
-                let badge = states.join(" ");
-                let badge_w = badge.chars().count() as u16;
-                let room = if badge_w > 0 { side.saturating_sub(badge_w + 1) } else { side };
-                buf.set_stringn(0, y, format!("{marker}{text}"), room as usize, style);
-                if badge_w > 0 && badge_w + 4 < side {
-                    let mut x = side - badge_w;
-                    for (g, n, gstyle) in rollup_of(app.panes.iter().filter(|p| p.loc == loc)) {
-                        let part = if n > 1 { format!("{g}{n}") } else { g.to_string() };
-                        buf.set_string(x, y, &part, gstyle);
-                        x += part.chars().count() as u16 + 1;
-                    }
-                }
-            }
-            Row::Pane(i) => {
-                let pane = &app.panes[i];
-                let selected = focused.map(|f| f.id) == Some(pane.id);
-                let (glyph, gstyle) = state_glyph(pane);
-                let style = if selected {
-                    Style::new().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::new()
-                };
-                buf.set_stringn(3, y, glyph, 1, gstyle);
-                let tab = app.views.get(&pane.loc).filter(|v| v.tabs.len() > 1).and_then(|v| v.tab_of(pane.id));
-                let label = match tab {
-                    Some(t) => format!(" {}:{} ", t + 1, pane_label(app, pane)),
-                    None => format!(" {} ", pane_label(app, pane)),
-                };
-                buf.set_stringn(4, y, label, side.saturating_sub(4) as usize, style);
-            }
+            Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
+            Row::Pane(_) => {}
         }
     }
     if !app.sidebar_hidden {
