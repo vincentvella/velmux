@@ -569,7 +569,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         cursor = Some(Position::new(x.min(cols - 1), sy));
     }
     if let Some(text) = app.toast_text() {
-        draw_toast(&app.theme, text, body, buf);
+        let area = draw_toast(&app.theme, text, body, buf);
+        // The pane's cursor would show through the toast as a highlighted cell.
+        cursor = cursor.filter(|p| !area.contains(*p));
     }
     if let Mode::Menu { selected } = &app.mode {
         draw_menu(app, *selected, buf);
@@ -630,7 +632,7 @@ fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
 }
 
 /// A small floating box at the bottom centre of the pane area.
-fn draw_toast(t: &Theme, text: &str, body: Rect, buf: &mut Buffer) {
+fn draw_toast(t: &Theme, text: &str, body: Rect, buf: &mut Buffer) -> Rect {
     use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
     let width = (text.chars().count() as u16 + 6).min(body.width);
     let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.bottom().saturating_sub(4), width, 3);
@@ -642,6 +644,7 @@ fn draw_toast(t: &Theme, text: &str, body: Rect, buf: &mut Buffer) {
         .render(area, buf);
     buf.set_string(area.x + 2, area.y + 1, "●", Style::new().fg(t.accent));
     buf.set_stringn(area.x + 4, area.y + 1, text, width.saturating_sub(5) as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+    area
 }
 
 /// The theme list, each with a swatch of its main colours; the highlighted one
