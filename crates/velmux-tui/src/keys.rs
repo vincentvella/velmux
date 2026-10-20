@@ -529,14 +529,16 @@ pub fn ghostty_config(map: &Keymap) -> String {
             Action::Location(n) | Action::Tab(n) | Action::Slot(n) => format!("{} {n}", name_of(*action)),
             a => name_of(*a).to_string(),
         };
-        out.push_str(&format!("keybind = {}={value}  # {label}\n", name.join("+")));
+        // Ghostty comments must be on their own line: a trailing `# …` becomes part
+        // of the value and gets typed after the escape sequence.
+        out.push_str(&format!("# {label}\nkeybind = {}={value}\n", name.join("+")));
         // Ghostty also matches the character form (`super+1`) of a digit key; bind
         // it too so an older `super+1=…` line can't win.
         if let Key::Char(c) = chord.key {
             if c.is_ascii_digit() {
                 name.pop();
                 name.push(c.to_string());
-                out.push_str(&format!("keybind = {}={value}  # {label}\n", name.join("+")));
+                out.push_str(&format!("keybind = {}={value}\n", name.join("+")));
             }
         }
     }
@@ -617,12 +619,15 @@ mod tests {
     fn exports_ghostty_keybinds() {
         let (map, _) = Keymap::build(0x02, &BTreeMap::new());
         let g = ghostty_config(&map);
-        assert!(g.contains("keybind = super+t=csi:116;9u  # new_tab"), "{g}");
-        assert!(g.contains("keybind = super+digit_2=csi:50;9u  # location 2"));
-        assert!(g.contains("keybind = super+2=csi:50;9u  # location 2"));
-        assert!(g.contains("keybind = ctrl+digit_1=csi:49;5u  # tab 1"));
-        assert!(g.contains("keybind = super+alt+arrow_left=csi:1;11D  # focus_left"));
-        assert!(g.contains("keybind = super+ctrl+bracket_left=csi:91;13u  # prev_location"));
-        assert!(g.contains("keybind = super+shift+enter=csi:13;10u  # zoom"));
+        assert!(g.contains("# new_tab\nkeybind = super+t=csi:116;9u\n"), "{g}");
+        assert!(g.contains("# location 2\nkeybind = super+digit_2=csi:50;9u\nkeybind = super+2=csi:50;9u\n"));
+        assert!(g.contains("keybind = ctrl+digit_1=csi:49;5u\n"));
+        assert!(g.contains("keybind = super+alt+arrow_left=csi:1;11D\n"));
+        assert!(g.contains("keybind = super+ctrl+bracket_left=csi:91;13u\n"));
+        assert!(g.contains("keybind = super+shift+enter=csi:13;10u\n"));
+        // No value may carry a trailing comment: Ghostty would send it as text.
+        for line in g.lines().filter(|l| l.starts_with("keybind")) {
+            assert!(!line.contains('#'), "comment in value: {line}");
+        }
     }
 }
