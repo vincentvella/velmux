@@ -24,7 +24,8 @@ below a divider. Nothing collapses, so the layout never shifts as you move. At t
 top: `⊕ new` (claim a slot), `≡ menu` (a short menu of common actions with
 their shortcuts; also `<prefix> m`), and a `spaces · agents` switch
 (`<prefix> g`). The agents view lists every agent with its location and current
-task, the ones blocked on you or finished unseen first; click one to jump to it. Panes are labelled by what's running and where
+task, the ones blocked on you or finished unseen first; click one to jump to it. Drag a repo's
+name, or a folder, to reorder them; the order is saved. Panes are labelled by what's running and where
 (`shell · packages/web`, `bun`, `nvim`).
 
 The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.

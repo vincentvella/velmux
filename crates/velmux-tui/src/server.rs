@@ -89,10 +89,20 @@ pub enum Mode {
 
 /// A mouse drag in progress.
 enum Drag {
+    /// Pressing on a repo heading or a folder in the sidebar: a click on release,
+    /// or a reorder once it moves.
+    Sidebar { grab: Grab, start: (u16, u16), moved: bool },
     /// Resizing the split behind a divider.
     Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
     /// Selecting text; copy mode opens on the first motion, copies on release.
     Select { pane: u64, origin: (u16, u16), moved: bool },
+}
+
+/// What's being dragged in the sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Grab {
+    Repo(usize),
+    Folder(String),
 }
 
 /// Overrides for a new pane (restore and import).
@@ -210,6 +220,11 @@ pub struct App {
     pub keymap: Keymap,
     pub sidebar_hidden: bool,
     pub sidebar_view: ui::SidebarView,
+    /// Display order of projects (indices into `projects`, which never move,
+    /// since locations refer to projects by index).
+    pub project_order: Vec<usize>,
+    /// A sidebar reorder in progress, and the row it's over (for drawing).
+    pub sidebar_drag: Option<(Grab, u16)>,
     /// Shown once a client attaches (e.g. an invalid `prefix` in config).
     startup_warning: Option<String>,
     pub jobs: Vec<String>,
@@ -355,6 +370,8 @@ impl App {
             keymap,
             sidebar_hidden: false,
             sidebar_view: ui::SidebarView::Spaces,
+            project_order: Vec::new(),
+            sidebar_drag: None,
             startup_warning,
             jobs: Vec::new(),
             status: None,
@@ -387,6 +404,14 @@ impl App {
 
     pub fn focused(&self) -> Option<&Pane> {
         self.focus.and_then(|id| self.panes.iter().find(|p| p.id == id))
+    }
+
+    /// Projects in display order: the saved / dragged order, then any added since.
+    pub fn ordered_projects(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = self.project_order.iter().copied().filter(|&p| p < self.projects.len()).collect();
+        let missing: Vec<usize> = (0..self.projects.len()).filter(|p| !order.contains(p)).collect();
+        order.extend(missing);
+        order
     }
 
     pub fn pane(&self, id: u64) -> Option<&Pane> {
@@ -455,7 +480,7 @@ impl App {
         match (&loc.slot, name) {
             (None, Some(n)) => format!("{} › {n} (base)", project.name()),
             (None, None) => format!("{} › base", project.name()),
-            (Some(id), _) if project.is_unclassified() => format!("unclassified › {}", name.unwrap_or(id)),
+            (Some(id), _) if project.is_unclassified() => name.unwrap_or(id).to_string(),
             (Some(id), name) => {
                 let branch = project
                     .slots
@@ -696,7 +721,12 @@ impl App {
             .collect();
         Saved {
             version: 1,
-            projects: self.projects.iter().filter_map(|p| p.base().map(Path::to_path_buf)).collect(),
+            // Saved in display order, so restore rebuilds that order.
+            projects: self
+                .ordered_projects()
+                .into_iter()
+                .filter_map(|p| self.projects[p].base().map(Path::to_path_buf))
+                .collect(),
             folders: self
                 .projects
                 .iter()
@@ -1013,7 +1043,11 @@ impl App {
         }
         if ev.x < ui::sidebar_width(cols, self.sidebar_hidden) {
             if ev.is_press() && ev.is_left() {
-                self.sidebar_click(ev.x, ev.y);
+                // Repo headings and folders can be dragged; decide on release.
+                match self.grab_at(ev.y) {
+                    Some(grab) => self.drag = Some(Drag::Sidebar { grab, start: (ev.x, ev.y), moved: false }),
+                    None => self.sidebar_click(ev.x, ev.y),
+                }
             }
             return;
         }
@@ -1084,6 +1118,24 @@ impl App {
 
     fn continue_drag(&mut self, drag: Drag, ev: MouseEvent) {
         match drag {
+            Drag::Sidebar { grab, start, mut moved } => {
+                if ev.release {
+                    self.sidebar_drag = None;
+                    if moved {
+                        self.drop_on(&grab, ev.y);
+                    } else {
+                        self.sidebar_click(start.0, start.1);
+                    }
+                    self.full_redraw = true;
+                    return;
+                }
+                if ev.is_motion() {
+                    moved |= ev.y != start.1;
+                    let valid = moved && self.drop_target(&grab, ev.y).is_some();
+                    self.sidebar_drag = valid.then(|| (grab.clone(), ev.y));
+                }
+                self.drag = Some(Drag::Sidebar { grab, start, moved });
+            }
             Drag::Divider { loc, path, span, dir } => {
                 if ev.release {
                     return;
@@ -1140,6 +1192,60 @@ impl App {
         let titled = self.titled(&loc);
         let (rects, _) = self.view_rects(&loc);
         rects.into_iter().find(|(p, _)| *p == id).map(|(_, r)| ui::content_rect(r, titled))
+    }
+
+    /// What a press at sidebar line `y` would drag, if anything.
+    fn grab_at(&self, y: u16) -> Option<Grab> {
+        if self.sidebar_view != ui::SidebarView::Spaces {
+            return None;
+        }
+        match ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y)?.1 {
+            ui::Row::Project(p) => Some(Grab::Repo(p)),
+            ui::Row::Location(loc) if self.projects[loc.project].is_unclassified() => loc.slot.map(Grab::Folder),
+            _ => None,
+        }
+    }
+
+    /// Where `grab` would land if dropped on sidebar line `y`: a repo onto any row
+    /// of another repo, a folder onto another folder.
+    fn drop_target(&self, grab: &Grab, y: u16) -> Option<Grab> {
+        let row = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y)?.1;
+        let target = match (grab, row) {
+            (Grab::Repo(_), ui::Row::Project(p)) => Grab::Repo(p),
+            (Grab::Repo(_), ui::Row::Location(loc)) if !self.projects[loc.project].is_unclassified() => Grab::Repo(loc.project),
+            (Grab::Folder(_), ui::Row::Location(loc)) if self.projects[loc.project].is_unclassified() => Grab::Folder(loc.slot?),
+            _ => return None,
+        };
+        (target != *grab).then_some(target)
+    }
+
+    /// Move `grab` to the target's place: before it when moving up, after it when moving down.
+    fn drop_on(&mut self, grab: &Grab, y: u16) {
+        let Some(target) = self.drop_target(grab, y) else { return };
+        fn shift<T: PartialEq + Clone>(list: &mut Vec<T>, from: &T, to: &T) {
+            let (Some(a), Some(b)) = (list.iter().position(|x| x == from), list.iter().position(|x| x == to)) else { return };
+            let item = list.remove(a);
+            list.insert(b, item);
+        }
+        match (grab, &target) {
+            (Grab::Repo(from), Grab::Repo(to)) => {
+                let mut order = self.ordered_projects();
+                shift(&mut order, from, to);
+                self.project_order = order;
+            }
+            (Grab::Folder(from), Grab::Folder(to)) => {
+                if let Some(p) = self.projects.iter().position(Project::is_unclassified) {
+                    let folders = &mut self.projects[p].folders;
+                    let ids: Vec<String> = folders.iter().map(|f| f.id.clone()).collect();
+                    let mut moved = ids.clone();
+                    shift(&mut moved, from, to);
+                    folders.sort_by_key(|f| moved.iter().position(|id| *id == f.id));
+                }
+            }
+            _ => return,
+        }
+        self.save();
+        self.dirty = true;
     }
 
     fn sidebar_click(&mut self, x: u16, y: u16) {

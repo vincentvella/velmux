@@ -88,8 +88,8 @@ pub const VIEW_SPLIT_X: u16 = 9;
 
 pub fn rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
-    // Repos first, then the unclassified group of plain folders.
-    let mut order: Vec<usize> = (0..app.projects.len()).collect();
+    // Repos in display order, then the unclassified group of plain folders.
+    let mut order = app.ordered_projects();
     order.sort_by_key(|&p| app.projects[p].is_unclassified());
     for p in order {
         let project = &app.projects[p];
@@ -122,7 +122,7 @@ pub fn rows(app: &App) -> Vec<Row> {
 /// repo's line rather than rows of their own.
 pub fn display_rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
-    let repos: Vec<usize> = (0..app.projects.len()).filter(|&p| !app.projects[p].is_unclassified()).collect();
+    let repos: Vec<usize> = app.ordered_projects().into_iter().filter(|&p| !app.projects[p].is_unclassified()).collect();
     if !repos.is_empty() {
         out.push(Row::Heading("REPOS"));
     }
@@ -439,6 +439,12 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
             }
         }
+    }
+    // Reordering: light up where the dragged repo / folder will land.
+    if let (Some((_, y)), false) = (&app.sidebar_drag, app.sidebar_hidden) {
+        let row = Rect::new(0, *y, side, 1);
+        buf.set_style(row, Style::new().bg(Color::Indexed(24)));
+        buf.set_string(side.saturating_sub(2), *y, "⇅", Style::new().fg(Color::White).bg(Color::Indexed(24)));
     }
     if !app.sidebar_hidden {
         for y in 0..rows.saturating_sub(1) {
