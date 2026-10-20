@@ -9,6 +9,7 @@ mod keys;
 mod layout;
 mod mouse;
 mod pane;
+mod picker;
 mod prefix;
 mod proto;
 mod server;

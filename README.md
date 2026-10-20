@@ -34,6 +34,8 @@ The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
 | arrows, `H J K L` | focus a neighbour, move the nearest divider |
 | `z` | zoom the focused pane |
 | `t`, `tab` / `shift+tab` | new tab, next / previous tab |
+| `T` | rename the tab (empty clears; names show in the tab bar) |
+| `w` | location picker: type to fuzzy-filter, ↑↓ / `^p ^n`, enter to go |
 | `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
 | `1`–`9` | slot N of this repo |
 | `o` | jump to the next agent that's blocked or finished unseen |
@@ -50,7 +52,7 @@ Any action can also be bound with no prefix. The defaults mirror a Cmd-driven
 new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
 `super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
 close, `super+shift+enter` zoom, `super+alt+arrows` focus, `super+b` sidebar,
-`super+shift+u` attention. These use CSI-u sequences that apps never receive, so
+`super+shift+u` attention, `super+p` location picker, `super+r` rename tab. These use CSI-u sequences that apps never receive, so
 they can't clash with app keys, but your terminal must be told to send them:
 
 ```sh

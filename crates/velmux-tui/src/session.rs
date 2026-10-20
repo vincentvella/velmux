@@ -51,13 +51,15 @@ pub struct SavedView {
 pub struct SavedTab {
     pub layout: Layout,
     pub panes: Vec<SavedPane>,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl SavedView {
     /// The view's tabs, whether saved by this version or one without tabs.
     pub fn take_tabs(&mut self) -> Vec<SavedTab> {
         if self.tabs.is_empty() {
-            vec![SavedTab { layout: self.layout.clone(), panes: std::mem::take(&mut self.panes) }]
+            vec![SavedTab { layout: self.layout.clone(), panes: std::mem::take(&mut self.panes), name: None }]
         } else {
             std::mem::take(&mut self.tabs)
         }

@@ -16,6 +16,7 @@ use vt100::MouseProtocolMode;
 use crate::copy::{self, Action as CopyAction, Copy};
 use crate::herdr::{self, Plan, Target};
 use crate::keys::{Action, Keymap};
+use crate::picker::{self, Picker};
 use crate::layout::{self, Dir, Layout, Toward};
 use crate::mouse::{self, Chunk, MouseEvent};
 use crate::pane::Term;
@@ -76,7 +77,9 @@ impl Project {
 pub enum Mode {
     Normal,
     Prefix,
-    Prompt { label: String, input: String },
+    Prompt { label: String, input: String, purpose: PromptFor },
+    /// Fuzzy location picker.
+    Picker(Picker),
     Confirm { label: String, action: Confirm },
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
@@ -112,6 +115,12 @@ fn unbound_len(bytes: &[u8]) -> usize {
     }
 }
 
+/// What a text prompt's answer is for.
+pub enum PromptFor {
+    ClaimBranch,
+    RenameTab,
+}
+
 pub enum Confirm {
     Release(Loc),
     Quit,
@@ -129,11 +138,12 @@ pub struct Tab {
     pub zoomed: Option<u64>,
     /// Pane to focus when switching back to this tab.
     pub last_focus: Option<u64>,
+    pub name: Option<String>,
 }
 
 impl Tab {
     pub fn new(layout: Layout, zoomed: Option<u64>) -> Tab {
-        Tab { layout, zoomed, last_focus: None }
+        Tab { layout, zoomed, last_focus: None, name: None }
     }
 }
 
@@ -573,6 +583,7 @@ impl App {
                     .tabs
                     .iter()
                     .map(|tab| SavedTab {
+                        name: tab.name.clone(),
                         layout: tab.layout.clone(),
                         panes: tab
                             .layout
@@ -689,7 +700,9 @@ impl App {
                 }
             }
             if let Some(layout) = layout {
-                tabs.push(Tab::new(layout.remap(&ids), None));
+                let mut tab = Tab::new(layout.remap(&ids), None);
+                tab.name = saved_tab.name;
+                tabs.push(tab);
             }
             }
             if !tabs.is_empty() {
@@ -997,6 +1010,7 @@ impl App {
                     }
                 }
                 Mode::Prompt { .. } => self.prompt_input(bytes),
+                Mode::Picker(_) => self.picker_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
                 Mode::Confirm { .. } => {
                     let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
@@ -1061,11 +1075,80 @@ impl App {
         }
         if cancel {
             self.mode = Mode::Normal;
-        } else if let Some(branch) = submit {
-            self.mode = Mode::Normal;
-            self.claim((!branch.is_empty()).then_some(branch));
+        } else if let Some(answer) = submit {
+            let Mode::Prompt { purpose, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { unreachable!() };
+            match purpose {
+                PromptFor::ClaimBranch => self.claim((!answer.is_empty()).then_some(answer)),
+                PromptFor::RenameTab => {
+                    if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
+                        view.name = (!answer.is_empty()).then_some(answer);
+                    }
+                    self.relayout();
+                }
+            }
         }
         bytes.len()
+    }
+
+    /// Every place to go, in sidebar order: repo bases, claimed or open slots, folders.
+    pub fn picker_items(&self) -> Vec<picker::Item> {
+        ui::rows(self)
+            .into_iter()
+            .filter_map(|r| match r {
+                ui::Row::Location(loc) => Some(loc),
+                _ => None,
+            })
+            .filter(|loc| {
+                let project = &self.projects[loc.project];
+                let free = loc.slot.as_ref().is_some_and(|id| {
+                    !project.is_unclassified()
+                        && project.slots.iter().any(|s| &s.id == id && s.status == Status::Free)
+                });
+                !free || self.views.contains_key(loc)
+            })
+            .map(|loc| picker::Item { label: self.loc_name(&loc), loc })
+            .collect()
+    }
+
+    fn picker_input(&mut self, bytes: &[u8]) -> usize {
+        let items = self.picker_items();
+        let Mode::Picker(p) = &mut self.mode else { return bytes.len() };
+        let count = picker::filter(&items, &p.query).len();
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, Some(0x10)),
+            [0x1b, b'[', b'B', ..] => (3, Some(0x0e)),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, None)
+            }
+            [0x1b] => (1, Some(0x1b)),
+            [b, ..] if b.is_ascii_control() || *b == 0x7f => (1, Some(*b)),
+            _ => {
+                // Printable text up to the next control byte.
+                let end = bytes.iter().position(|b| b.is_ascii_control()).unwrap_or(bytes.len());
+                p.query.push_str(&String::from_utf8_lossy(&bytes[..end]));
+                p.selected = 0;
+                return end;
+            }
+        };
+        match key {
+            Some(0x10) => p.selected = p.selected.checked_sub(1).unwrap_or(count.saturating_sub(1)),
+            Some(0x0e) => p.selected = if count == 0 { 0 } else { (p.selected + 1) % count },
+            Some(0x7f | 0x08) => {
+                p.query.pop();
+                p.selected = 0;
+            }
+            Some(0x1b | 0x03) => self.mode = Mode::Normal,
+            Some(b'\r' | b'\n') => {
+                let chosen = picker::filter(&items, &p.query).get(p.selected).map(|i| i.loc.clone());
+                self.mode = Mode::Normal;
+                if let Some(loc) = chosen {
+                    self.show_location(loc);
+                }
+            }
+            _ => {}
+        }
+        used
     }
 
     fn run(&mut self, action: Action) {
@@ -1081,6 +1164,7 @@ impl App {
                     self.mode = Mode::Prompt {
                         label: "branch for new slot (empty = detached)".into(),
                         input: String::new(),
+                        purpose: PromptFor::ClaimBranch,
                     };
                 }
             }
@@ -1143,6 +1227,25 @@ impl App {
                 self.relayout();
             }
             Action::Attention => self.next_attention(),
+            Action::LocationPicker => {
+                if self.copy.is_some() {
+                    self.exit_copy();
+                }
+                // Start on the current location so Enter alone is a no-op.
+                let items = self.picker_items();
+                let at = self.current_loc().and_then(|c| items.iter().position(|i| i.loc == c)).unwrap_or(0);
+                self.mode = Mode::Picker(Picker { query: String::new(), selected: at });
+            }
+            Action::RenameTab => match self.current_loc().and_then(|l| self.views.get(&l)) {
+                Some(view) => {
+                    self.mode = Mode::Prompt {
+                        label: format!("rename tab {} (empty clears)", view.active + 1),
+                        input: view.name.clone().unwrap_or_default(),
+                        purpose: PromptFor::RenameTab,
+                    }
+                }
+                None => self.say("no tab here yet — open a pane first"),
+            },
             Action::NewTab => self.new_tab(),
             Action::NextTab => self.step_tab(1),
             Action::PrevTab => self.step_tab(-1),
@@ -1468,7 +1571,9 @@ impl App {
             panes += ids.len();
             resumed += resumes;
             first.get_or_insert((loc.clone(), layout.leaves().first().and_then(|l| ids.get(l).copied())));
-            tabs.push(Tab::new(layout.remap(&ids), zoomed));
+            let mut tab = Tab::new(layout.remap(&ids), zoomed);
+            tab.name = plan_tab.name;
+            tabs.push(tab);
             }
             if tabs.is_empty() {
                 continue;
@@ -1635,7 +1740,8 @@ impl App {
                 let tab = view.tabs.remove(t);
                 if let Some(layout) = tab.layout.remove(id) {
                     let zoomed = tab.zoomed.filter(|z| *z != id);
-                    view.tabs.insert(t, Tab { layout, zoomed, last_focus: tab.last_focus.filter(|f| *f != id) });
+                    let last_focus = tab.last_focus.filter(|f| *f != id);
+                    view.tabs.insert(t, Tab { layout, zoomed, last_focus, name: tab.name });
                 } else if view.active >= t && view.active > 0 {
                     view.active -= 1; // the tab closed; stay on its neighbour
                 }

@@ -51,6 +51,8 @@ struct WorktreeSpace {
 
 #[derive(Deserialize)]
 struct Tab {
+    #[serde(default)]
+    custom_name: Option<String>,
     layout: HLayout,
     panes: HashMap<u32, HPane>,
     #[serde(default)]
@@ -117,6 +119,7 @@ pub struct PlanView {
 
 #[derive(Debug)]
 pub struct PlanTab {
+    pub name: Option<String>,
     /// Leaves are herdr pane ids, remapped when the panes are created.
     pub layout: Layout,
     pub zoomed: Option<u64>,
@@ -179,7 +182,7 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
     for (n, ws) in snapshot.workspaces.into_iter().enumerate() {
         let Workspace { custom_name, identity_cwd, worktree_space, mut tabs, active_tab, layout, panes, zoomed, focused } = ws;
         if let (true, Some(layout), Some(panes)) = (tabs.is_empty(), layout, panes) {
-            tabs.push(Tab { layout, panes, zoomed, focused });
+            tabs.push(Tab { custom_name: None, layout, panes, zoomed, focused });
         }
         if tabs.is_empty() {
             plan.skipped.push((format!("workspace {}", n + 1), "no tabs".into()));
@@ -249,7 +252,7 @@ pub fn plan(path: &Path, env: &Env, with_latest_claude: bool) -> Result<Plan> {
                 active = plan_tabs.len();
             }
             let zoomed = tab.zoomed.then_some(tab.focused).flatten().map(u64::from);
-            plan_tabs.push(PlanTab { layout: convert(&tab.layout), zoomed, panes });
+            plan_tabs.push(PlanTab { name: tab.custom_name.clone(), layout: convert(&tab.layout), zoomed, panes });
         }
         if plan_tabs.is_empty() {
             plan.skipped.push((label, "no panes".into()));

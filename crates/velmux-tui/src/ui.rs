@@ -305,14 +305,20 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     };
     // Tab bar, right-aligned in the header, when there's more than one; the
     // header text is clipped to leave it room.
-    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1);
-    let bar_width: u16 = tabbed.map_or(0, |v| (1..=v.tabs.len()).map(|i| format!(" {i} ").len() as u16).sum::<u16>() + 1);
+    let tabbed = current.as_ref().and_then(|l| app.views.get(l)).filter(|v| v.tabs.len() > 1 || v.name.is_some());
+    let tab_label = |i: usize, t: &crate::server::Tab| match &t.name {
+        Some(name) => format!(" {}:{name} ", i + 1),
+        None => format!(" {} ", i + 1),
+    };
+    let bar_width: u16 = tabbed.map_or(0, |v| {
+        v.tabs.iter().enumerate().map(|(i, t)| tab_label(i, t).chars().count() as u16).sum::<u16>() + 1
+    });
     let header_width = body.width.saturating_sub(bar_width) as usize;
     buf.set_stringn(body.x, 0, header, header_width, Style::new().add_modifier(Modifier::BOLD));
     if let Some(view) = tabbed {
         let mut x = body.right();
         for i in (0..view.tabs.len()).rev() {
-            let label = format!(" {} ", i + 1);
+            let label = tab_label(i, &view.tabs[i]);
             let w = label.chars().count() as u16;
             if x < body.x + w {
                 break;
@@ -387,6 +393,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let text = match &app.mode {
         Mode::Prefix => app.keymap.help(&app.prefix.short),
         Mode::Prompt { label, input, .. } => format!("{label}: {input}"),
+        Mode::Picker(_) => "type to filter · ↑↓ / ^p ^n select · enter go · esc cancel".into(),
         Mode::Confirm { label, .. } => format!("{label} [y/n]"),
         Mode::Copy => match app.copy.as_ref() {
             Some(c) => match (&c.search, &c.message) {
@@ -406,6 +413,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         let x = 1 + ("search ↑ ".chars().count() + q.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
     }
+    if let Mode::Picker(p) = &app.mode {
+        cursor = draw_picker(app, p, body, buf);
+    }
     if let Mode::Prompt { label, input, .. } = &app.mode {
         let x = 1 + (label.chars().count() + 2 + input.chars().count()) as u16;
         cursor = Some(Position::new(x.min(cols - 1), sy));
@@ -418,6 +428,54 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         }
     }
     cursor
+}
+
+/// The location picker, centred over the pane area. Returns the cursor (query end).
+fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffer) -> Option<Position> {
+    use ratatui::widgets::{Block, Borders, Clear, Widget};
+    let items = app.picker_items();
+    let hits = crate::picker::filter(&items, &p.query);
+    let width = 64.min(body.width.saturating_sub(2)).max(20);
+    let list_rows = (hits.len() as u16).clamp(1, body.height.saturating_sub(5).max(1));
+    let height = (list_rows + 3).min(body.height);
+    let area = Rect::new(body.x + (body.width.saturating_sub(width)) / 2, body.y + 1, width, height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(Color::Indexed(24)))
+        .title(" go to ")
+        .render(area, buf);
+    let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
+    let prompt = format!("› {}", p.query);
+    buf.set_stringn(inner.x, inner.y, &prompt, inner.width as usize, Style::new().add_modifier(Modifier::BOLD));
+    let current = app.current_loc();
+    // Keep the selection in view.
+    let visible = inner.height.saturating_sub(1) as usize;
+    let first = p.selected.saturating_sub(visible.saturating_sub(1));
+    if hits.is_empty() {
+        buf.set_stringn(inner.x, inner.y + 1, "no matches", inner.width as usize, Style::new().fg(Color::DarkGray));
+    }
+    for (row, item) in hits.iter().enumerate().skip(first).take(visible) {
+        let y = inner.y + 1 + (row - first) as u16;
+        let selected = row == p.selected;
+        let base = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+        buf.set_style(Rect::new(inner.x, y, inner.width, 1), base);
+        let marker = if current.as_ref() == Some(&item.loc) { "›" } else { " " };
+        buf.set_stringn(inner.x, y, format!("{marker} {}", item.label), inner.width as usize, base);
+        // Agent summary for that location, right-aligned.
+        let glyphs: String = app
+            .panes
+            .iter()
+            .filter(|pane| pane.loc == item.loc)
+            .map(|pane| state_glyph(pane).0)
+            .filter(|g| *g != " ")
+            .collect();
+        let w = glyphs.chars().count() as u16;
+        if w > 0 && w + 2 < inner.width {
+            buf.set_string(inner.right() - w - 1, y, glyphs, base.fg(Color::Yellow));
+        }
+    }
+    Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
 }
 
 /// Selection highlight, scroll position and the copy cursor over a frozen pane.
