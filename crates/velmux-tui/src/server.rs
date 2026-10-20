@@ -1343,7 +1343,8 @@ impl App {
         self.dirty = true;
     }
 
-    fn loc_cwd(&self, loc: &Loc) -> Option<PathBuf> {
+    /// The folder a location opens in (base checkout, slot or plain folder).
+    pub fn loc_cwd(&self, loc: &Loc) -> Option<PathBuf> {
         let project = self.projects.get(loc.project)?;
         match (&project.pool, &loc.slot) {
             (Some(pool), None) => Some(pool.base.clone()),

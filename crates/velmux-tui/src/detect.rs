@@ -4,7 +4,7 @@
 //! The Claude rules are a trimmed version of herdr's manifest
 //! (github.com/herdrdev/herdr, src/detect/manifests/claude.toml, Apache-2.0).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
@@ -29,6 +29,90 @@ pub fn foreground_agent(pgid: Option<libc::pid_t>) -> Option<&'static str> {
         // Claude installs as `…/claude/versions/<semver>`, so match path components.
         AGENTS.iter().copied().find(|a| path.split('/').any(|part| part == *a))
     })
+}
+
+const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "elvish", "xonsh", "login"];
+
+pub fn is_shell(program: &str) -> bool {
+    SHELLS.contains(&program.trim_start_matches('-'))
+}
+
+/// What's running in the foreground of a pane, for its label.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Foreground {
+    /// Program name, preferring the command over the shell wrapping it.
+    pub program: Option<String>,
+    /// Its working directory.
+    pub cwd: Option<PathBuf>,
+}
+
+/// The pty's foreground job: the first non-shell process in the group (the
+/// command a shell is running), else the shell itself.
+pub fn foreground(pgid: Option<libc::pid_t>) -> Foreground {
+    let Some(pgid) = pgid else { return Foreground::default() };
+    let mut pids = group_members(pgid);
+    pids.retain(|&p| p != pgid);
+    pids.insert(0, pgid);
+    let named: Vec<(libc::pid_t, String)> = pids
+        .into_iter()
+        .filter_map(|pid| {
+            let path = exe_path(pid)?;
+            let lower = path.to_string_lossy().to_lowercase();
+            // Versioned installs (`…/claude/versions/2.1.303`) take their agent's name.
+            let name = AGENTS
+                .iter()
+                .find(|a| lower.split('/').any(|part| part == **a))
+                .map(|a| a.to_string())
+                .or_else(|| path.file_name().map(|f| f.to_string_lossy().into_owned()))?;
+            Some((pid, name))
+        })
+        .collect();
+    let pick = named.iter().find(|(_, n)| !is_shell(n)).or(named.first());
+    match pick {
+        Some((pid, name)) => Foreground { program: Some(name.clone()), cwd: process_cwd(*pid) },
+        None => Foreground::default(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: libc::pid_t) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    let n = unsafe {
+        libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, (&mut info as *mut libc::proc_vnodepathinfo).cast(), size)
+    };
+    if n != size {
+        return None;
+    }
+    let raw = &info.pvi_cdir.vip_path;
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), std::mem::size_of_val(raw)) };
+    let end = bytes.iter().position(|&b| b == 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&bytes[..end])))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_cwd(pid: libc::pid_t) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+/// `cwd` relative to `root` for a label (`None` when it's the root itself);
+/// outside the root it's shown from `~`, keeping the last two components.
+pub fn short_cwd(cwd: &Path, root: &Path) -> Option<String> {
+    if cwd == root {
+        return None;
+    }
+    if let Ok(rel) = cwd.strip_prefix(root) {
+        return Some(rel.display().to_string());
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let shown = match home.as_deref().and_then(|h| cwd.strip_prefix(h).ok()) {
+        Some(rel) if rel.as_os_str().is_empty() => "~".to_string(),
+        Some(rel) => format!("~/{}", rel.display()),
+        None => cwd.display().to_string(),
+    };
+    let parts: Vec<&str> = shown.split('/').collect();
+    Some(if parts.len() > 3 { format!("…/{}", parts[parts.len() - 2..].join("/")) } else { shown })
 }
 
 #[cfg(target_os = "macos")]
@@ -112,6 +196,23 @@ pub fn classify_claude(title: &str, lines: &[String]) -> AgentState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_shells_and_paths() {
+        assert!(is_shell("zsh") && is_shell("-zsh") && !is_shell("bun"));
+        let root = Path::new("/w/app");
+        assert_eq!(short_cwd(root, root), None);
+        assert_eq!(short_cwd(Path::new("/w/app/packages/web"), root).as_deref(), Some("packages/web"));
+        assert_eq!(short_cwd(Path::new("/opt/a/b/c/d"), root).as_deref(), Some("…/c/d"));
+        assert_eq!(short_cwd(Path::new("/opt/x"), root).as_deref(), Some("/opt/x"));
+    }
+
+    #[test]
+    fn finds_this_process_cwd_and_program() {
+        // The test binary itself is a fine foreground "job".
+        let me = std::process::id() as libc::pid_t;
+        assert_eq!(process_cwd(me).map(|p| p.canonicalize().unwrap()), Some(std::env::current_dir().unwrap().canonicalize().unwrap()));
+    }
 
     fn lines(s: &str) -> Vec<String> {
         s.lines().map(String::from).collect()

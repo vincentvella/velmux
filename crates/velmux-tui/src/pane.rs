@@ -85,6 +85,8 @@ pub struct Pane {
     child: Box<dyn Child + Send + Sync>,
     /// Agent currently in the foreground (re-detected on each tick).
     pub agent: Option<&'static str>,
+    /// Foreground program and its working directory, for the label.
+    pub fg: detect::Foreground,
     pub state: Option<AgentState>,
     idle_streak: u8,
     /// Agent finished while the pane wasn't focused.
@@ -163,6 +165,7 @@ impl Pane {
             writer,
             child,
             agent: None,
+            fg: detect::Foreground::default(),
             state: None,
             idle_streak: 0,
             unseen_done: false,
@@ -257,7 +260,11 @@ impl Pane {
         if self.frozen.is_some() {
             return false;
         }
-        let agent = detect::foreground_agent(self.master.process_group_leader());
+        let pgid = self.master.process_group_leader();
+        let agent = detect::foreground_agent(pgid);
+        let fg = detect::foreground(pgid);
+        let fg_changed = fg != self.fg;
+        self.fg = fg;
         let state = match agent {
             Some("claude") => {
                 let screen = self.parser.screen();
@@ -284,7 +291,7 @@ impl Pane {
         if focused {
             self.unseen_done = false;
         }
-        let changed = agent != self.agent || state != self.state;
+        let changed = agent != self.agent || state != self.state || fg_changed;
         self.agent = agent;
         self.state = state;
         changed

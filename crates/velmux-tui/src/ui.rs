@@ -179,13 +179,35 @@ fn state_glyph(pane: &Pane) -> (&'static str, Style) {
     }
 }
 
-pub fn pane_label(pane: &Pane) -> &'static str {
-    match (pane.agent, pane.kind) {
-        (Some(agent), _) => agent,
-        (None, Kind::Agent) => "agent",
-        (None, Kind::Shell) => "shell",
-        (None, Kind::Editor) => "editor",
+/// What a pane is: its agent, the program it's running, or `shell`, plus its
+/// folder when that isn't the location's root (`shell · packages/web`).
+pub fn pane_label(app: &App, pane: &Pane) -> String {
+    let program = pane.fg.program.as_deref();
+    let name = match (pane.agent, program) {
+        (Some(agent), _) => agent.to_string(),
+        (None, Some(p)) if !crate::detect::is_shell(p) => p.to_string(),
+        (None, Some(_)) => "shell".into(),
+        (None, None) => match pane.kind {
+            Kind::Agent => "agent".into(),
+            Kind::Shell => "shell".into(),
+            Kind::Editor => "editor".into(),
+        },
+    };
+    let place = match (pane.fg.cwd.as_deref(), app.loc_cwd(&pane.loc)) {
+        (Some(cwd), Some(root)) => crate::detect::short_cwd(cwd, &root),
+        _ => None,
+    };
+    match place {
+        Some(p) => format!("{name} · {p}"),
+        None => name,
     }
+}
+
+/// The window title worth showing: agents put their task there; shells just
+/// put `user@host:path`, which the label already covers.
+fn useful_title(pane: &Pane) -> Option<&str> {
+    let t = pane.title().trim();
+    (pane.agent.is_some() && !t.is_empty()).then_some(t)
 }
 
 /// Draw the whole UI; returns where the hardware cursor belongs, if visible.
@@ -258,8 +280,8 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 buf.set_stringn(3, y, glyph, 1, gstyle);
                 let tab = app.views.get(&pane.loc).filter(|v| v.tabs.len() > 1).and_then(|v| v.tab_of(pane.id));
                 let label = match tab {
-                    Some(t) => format!(" {}:{} ", t + 1, pane_label(pane)),
-                    None => format!(" {} ", pane_label(pane)),
+                    Some(t) => format!(" {}:{} ", t + 1, pane_label(app, pane)),
+                    None => format!(" {} ", pane_label(app, pane)),
                 };
                 buf.set_stringn(4, y, label, side.saturating_sub(4) as usize, style);
             }
@@ -275,9 +297,8 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let body = pane_area(cols, rows, app.sidebar_hidden);
     let header = match (&focused, &current) {
         (Some(pane), _) => {
-            let title = pane.title().trim();
-            format!("{} · {}{}", app.loc_name(&pane.loc), pane_label(pane),
-                if title.is_empty() { String::new() } else { format!(" — {title}") })
+            let title = useful_title(pane).map(|t| format!(" — {t}")).unwrap_or_default();
+            format!("{} · {}{title}", app.loc_name(&pane.loc), pane_label(app, pane))
         }
         (None, Some(loc)) => app.loc_name(loc),
         (None, None) => "velmux".into(),
@@ -326,7 +347,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 let Some(pane) = app.pane(id) else { continue };
                 let is_focused = focused.map(|f| f.id) == Some(id);
                 if titled {
-                    draw_title(pane, outer, is_focused, buf);
+                    draw_title(app, pane, outer, is_focused, buf);
                 }
                 let inner = content_rect(outer, titled);
                 draw_screen(pane.parser.screen(), inner, buf);
@@ -428,7 +449,7 @@ fn draw_copy(c: &Copy, pane: &Pane, area: Rect, buf: &mut Buffer) -> Option<Posi
     (c.search.is_none()).then(|| Position::new(area.x + c.cursor.1.min(area.width - 1), area.y + row as u16))
 }
 
-fn draw_title(pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {
+fn draw_title(app: &App, pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {
     let row = Rect::new(outer.x, outer.y, outer.width, 1);
     let style = if focused {
         Style::new().bg(Color::Indexed(24)).fg(Color::White).add_modifier(Modifier::BOLD)
@@ -438,11 +459,9 @@ fn draw_title(pane: &Pane, outer: Rect, focused: bool, buf: &mut Buffer) {
     buf.set_style(row, style);
     let (glyph, gstyle) = state_glyph(pane);
     buf.set_stringn(row.x + 1, row.y, glyph, 1, gstyle.patch(Style::new().bg(style.bg.unwrap_or(Color::Reset))));
-    let title = pane.title().trim();
-    let text = if title.is_empty() {
-        pane_label(pane).to_string()
-    } else {
-        format!("{} — {title}", pane_label(pane))
+    let text = match useful_title(pane) {
+        Some(title) => format!("{} — {title}", pane_label(app, pane)),
+        None => pane_label(app, pane),
     };
     buf.set_stringn(row.x + 3, row.y, text, row.width.saturating_sub(4) as usize, style);
 }

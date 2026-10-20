@@ -16,26 +16,56 @@ Run `velmux` with no arguments inside a repo. A background server owns every
 pane, so `<prefix> d` detaches and `velmux` reattaches with everything still
 running. The sidebar nests panes under the base checkout and each slot, with
 agent state: `●` working, `▲` blocked on you, `○` idle, `✓` finished while you
-were elsewhere. Each base checkout and slot has its own split layout, like a
-tmux window per slot, so a slot can show Claude beside a test-runner shell.
+were elsewhere. Each base checkout and slot has its own tabs, each a split
+layout, so a slot can show Claude beside a test-runner shell. Only the project
+you're in is expanded; others collapse to one line with an agent summary
+(e.g. `▸ caliburr ▲1 ○3`). Panes are labelled by what's running and where
+(`shell · packages/web`, `bun`, `nvim`).
 
 The prefix defaults to `ctrl+b`; set `prefix` in the global config (e.g.
-`"C-a"`, handy inside tmux). Restart the server (`<prefix> Q`) to apply.
+`"C-a"`). Restart the server (`<prefix> Q`) to apply config changes.
 
 | `<prefix>` then | |
 |---|---|
-| `n` | claim a slot (prompts for a branch) and start Claude there |
+| `n` / `r` | claim a slot (prompts for a branch) / release it |
 | `a` | Claude in the base checkout |
-| `c` / `e` | shell / editor in the current base or slot (splits the focused pane) |
+| `c` / `e` | shell / editor here (splits the focused pane) |
 | `\|` / `-` | split right / down with a shell |
-| arrows | focus the pane in that direction |
-| `H` `J` `K` `L` | move the nearest divider |
-| `z` | zoom the focused pane (toggle) |
-| `[` / `PgUp` | copy mode: scroll history, select, yank |
-| `j` `k` / `1`–`9` | next / previous pane across all slots, jump to slot N |
-| `r` | release the current slot (closes its panes, stashes work) |
-| `x` / `d` / `Q` | close pane / detach / stop the server |
-| `<prefix>` | send the prefix key itself to the pane |
+| arrows, `H J K L` | focus a neighbour, move the nearest divider |
+| `z` | zoom the focused pane |
+| `t`, `tab` / `shift+tab` | new tab, next / previous tab |
+| `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
+| `1`–`9` | slot N of this repo |
+| `o` | jump to the next agent that's blocked or finished unseen |
+| `b` | hide / show the sidebar |
+| `[` / `PgUp` | copy mode |
+| `j` / `k`, `x` | cycle panes, close pane |
+| `d` / `Q` | detach / stop the server |
+| `<prefix>` | send the prefix key itself |
+
+### Prefix-less keys
+
+Any action can also be bound with no prefix. The defaults mirror a Cmd-driven
+(herdr / cmux style) layout: `super+1..9` locations, `ctrl+1..9` tabs, `super+t`
+new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
+`super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
+close, `super+shift+enter` zoom, `super+alt+arrows` focus, `super+b` sidebar,
+`super+shift+u` attention. These use CSI-u sequences that apps never receive, so
+they can't clash with app keys, but your terminal must be told to send them:
+
+```sh
+velmux keys            # every binding
+velmux keys --ghostty  # Ghostty keybind lines for the prefix-less ones
+```
+
+Rebind anything in the global config (an empty list unbinds):
+
+```toml
+[keys]
+split_right = ["prefix+v", "super+d"]
+location = "alt+1..9"     # 1..9 ranges for location / tab / slot
+new_tab = []
+```
 
 ### Mouse
 
