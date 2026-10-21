@@ -80,14 +80,16 @@ formulas" workflow to do it now).
 
 velmux.com is `site/` (Next.js + Fumadocs), with the docs generated from
 `docs/` by `site/scripts/sync-docs.mjs`; its API routes (`/api/latest`, the
-newest release for update checks) run on Vercel. It only deploys when you run a deploy (the
-Vercel project isn't connected to the repo), and it builds on your machine, so
-deploys use no Vercel build minutes:
+newest release for update checks) run on Vercel. It only deploys when you ask
+(the Vercel project isn't connected to the repo), and it's always built before
+it reaches Vercel and uploaded prebuilt, so deploys use no Vercel build minutes:
+
+- **From GitHub:** Actions → *Deploy site* → *Run workflow*, or
+  `gh workflow run site.yml` (needs the `VERCEL_TOKEN` repository secret).
+- **From your machine:** `cd site && bun run deploy`.
 
 ```sh
-cd site
-bun install && bun run dev   # preview at localhost:3000
-bun run deploy               # build locally, upload the result to production
+cd site && bun install && bun run dev   # preview at localhost:3000
 ```
 
 ## Notes
