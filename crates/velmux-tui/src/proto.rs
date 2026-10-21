@@ -22,6 +22,9 @@ pub enum ClientMsg {
     ClaimFor { pane: u64, branch: Option<String> },
     /// One-shot: release the slot that pane is in, moving it back to the base.
     ReleaseFor { pane: u64 },
+    /// One-shot: an agent's hook says which session that pane's agent is in
+    /// (a session reference, see `agents`).
+    ReportSession { pane: u64, session: String },
 }
 
 pub enum ServerMsg {
@@ -83,6 +86,11 @@ impl ClientMsg {
                 write_frame(w, 6, &p)
             }
             ClientMsg::ReleaseFor { pane } => write_frame(w, 7, &pane.to_be_bytes()),
+            ClientMsg::ReportSession { pane, session } => {
+                let mut p = pane.to_be_bytes().to_vec();
+                p.extend_from_slice(session.as_bytes());
+                write_frame(w, 10, &p)
+            }
             ClientMsg::ImportHerdr { path, with_latest_claude } => {
                 let mut p = vec![*with_latest_claude as u8];
                 p.extend_from_slice(path.as_os_str().as_encoded_bytes());
@@ -115,6 +123,10 @@ impl ClientMsg {
                 })
             }
             7 if p.len() >= 8 => Ok(ClientMsg::ReleaseFor { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
+            10 if p.len() > 8 => Ok(ClientMsg::ReportSession {
+                pane: u64::from_be_bytes(p[..8].try_into().unwrap()),
+                session: String::from_utf8_lossy(&p[8..]).into_owned(),
+            }),
             4 if !p.is_empty() => Ok(ClientMsg::ImportHerdr {
                 with_latest_claude: p[0] == 1,
                 path: PathBuf::from(String::from_utf8_lossy(&p[1..]).into_owned()),

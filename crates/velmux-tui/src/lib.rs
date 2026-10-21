@@ -20,6 +20,7 @@ mod session;
 pub mod skill;
 pub mod ghostty;
 pub mod agents;
+pub mod hooks;
 pub mod guard;
 pub mod update;
 mod theme;
@@ -41,6 +42,16 @@ pub fn claim_for_pane(pane: u64, branch: Option<String>) -> anyhow::Result<Strin
     match reply.strip_prefix("error: ") {
         Some(e) => anyhow::bail!("{e}"),
         None => Ok(reply),
+    }
+}
+
+/// An agent's session hook (`velmux agent-hook`): tell the server which
+/// session (a reference) the agent in `pane` is in, so it can be resumed.
+pub fn report_session(pane: u64, session: String) -> anyhow::Result<()> {
+    let reply = client::request(proto::ClientMsg::ReportSession { pane, session })?;
+    match reply.strip_prefix("error: ") {
+        Some(e) => anyhow::bail!("{e}"),
+        None => Ok(()),
     }
 }
 

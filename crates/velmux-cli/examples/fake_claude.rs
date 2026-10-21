@@ -20,6 +20,10 @@ fn main() {
     if std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str() == "codex")) {
         return fake_codex(&args);
     }
+    // Installed as `droid`, it plays an agent followed through its hooks.
+    if std::env::current_exe().is_ok_and(|p| p.file_name().is_some_and(|n| n == "droid")) {
+        return fake_droid(&args);
+    }
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let (id, resumed) = match (flag("--resume"), flag("--session-id")) {
         (Some(id), _) => (id, true),
@@ -156,6 +160,38 @@ fn fake_codex(args: &[String]) {
                 writeln!(f, "{msg}").unwrap();
                 println!("said {said}");
             }
+        }
+    }
+}
+
+/// Droid as velmux sees it: `--resume <id>` resumes; a new session picks its
+/// own id and runs the `SessionStart` hooks in `~/.factory/settings.json` with
+/// `{"session_id": …}` on stdin, the way Droid does.
+fn fake_droid(args: &[String]) {
+    let resumed = args.iter().position(|a| a == "--resume").and_then(|i| args.get(i + 1)).cloned();
+    let id = resumed.clone().unwrap_or_else(|| format!("droid-{}", std::process::id()));
+    let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
+    let settings: serde_json::Value = std::fs::read_to_string(home.join(".factory/settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let input = serde_json::json!({"hook_event_name": "SessionStart", "session_id": id, "source": if resumed.is_some() { "resume" } else { "startup" }}).to_string();
+    for entry in settings["hooks"]["SessionStart"].as_array().into_iter().flatten() {
+        for hook in entry["hooks"].as_array().into_iter().flatten() {
+            if let Some(cmd) = hook["command"].as_str() {
+                let child = Command::new("sh").arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).spawn();
+                if let Ok(mut child) = child {
+                    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+                    let _ = child.wait();
+                }
+            }
+        }
+    }
+    println!("FAKE-DROID id={id} mode={}", if resumed.is_some() { "resume" } else { "new" });
+    let stdin = std::io::stdin();
+    loop {
+        print!("> ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 || line.trim() == "exit" {
+            break;
         }
     }
 }

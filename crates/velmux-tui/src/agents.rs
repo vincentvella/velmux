@@ -7,6 +7,11 @@
 //! A pane's session is kept as a reference that names its agent:
 //! `codex:<id>`, `gemini:<id>`, `opencode:<id>`, or a bare id for Claude
 //! (what velmux always stored, so older saves keep working).
+//!
+//! More agents are followed only as far as resuming: a session-start hook
+//! (`velmux agent-hook`, see `hooks`) reports which session each is in, and
+//! restore runs its resume command. Their commands and hooks are adapted from
+//! herdr (Apache-2.0; see NOTICE).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,9 +23,36 @@ pub enum Agent {
     Codex,
     Gemini,
     Opencode,
+    Copilot,
+    Cursor,
+    Droid,
+    Devin,
+    Qwen,
+    Grok,
+    Qoder,
+    Kimi,
+    Letta,
+    Mastracode,
+    Antigravity,
 }
 
-pub const ALL: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Gemini, Agent::Opencode];
+pub const ALL: [Agent; 15] = [
+    Agent::Claude,
+    Agent::Codex,
+    Agent::Gemini,
+    Agent::Opencode,
+    Agent::Copilot,
+    Agent::Cursor,
+    Agent::Droid,
+    Agent::Devin,
+    Agent::Qwen,
+    Agent::Grok,
+    Agent::Qoder,
+    Agent::Kimi,
+    Agent::Letta,
+    Agent::Mastracode,
+    Agent::Antigravity,
+];
 
 impl Agent {
     pub fn name(self) -> &'static str {
@@ -29,6 +61,17 @@ impl Agent {
             Agent::Codex => "codex",
             Agent::Gemini => "gemini",
             Agent::Opencode => "opencode",
+            Agent::Copilot => "copilot",
+            Agent::Cursor => "cursor-agent",
+            Agent::Droid => "droid",
+            Agent::Devin => "devin",
+            Agent::Qwen => "qwen",
+            Agent::Grok => "grok",
+            Agent::Qoder => "qodercli",
+            Agent::Kimi => "kimi",
+            Agent::Letta => "letta",
+            Agent::Mastracode => "mastracode",
+            Agent::Antigravity => "agy",
         }
     }
 
@@ -38,6 +81,39 @@ impl Agent {
             Agent::Codex => "Codex",
             Agent::Gemini => "Gemini CLI",
             Agent::Opencode => "opencode",
+            Agent::Copilot => "GitHub Copilot CLI",
+            Agent::Cursor => "Cursor Agent",
+            Agent::Droid => "Droid",
+            Agent::Devin => "Devin CLI",
+            Agent::Qwen => "Qwen Code",
+            Agent::Grok => "Grok CLI",
+            Agent::Qoder => "Qoder CLI",
+            Agent::Kimi => "Kimi Code",
+            Agent::Letta => "Letta Code",
+            Agent::Mastracode => "Mastra Code",
+            Agent::Antigravity => "Antigravity CLI",
+        }
+    }
+
+    /// Followed through its own session-start hook (see `hooks`).
+    pub fn hooked(self) -> bool {
+        !matches!(self, Agent::Claude | Agent::Codex | Agent::Gemini | Agent::Opencode)
+    }
+
+    /// The arguments that resume session `id` (for a hooked agent).
+    pub fn resume_args(self, id: &str) -> String {
+        let id_q = quote(id);
+        match self {
+            Agent::Copilot => quote(&format!("--resume={id}")),
+            Agent::Kimi => format!("--session {id_q}"),
+            Agent::Mastracode => format!("--thread {id_q}"),
+            Agent::Antigravity => format!("--conversation {id_q}"),
+            // Letta's default conversation belongs to an agent.
+            Agent::Letta => match id.strip_prefix("default:") {
+                Some(agent) => format!("--conversation default --agent {}", quote(agent)),
+                None => format!("--conversation {id_q}"),
+            },
+            _ => format!("--resume {id_q}"),
         }
     }
 
@@ -168,6 +244,14 @@ pub fn launch(agent: Agent, base: &str, resume: Option<&str>, ctx: &Context) -> 
                 None => session = None,
             }
         }
+        // The rest report their session through a hook once they've started.
+        _ => match resume {
+            Some(id) => {
+                cmd += &format!(" {}", agent.resume_args(id));
+                session = Some(id.to_string());
+            }
+            None => session = None,
+        },
     }
     Launch { command: cmd, session: session.map(|id| agent.session_ref(&id)), env }
 }
@@ -207,7 +291,8 @@ pub fn running_session(agent: Agent, pid: i32, cwd: Option<&Path>, since: System
         Agent::Codex => codex_session_since(&codex_home(), cwd?, since).map(|id| agent.session_ref(&id)),
         Agent::Opencode => opencode_session_since(&opencode_db(), cwd?, since).map(|id| agent.session_ref(&id)),
         // Started with `--session-id`; one started by hand isn't followed.
-        Agent::Gemini => None,
+        // The hooked ones report theirs.
+        _ => None,
     }
 }
 
@@ -292,6 +377,8 @@ pub fn session_exists(agent: Agent, id: &str, claude_dir: &Path) -> bool {
         }
         // Without sqlite3 to look, try resuming: opencode says if it's gone.
         Agent::Opencode => sqlite(&opencode_db(), &format!("select count(*) from session where id = {}", sql_text(id))).is_none_or(|n| n != "0"),
+        // No record velmux can read: resuming says if it's gone.
+        _ => true,
     }
 }
 
@@ -336,6 +423,13 @@ mod tests {
         assert_eq!(o.command, "opencode -s ses_1");
         assert_eq!(o.env[0].0, "OPENCODE_CONFIG_CONTENT");
         assert!(o.env[0].1.contains("/s/velmux.md"));
+
+        assert_eq!(launch(Agent::Copilot, "copilot", Some("s1"), &ctx()).command, "copilot '--resume=s1'");
+        assert_eq!(launch(Agent::Kimi, "kimi", Some("s1"), &ctx()).command, "kimi --session 's1'");
+        assert_eq!(launch(Agent::Letta, "letta", Some("default:agent-7"), &ctx()).command, "letta --conversation default --agent 'agent-7'");
+        assert_eq!(launch(Agent::Cursor, "cursor-agent", Some("c1"), &ctx()).command, "cursor-agent --resume 'c1'");
+        assert_eq!(launch(Agent::Droid, "droid", None, &ctx()), Launch { command: "droid".into(), session: None, env: vec![] });
+        assert_eq!(parse_ref("agy:conv-1"), (Agent::Antigravity, "conv-1"));
 
         let claude = launch(Agent::Claude, "claude", Some("id1"), &ctx());
         assert_eq!(claude.command, "claude --add-dir '/w/.pools/app' --append-system-prompt 'plan here; don'\\''t edit' --resume id1");

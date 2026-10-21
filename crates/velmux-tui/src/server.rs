@@ -441,7 +441,8 @@ pub fn serve() -> Result<()> {
                     | ClientMsg::Stop
                     | ClientMsg::Debug
                     | ClientMsg::ClaimFor { .. }
-                    | ClientMsg::ReleaseFor { .. } => Event::Control(stream, first),
+                    | ClientMsg::ReleaseFor { .. }
+                    | ClientMsg::ReportSession { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -864,6 +865,14 @@ impl App {
                         return;
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
+                    ClientMsg::ReportSession { pane, session } => match self.panes.iter_mut().find(|p| p.id == pane) {
+                        Some(p) => {
+                            p.session = Some(session);
+                            self.save();
+                            "ok".into()
+                        }
+                        None => "error: that pane isn't in velmux".into(),
+                    },
                     ClientMsg::Debug => self.debug_dump(),
                     ClientMsg::Stop => {
                         self.quit = true;
@@ -1099,7 +1108,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } => {}
         }
     }
 
@@ -3071,7 +3080,13 @@ impl App {
                 });
             }
             Action::InstallSkill => match crate::skill::install(&crate::skill::user_path(&self.claude_dir)) {
-                Ok(_) => self.toast("Claude skill installed: new Claude sessions know velmux"),
+                Ok(_) => {
+                    let (_, problems) = crate::skill::install_others();
+                    match problems.first() {
+                        Some(p) => self.say(format!("skill installed, but {p}")),
+                        None => self.toast("Claude skill installed: new Claude sessions know velmux"),
+                    }
+                }
                 Err(e) => self.say(format!("skill: {e:#}")),
             },
             Action::SetupGhostty => match crate::ghostty::config_path() {

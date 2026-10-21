@@ -128,6 +128,11 @@ enum Cmd {
     /// JSON on stdin; exit 2 blocks the edit and tells Claude why.
     #[command(hide = true)]
     Guard,
+    /// An agent's session-start hook (installed by `velmux skill install`):
+    /// reads the hook's JSON on stdin and tells velmux which session the
+    /// pane's agent is in, so it's resumed after a restart.
+    #[command(name = "agent-hook", hide = true)]
+    AgentHook { agent: String },
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
     Server,
@@ -158,6 +163,7 @@ fn run() -> Result<()> {
         Some(Cmd::Doctor) => return doctor(&cwd),
         Some(Cmd::Update { check }) => return update(check),
         Some(Cmd::Guard) => guard(),
+        Some(Cmd::AgentHook { agent }) => agent_hook(&agent),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
@@ -273,7 +279,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::Update { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -320,15 +326,14 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
             let path = target(project)?;
             let verb = skills::install(&path)?;
             println!("{verb} {}", path.display());
-            // The other agents read instruction files instead of skills.
+            // The other agents: instruction files and session hooks.
             if !project {
-                for (agent, file) in skills::agent_files() {
-                    let text = std::fs::read_to_string(&file).unwrap_or_default();
-                    let new = skills::with_block(&text);
-                    if new != text {
-                        std::fs::write(&file, new).with_context(|| format!("writing {}", file.display()))?;
-                        println!("added velmux's instructions for {agent} to {}", file.display());
-                    }
+                let (done, problems) = skills::install_others();
+                for line in done {
+                    println!("{line}");
+                }
+                for p in problems {
+                    eprintln!("velmux: {p}");
                 }
             }
             println!("new Claude sessions pick it up; it's used whenever Claude runs in velmux");
@@ -351,6 +356,13 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
                         if new.is_empty() { std::fs::remove_file(&file)? } else { std::fs::write(&file, new)? }
                         println!("removed velmux's instructions for {agent} from {}", file.display());
                     }
+                }
+                let (changed, problems) = velmux_tui::hooks::sync(false);
+                for (agent, file) in changed {
+                    println!("removed velmux's session hook for {agent} from {}", file.display());
+                }
+                for p in problems {
+                    eprintln!("velmux: {p}");
                 }
             }
         }
@@ -426,6 +438,23 @@ fn guard() -> ! {
     }
 }
 
+/// `velmux agent-hook <agent>`: see [`Cmd::AgentHook`]. Never fails the
+/// agent: outside velmux, or without a session id, it quietly does nothing.
+fn agent_hook(agent: &str) -> ! {
+    use std::io::Read;
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    if let (Some(agent), Some(pane)) = (velmux_tui::agents::Agent::from_name(agent), velmux_tui::current_pane()) {
+        if let Some(id) = velmux_tui::hooks::session_id(agent, &input) {
+            let _ = velmux_tui::report_session(pane, agent.session_ref(&id));
+        }
+    }
+    if let Some(agent) = velmux_tui::agents::Agent::from_name(agent) {
+        print!("{}", velmux_tui::hooks::hook_output(agent));
+    }
+    std::process::exit(0)
+}
+
 /// `velmux doctor`: each check as `✓` / `✗` (with how to fix it) / `·` (optional).
 fn doctor(cwd: &std::path::Path) -> Result<()> {
     let mut failed = 0;
@@ -468,6 +497,10 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
         line(Some(true), "Claude skill installed", "");
     } else {
         line(Some(false), "Claude skill not installed", "velmux skill install (teaches Claude to claim and release slots)");
+    }
+    let unhooked = velmux_tui::hooks::missing();
+    if !unhooked.is_empty() {
+        line(None, &format!("{} won't be resumed after a restart (no session hook)", unhooked.join(", ")), "velmux skill install");
     }
     match velmux_tui::update::fetch() {
         Ok(l) if velmux_tui::update::newer(&l.version, velmux_tui::update::CURRENT) => {

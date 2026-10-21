@@ -374,6 +374,36 @@ fn a_codex_conversation_is_followed_and_resumed() {
 }
 
 #[test]
+fn an_agent_with_a_session_hook_is_resumed() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    // Droid is set up: `skill install` gives it velmux's session hook.
+    let factory = env.root.join("home/.factory");
+    std::fs::create_dir_all(&factory).unwrap();
+    std::fs::write(factory.join("settings.json"), r#"{"model":"mine"}"#).unwrap();
+    let out = env.velmux(&repo, &["skill", "install"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("session hook for Droid"), "{}", String::from_utf8_lossy(&out.stdout));
+    let settings = std::fs::read_to_string(factory.join("settings.json")).unwrap();
+    assert!(settings.contains("agent-hook droid") && settings.contains("\"model\": \"mine\""), "{settings}");
+    // Started by hand in a shell, its hook tells velmux the session…
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for("$");
+    ui.line("droid");
+    let screen = ui.wait_for("FAKE-DROID id=");
+    let id = screen.split("FAKE-DROID id=").nth(1).unwrap().split_whitespace().next().unwrap().to_string();
+    std::thread::sleep(Duration::from_secs(2));
+    // …so after a stop it comes back as `droid --resume <id>`.
+    env.stop(&repo);
+    drop(ui);
+    let ui = env.attach(&repo);
+    ui.wait_for(&format!("FAKE-DROID id={id} mode=resume"));
+    // And uninstalling takes the hook out again, leaving your settings.
+    env.velmux(&repo, &["skill", "uninstall"]);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(factory.join("settings.json")).unwrap()).unwrap(), serde_json::json!({"model":"mine"}));
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

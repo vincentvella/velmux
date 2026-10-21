@@ -7,6 +7,9 @@ herdr (https://github.com/herdrdev/herdr), Apache License 2.0
   - Agent-state detection rules, adapted from src/detect/manifests/claude.toml
     and distribution/agent-detection/codex.toml, gemini.toml and opencode.toml
     (crates/velmux-tui/src/detect.rs).
+  - Resume commands (src/agent_resume.rs) and where and how each agent takes a
+    session-start hook (src/integration), for the agents velmux resumes
+    through hooks (crates/velmux-tui/src/agents.rs, hooks.rs).
   - The sounds crates/velmux-tui/sounds/herdr-done.wav and herdr-request.wav,
     converted from assets/sounds/done.mp3 and request.mp3 (mono, 32 kHz,
     level-matched).

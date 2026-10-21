@@ -17,8 +17,24 @@ installed.
 | velmux's instructions in a repo's checkout | ✓ | ✓ | via `GEMINI.md` | ✓ |
 | Can't edit the checkout | ✓ | | ✓ | |
 
-Other agents (aider, cursor-agent…) are recognised in a pane and count as
-working while their output is flowing.
+## More agents, resumed through their hooks
+
+velmux also resumes GitHub Copilot CLI, Cursor Agent, Droid, Devin CLI, Qwen
+Code, Grok CLI, Qoder CLI, Kimi Code, Letta Code, Mastra Code and Antigravity
+CLI. They choose their own session ids, so `velmux skill install` gives each
+one that's set up on your machine a session-start hook (`velmux agent-hook`)
+that tells velmux which session the pane is in; after a restart it's brought
+back with that agent's resume command (`--resume <id>`, `--session <id>`…).
+The hook is added beside your own hooks in the agent's settings
+(`~/.factory/settings.json`, `~/.copilot/settings.json`, `~/.cursor/hooks.json`,
+`~/.kimi-code/config.toml`…), does nothing outside velmux, and
+`velmux skill uninstall` takes it out. Start them from **new conversation
+with…** or by hand in a pane; `velmux doctor` lists any that are set up but
+not hooked yet.
+
+For these, working / idle comes from whether their output is flowing, and
+they don't get velmux's instructions or the checkout guard. Other agents
+(aider…) are recognised in a pane the same way, without resuming.
 
 ## How each one is followed
 

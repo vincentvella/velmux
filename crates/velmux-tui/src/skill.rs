@@ -51,6 +51,28 @@ pub fn agent_files() -> Vec<(&'static str, PathBuf)> {
         .collect()
 }
 
+/// Everything `velmux skill install` does beyond the skill itself: velmux's
+/// instructions in other agents' files and their session hooks. Returns what
+/// changed (lines to show) and what couldn't be done.
+pub fn install_others() -> (Vec<String>, Vec<String>) {
+    let mut done = Vec::new();
+    let mut problems = Vec::new();
+    for (agent, file) in agent_files() {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let new = with_block(&text);
+        if new != text {
+            match std::fs::write(&file, new) {
+                Ok(()) => done.push(format!("added velmux's instructions for {agent} to {}", file.display())),
+                Err(e) => problems.push(format!("writing {}: {e}", file.display())),
+            }
+        }
+    }
+    let (changed, hook_problems) = crate::hooks::sync(true);
+    done.extend(changed.into_iter().map(|(agent, file)| format!("added velmux's session hook for {agent} to {}", file.display())));
+    problems.extend(hook_problems);
+    (done, problems)
+}
+
 /// The skill as plain instructions (no frontmatter), for other agents' files.
 fn instructions() -> &'static str {
     SKILL.splitn(3, "---\n").nth(2).unwrap_or(SKILL).trim_start()

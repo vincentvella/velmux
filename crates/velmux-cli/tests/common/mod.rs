@@ -66,6 +66,11 @@ impl Env {
         std::fs::create_dir_all(&codex).unwrap();
         std::fs::copy(fake_claude(), codex.join("codex")).unwrap();
         std::os::unix::fs::symlink(codex.join("codex"), bin.join("codex")).unwrap();
+        // And as Droid (followed through its session hook).
+        let droid = root.join("install/droid");
+        std::fs::create_dir_all(&droid).unwrap();
+        std::fs::copy(fake_claude(), droid.join("droid")).unwrap();
+        std::os::unix::fs::symlink(droid.join("droid"), bin.join("droid")).unwrap();
         let gh = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'gh version 0 (fake)' ;;\n  pr) cat \"$FAKE_GH_PRS\" 2>/dev/null || echo '[]' ;;\nesac\n";
         std::fs::write(bin.join("gh"), gh).unwrap();
         sh(&bin, "chmod +x gh");

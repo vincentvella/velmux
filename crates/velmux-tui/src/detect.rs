@@ -13,7 +13,10 @@ pub enum AgentState {
     Blocked,
 }
 
-const AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "cursor-agent", "aider"];
+const AGENTS: &[&str] = &[
+    "claude", "codex", "opencode", "gemini", "cursor-agent", "aider", "copilot", "droid", "devin", "qwen", "grok", "qodercli", "kimi", "letta",
+    "mastracode", "agy",
+];
 
 /// The known agent running in the pty's foreground process group, if any.
 ///
@@ -33,7 +36,10 @@ pub fn foreground_agent(pgid: Option<libc::pid_t>) -> Option<&'static str> {
 /// script it runs.
 fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
     let path = exe_path(pid)?.to_string_lossy().to_lowercase();
-    if let Some(a) = AGENTS.iter().copied().find(|a| path.split('/').any(|part| part == *a)) {
+    // The first few also by a folder they're installed in (`…/codex/bin/codex`);
+    // the rest by the executable's own name only (a user called devin…).
+    let file = path.rsplit('/').next().unwrap_or_default();
+    if let Some(a) = AGENTS.iter().enumerate().find(|(i, a)| file == **a || *i < 6 && path.split('/').any(|part| part == **a)).map(|(_, a)| *a) {
         return Some(a);
     }
     let runtime = path.rsplit('/').next().unwrap_or_default();
@@ -44,12 +50,23 @@ fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
     None
 }
 
+/// Agents that run as Node scripts, by package (from herdr's detection).
+const SCRIPTS: &[(&str, &str)] = &[
+    ("@github/copilot", "copilot"),
+    ("@qwen-code/qwen-code", "qwen"),
+    ("@moonshot-ai/kimi-code", "kimi"),
+    ("@letta-ai/letta-code", "letta"),
+    ("/mastracode/dist/", "mastracode"),
+];
+
 /// The agent a Node script path belongs to.
 fn script_agent(arg: &str) -> Option<&'static str> {
     if arg.contains("@openai/codex") || arg.ends_with("/codex.js") || arg.ends_with("/codex") {
         Some("codex")
     } else if arg.contains("gemini-cli") || arg.ends_with("/gemini.js") || arg.ends_with("/gemini") {
         Some("gemini")
+    } else if let Some(&(_, agent)) = SCRIPTS.iter().find(|(pkg, _)| arg.contains(pkg)) {
+        Some(agent)
     } else {
         None
     }
@@ -558,5 +575,6 @@ mod tests {
         assert_eq!(script_agent("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
         assert_eq!(script_agent("/usr/local/lib/node_modules/@google/gemini-cli/bundle/gemini.js"), Some("gemini"));
         assert_eq!(script_agent("/srv/app/server.js"), None);
+        assert_eq!(script_agent("/opt/homebrew/lib/node_modules/@qwen-code/qwen-code/dist/index.js"), Some("qwen"));
     }
 }
