@@ -78,14 +78,15 @@ formulas" workflow to do it now).
 
 ## The site
 
-velmux.com is `site/` (Astro + Starlight), built from `docs/` by
-`site/scripts/sync-docs.mjs`. It only deploys when you run a deploy (the
+velmux.com is `site/` (Next.js + Fumadocs), with the docs generated from
+`docs/` by `site/scripts/sync-docs.mjs`; its API routes (`/api/latest`, the
+newest release for update checks) run on Vercel. It only deploys when you run a deploy (the
 Vercel project isn't connected to the repo), and it builds on your machine, so
 deploys use no Vercel build minutes:
 
 ```sh
 cd site
-bun install && bun run dev   # preview at localhost:4321
+bun install && bun run dev   # preview at localhost:3000
 bun run deploy               # build locally, upload the result to production
 ```
 
