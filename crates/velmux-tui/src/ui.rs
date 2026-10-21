@@ -76,6 +76,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         ("rename tab", RenameTab),
         ("theme…", ThemePicker),
         ("check setup (doctor)", Doctor),
+        ("sounds…", SoundPicker),
         ("settings", Settings),
         ("restart server", RestartServer),
         ("detach", Detach),
@@ -597,6 +598,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         Mode::Sessions { .. } => ("enter open · esc cancel".into(), bar.fg(t.dim)),
         Mode::NewSpace { .. } => ("enter add · esc cancel".into(), bar.fg(t.dim)),
         Mode::Menu { .. } | Mode::ThemePicker { .. } => ("enter pick · esc close".into(), bar.fg(t.dim)),
+        Mode::SoundPicker { .. } => ("↑↓ hear · ←→ column · enter keep".into(), bar.fg(t.dim)),
         Mode::Prompt { .. } => ("enter save · esc cancel".into(), bar.fg(t.dim)),
         Mode::Confirm { .. } => ("y yes · n no".into(), bar.fg(t.dim)),
         Mode::Copy => match app.copy.as_ref() {
@@ -648,6 +650,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     }
     if let Mode::Menu { selected, .. } = &app.mode {
         draw_menu(app, *selected, buf);
+    }
+    if let Mode::SoundPicker { col, done, blocked, .. } = &app.mode {
+        draw_sound_picker(app, *col, *done, *blocked, body, buf);
     }
     if let Mode::ThemePicker { selected, .. } = &app.mode {
         draw_theme_picker(app, *selected, buf);
@@ -1191,6 +1196,36 @@ fn draw_sessions(app: &App, query: &str, selected: usize, body: Rect, buf: &mut 
         buf.set_stringn(inner.x + live_w, y + 1, &hit.snippet, inner.width.saturating_sub(live_w) as usize, base.fg(t.text2));
     }
     Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
+}
+
+/// Two lists of sounds side by side; the active one's highlight is bright.
+fn draw_sound_picker(app: &App, col: usize, done: usize, blocked: usize, body: Rect, buf: &mut Buffer) {
+    use crate::notify::{BLOCKED_SOUNDS, DONE_SOUNDS};
+    let t = &app.theme;
+    let rows = DONE_SOUNDS.len().max(BLOCKED_SOUNDS.len()) as u16;
+    let inner = popup(t, "sounds", 44, rows + 5, body, buf);
+    let half = inner.width / 2;
+    for (c, (title, list, at)) in [("finished", DONE_SOUNDS, done), ("blocked on you", BLOCKED_SOUNDS, blocked)].into_iter().enumerate() {
+        let x = inner.x + c as u16 * half;
+        let active = c == col;
+        buf.set_stringn(x, inner.y, title, half as usize, Style::new().fg(if active { t.text } else { t.dim }).add_modifier(Modifier::BOLD));
+        for (i, name) in list.iter().enumerate() {
+            let y = inner.y + 2 + i as u16;
+            let on = i == at;
+            let style = match (on, active) {
+                (true, true) => Style::new().bg(t.selected_bg).fg(t.text).add_modifier(Modifier::BOLD),
+                (true, false) => Style::new().fg(t.accent),
+                _ => Style::new().fg(t.text2),
+            };
+            if on && active {
+                buf.set_style(Rect::new(x, y, half.saturating_sub(2), 1), style);
+            }
+            let mark = if on { "▌" } else { " " };
+            buf.set_string(x, y, mark, style.fg(t.accent));
+            buf.set_stringn(x + 2, y, name, half.saturating_sub(4) as usize, style);
+        }
+    }
+    buf.set_stringn(inner.x, inner.y + rows + 2, "space plays it again", inner.width as usize, Style::new().fg(t.dim));
 }
 
 /// The `new space` chooser: repos in the scratch dir, or a typed path.

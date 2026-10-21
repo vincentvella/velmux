@@ -57,7 +57,7 @@ jobs:
         run: |
           name="velmux-$TAG-${{ matrix.target }}"
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/velmux" README.md LICENSE "$name/"
+          cp "target/${{ matrix.target }}/release/velmux" README.md LICENSE NOTICE "$name/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           "$name/velmux" --version || true

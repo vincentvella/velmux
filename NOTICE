@@ -1,0 +1,20 @@
+velmux
+Copyright (c) Vince Vella. Licensed under the MIT License (see LICENSE).
+
+This product includes material from other projects:
+
+herdr (https://github.com/herdrdev/herdr), Apache License 2.0
+  - Agent-state detection rules, adapted from src/detect/manifests/claude.toml
+    (crates/velmux-tui/src/detect.rs).
+  - The sounds crates/velmux-tui/sounds/herdr-done.wav and herdr-request.wav,
+    converted from assets/sounds/done.mp3 and request.mp3 (mono, 32 kHz,
+    level-matched).
+  A copy of the Apache License 2.0 is at https://www.apache.org/licenses/LICENSE-2.0
+
+Kenney "Interface Sounds" 1.0 (https://kenney.nl/assets/interface-sounds), CC0 1.0
+  - crates/velmux-tui/sounds/confirm.wav (confirmation_002), glass.wav (glass_004),
+    pluck.wav (pluck_002), question.wav (question_001), bong.wav (bong_001),
+    converted from Ogg Vorbis (mono, 32 kHz, level-matched).
+  Thanks to Kenney (www.kenney.nl).
+
+The "chime" and "knock" sounds are synthesised by velmux itself.

@@ -154,10 +154,19 @@ branch if it's parked, else in the repo.
 
 ## Notifications
 
-When an agent finishes while you're looking elsewhere, or is blocked on you,
+When an agent finishes while you're not looking at it, or is blocked on you,
 velmux shows a desktop notification (through your terminal, or the OS when
-you're detached) and plays a sound. So do merged PRs and failing checks on your
-slots. Turn either off in the [config](configuration.md#notifications).
+you're detached) and plays a sound. "Looking" means its pane is focused *and*
+your terminal window is in front: a Claude finishing in the pane you left while
+you read docs in a browser still chimes. Merged PRs and failing checks on your
+slots notify too.
+
+Pick the sounds with **sounds…** in the menu: a column for "finished" and one
+for "blocked on you", each played as you move to it, Enter to keep. velmux ships
+`herdr-done` / `herdr-request` (from [herdr](https://github.com/herdrdev/herdr)),
+`confirm`, `glass`, `pluck`, `question` and `bong` (from
+[Kenney](https://kenney.nl)), and its own `chime` and `knock`; see `NOTICE`.
+Turn sounds or notifications off in the [config](configuration.md#notifications).
 
 ## Themes
 

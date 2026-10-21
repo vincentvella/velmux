@@ -159,7 +159,7 @@ pub struct NotifySettings {
 
 impl Default for NotifySettings {
     fn default() -> NotifySettings {
-        NotifySettings { desktop: true, sound: true, done_sound: "Glass".into(), blocked_sound: "Funk".into() }
+        NotifySettings { desktop: true, sound: true, done_sound: "herdr-done".into(), blocked_sound: "herdr-request".into() }
     }
 }
 

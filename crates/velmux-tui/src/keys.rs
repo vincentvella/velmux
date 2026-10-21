@@ -23,6 +23,10 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Pick the finished / blocked sounds, hearing each.
+    SoundPicker,
+    /// Play the finished and blocked sounds.
+    TestSounds,
     /// Install the Claude Code skill for every repo.
     InstallSkill,
     /// Write velmux's keybinds into Ghostty's config (asks first).
@@ -166,6 +170,8 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("sounds", Action::SoundPicker),
+    ("test_sounds", Action::TestSounds),
     ("install_skill", Action::InstallSkill),
     ("setup_ghostty", Action::SetupGhostty),
     ("doctor", Action::Doctor),

@@ -69,5 +69,6 @@ Runs on macOS and Linux. Works with any agent CLI; built around
 
 ## License
 
-MIT. Agent-state detection rules are adapted from
-[herdr](https://github.com/herdrdev/herdr) (Apache-2.0).
+MIT. Agent-state detection rules and two notification sounds come from
+[herdr](https://github.com/herdrdev/herdr) (Apache-2.0); other sounds from
+[Kenney](https://kenney.nl) (CC0). See [NOTICE](NOTICE).

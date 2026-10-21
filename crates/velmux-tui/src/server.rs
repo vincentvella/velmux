@@ -112,6 +112,9 @@ pub enum Mode {
     /// The short menu, with the highlighted row; `context` when it was opened
     /// by right-clicking a place in the sidebar.
     Menu { selected: usize, context: Option<MenuContext> },
+    /// Choosing sounds: a column each for finished / blocked (`col` 0 / 1),
+    /// the highlighted one played as you land on it; nothing changes until enter.
+    SoundPicker { col: usize, done: usize, blocked: usize },
     /// Choosing a theme: the highlighted one is previewed live; esc restores `original`.
     ThemePicker { selected: usize, original: crate::theme::Theme },
     Confirm { label: String, action: Confirm },
@@ -348,6 +351,8 @@ pub struct App {
     size_known: bool,
     /// A redraw squeezed every pane by a column; restore them at this time.
     nudge: Option<Instant>,
+    /// The client's terminal window has focus (it reports focus in / out).
+    terminal_focused: bool,
     /// Panes were adopted from a live restart: nudge them once the client is
     /// back (heals apps an older server squeezed to the default size).
     adopted: bool,
@@ -551,6 +556,7 @@ impl App {
             size: (80, 24),
             size_known: false,
             nudge: None,
+            terminal_focused: true,
             adopted: false,
             events,
             client: None,
@@ -1004,6 +1010,9 @@ impl App {
                 if self.mouse {
                     self.pending_out.extend_from_slice(mouse::ENABLE);
                 }
+                // Focus reporting: whether you're looking at this terminal at all.
+                self.pending_out.extend_from_slice(b"\x1b[?1004h");
+                self.terminal_focused = true;
                 self.resize(cols, rows);
                 if std::mem::take(&mut self.adopted) {
                     self.redraw();
@@ -1782,7 +1791,7 @@ impl App {
         let agent = pane.agent.unwrap_or("agent");
         let place = ui::short_loc(self, &pane.loc);
         let task = ui::useful_title(pane).map(|t| format!(" · {t}")).unwrap_or_default();
-        let watching = self.client.is_some() && self.focus == Some(id);
+        let watching = self.watching(id);
         if kind == Kind::Blocked && watching {
             return;
         }
@@ -1810,8 +1819,14 @@ impl App {
         }
     }
 
+    /// You're looking at pane `id`: it's focused, a client is attached, and
+    /// its terminal window has focus.
+    fn watching(&self, id: u64) -> bool {
+        self.client.is_some() && self.terminal_focused && self.focus == Some(id)
+    }
+
     fn detect_all(&mut self) {
-        let focus = self.focus;
+        let focus = self.focus.filter(|_| self.client.is_some() && self.terminal_focused);
         let mut changed = false;
         let mut sessions_changed = false;
         let claude_dir = self.claude_dir.clone();
@@ -1842,6 +1857,20 @@ impl App {
     fn input(&mut self, bytes: &[u8]) {
         let mut data = std::mem::take(&mut self.input_carry);
         data.extend_from_slice(bytes);
+        // Focus reports (ESC [ I / ESC [ O) from the terminal: noted, not passed on.
+        let mut i = 0;
+        while i + 2 < data.len() {
+            if data[i] == 0x1b && data[i + 1] == b'[' && matches!(data[i + 2], b'I' | b'O') {
+                self.terminal_focused = data[i + 2] == b'I';
+                data.drain(i..i + 3);
+                self.dirty = true;
+            } else {
+                i += 1;
+            }
+        }
+        if data.is_empty() {
+            return;
+        }
         let (chunks, carry) = mouse::split(&data);
         let chunks: Vec<Result<MouseEvent, Vec<u8>>> = chunks
             .into_iter()
@@ -2469,6 +2498,7 @@ impl App {
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Picker(_) => self.picker_input(bytes),
                 Mode::Sessions { .. } => self.sessions_input(bytes),
+                Mode::SoundPicker { .. } => self.sound_input(bytes),
                 Mode::NewSpace { .. } => self.new_space_input(bytes),
                 Mode::Menu { .. } => self.menu_input(bytes),
                 Mode::ThemePicker { .. } => self.theme_input(bytes),
@@ -2592,6 +2622,60 @@ impl App {
             })
             .map(|loc| picker::Item { label: self.loc_name(&loc), loc })
             .collect()
+    }
+
+    fn sound_input(&mut self, bytes: &[u8]) -> usize {
+        use crate::notify::{play, set_notify_key, BLOCKED_SOUNDS, DONE_SOUNDS};
+        let Mode::SoundPicker { col, done, blocked } = &mut self.mode else { return bytes.len() };
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, b'k'),
+            [0x1b, b'[', b'B', ..] => (3, b'j'),
+            [0x1b, b'[', b'C', ..] => (3, b'l'),
+            [0x1b, b'[', b'D', ..] => (3, b'h'),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, 0)
+            }
+            [b, ..] => (1, *b),
+            [] => return 0,
+        };
+        let (list, at) = if *col == 0 { (DONE_SOUNDS, &mut *done) } else { (BLOCKED_SOUNDS, &mut *blocked) };
+        let n = list.len();
+        match key {
+            b'k' | 0x10 | b'j' | 0x0e => {
+                *at = if matches!(key, b'k' | 0x10) { (*at + n - 1) % n } else { (*at + 1) % n };
+                play(list[*at]);
+            }
+            b'h' | b'l' | b'\t' => {
+                *col = 1 - *col;
+                let (list, at) = if *col == 0 { (DONE_SOUNDS, *done) } else { (BLOCKED_SOUNDS, *blocked) };
+                play(list[at]);
+            }
+            b' ' => play(list[*at]),
+            b'\r' | b'\n' => {
+                let (d, b) = (DONE_SOUNDS[*done], BLOCKED_SOUNDS[*blocked]);
+                self.mode = Mode::Normal;
+                self.notify.done_sound = d.to_string();
+                self.notify.blocked_sound = b.to_string();
+                let saved = Env::from_process().and_then(|env| {
+                    let text = std::fs::read_to_string(&env.global_config).unwrap_or_default();
+                    let text = set_notify_key(&set_notify_key(&text, "done_sound", d), "blocked_sound", b);
+                    if let Some(dir) = env.global_config.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    std::fs::write(&env.global_config, text)?;
+                    Ok(())
+                });
+                match saved {
+                    Ok(()) => self.toast(&format!("sounds: {d} · {b}")),
+                    Err(e) => self.say(format!("sounds set, but saving them failed: {e:#}")),
+                }
+            }
+            0x1b | 0x03 | b'q' => self.mode = Mode::Normal,
+            _ => {}
+        }
+        self.dirty = true;
+        used
     }
 
     fn theme_input(&mut self, bytes: &[u8]) -> usize {
@@ -2739,6 +2823,21 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::SoundPicker => {
+                use crate::notify::{BLOCKED_SOUNDS, DONE_SOUNDS};
+                let (d, b) = (self.notify.done_sound.clone(), self.notify.blocked_sound.clone());
+                let at = |list: &[&str], s: &str| list.iter().position(|n| *n == s || (s.is_empty() && *n == "none")).unwrap_or(0);
+                self.mode = Mode::SoundPicker { col: 0, done: at(DONE_SOUNDS, &d), blocked: at(BLOCKED_SOUNDS, &b) };
+            }
+            Action::TestSounds => {
+                let (done, blocked) = (self.notify.done_sound.clone(), self.notify.blocked_sound.clone());
+                self.toast("finished… then blocked on you");
+                std::thread::spawn(move || {
+                    crate::notify::play(&done);
+                    std::thread::sleep(Duration::from_millis(1100));
+                    crate::notify::play(&blocked);
+                });
+            }
             Action::InstallSkill => match crate::skill::install(&crate::skill::user_path(&self.claude_dir)) {
                 Ok(_) => self.toast("Claude skill installed: new Claude sessions know velmux"),
                 Err(e) => self.say(format!("skill: {e:#}")),

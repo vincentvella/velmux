@@ -44,8 +44,9 @@ Prefix-less bindings (`super+…`, `ctrl+1`) need your terminal to send them:
 [notify]
 desktop = true
 sound = true
-done_sound = "Glass"      # a macOS system sound name, or a path to a sound file
-blocked_sound = "Funk"
+done_sound = "herdr-done"         # herdr-done confirm glass pluck chime, none,
+blocked_sound = "herdr-request"   # herdr-request question bong knock, a macOS
+                                  # system sound name (Glass, Funk…), or a file
 ```
 
 ### Themes
