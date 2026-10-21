@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* velmux's accent: the blue of its sidebar highlights. */
+:root {
+  --color-fd-primary: #3561c9;
+}
+.dark {
+  --color-fd-primary: #8fb0f5;
+  --color-fd-primary-foreground: #0d1117;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
