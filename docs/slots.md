@@ -21,11 +21,16 @@ happen. velmux keeps it that way:
 - **Changes there are flagged.** Its row shows `✎2` when it has uncommitted
   changes. **Move changes to a slot…** (its right-click menu) stashes them,
   claims a slot on a branch you name, and puts them back there.
-- **Claudes velmux starts can't edit it.** They run with a Claude Code hook
-  that refuses file edits inside the checkout and tells Claude to
-  `velmux claim` a slot and edit there instead. (A Claude you start yourself
-  gets the same advice from the [skill](getting-started.md#teach-claude-about-velmux),
-  but no hook.)
+- **Claudes velmux starts can't edit it.** They run with two guards, passed
+  with `--settings` and merged with your own settings: a Claude Code hook that
+  refuses file edits inside the checkout and tells Claude to `velmux claim` a
+  slot and edit there, and a permission rule denying those edits, which Claude
+  enforces even where hooks are turned off. If your organisation's Claude
+  settings switch both off (`allowManagedHooksOnly` / `disableAllHooks` and
+  `allowManagedPermissionRulesOnly`), `velmux doctor` says so; agents are still
+  asked to work in slots, and `✎` still flags changes. Turn the guards off with
+  `guard = false`. (A Claude you start yourself gets the same advice from the
+  [skill](getting-started.md#teach-claude-about-velmux), but no guards.)
 
 ## Claiming and releasing
 

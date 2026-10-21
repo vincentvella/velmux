@@ -3209,22 +3209,14 @@ impl App {
         }
     }
 
-    /// Claude Code settings with a `PreToolUse` hook running `velmux guard`
-    /// before every file edit (written to the state dir, passed with
-    /// `--settings`; merged with your own settings, not replacing them).
-    fn guard_settings(&self) -> Option<PathBuf> {
+    /// The `--settings` file keeping Claudes in `pool`'s repo out of its
+    /// checkout (see [`crate::guard`]): one per repo, in the state dir.
+    fn guard_settings(&self, pool: &Pool) -> Option<PathBuf> {
         let exe = self.exe.as_ref().map(|(p, _)| p.clone()).or_else(|| std::env::current_exe().ok())?;
-        let settings = serde_json::json!({
-            "hooks": {
-                "PreToolUse": [{
-                    "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                    "hooks": [{ "type": "command", "command": format!("{} guard", shell_quote(&exe.display().to_string())) }]
-                }]
-            }
-        });
-        let path = crate::paths::state_dir().ok()?.join("claude-guard.json");
-        let text = serde_json::to_string_pretty(&settings).ok()?;
+        let text = serde_json::to_string_pretty(&crate::guard::settings(&exe, &pool.base, &pool.dir)).ok()?;
+        let path = crate::paths::state_dir().ok()?.join("guard").join(format!("{}.json", velmux_pool::claude::sanitize(&pool.base)));
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::create_dir_all(path.parent()?).ok()?;
             std::fs::write(&path, text).ok()?;
         }
         Some(path)
@@ -3772,9 +3764,9 @@ impl App {
             _ if opts.command.is_some() => opts.command.clone(),
             Kind::Agent if session::is_claude(&cfg.agent) => {
                 let mut agent = cfg.agent.clone();
-                // In a repo or its slots: a hook that stops edits to the checkout.
-                if project.pool.is_some() {
-                    if let Some(settings) = self.guard_settings() {
+                // In a repo or its slots: keep edits out of the checkout.
+                if let Some(pool) = project.pool.as_ref().filter(|_| cfg.guard) {
+                    if let Some(settings) = self.guard_settings(pool) {
                         agent = format!("{agent} --settings {}", shell_quote(&settings.display().to_string()));
                     }
                 }

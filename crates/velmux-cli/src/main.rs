@@ -411,6 +411,20 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
     } else {
         line(Some(false), "Claude skill not installed", "velmux skill install (teaches Claude to claim and release slots)");
     }
+    // Keeping velmux-started Claudes out of the checkout: a hook, and a deny rule.
+    let guard_on = velmux_pool::Config::load(&env, base.as_deref().unwrap_or(cwd)).map(|c| c.guard).unwrap_or(true);
+    let policy = velmux_tui::guard::policy(&env.claude_dir);
+    match (guard_on, &policy.hooks_off, &policy.rules_off) {
+        (false, _, _) => line(None, "checkout guard is off (guard = false): agents are only asked to work in slots", ""),
+        (true, None, None) => line(Some(true), "checkout guard: Claudes velmux starts can't edit a repo's checkout", ""),
+        (true, Some(h), None) => line(None, &format!("checkout guard: its hook is off ({h}); the deny rule still holds"), ""),
+        (true, None, Some(r)) => line(None, &format!("checkout guard: its deny rule is ignored ({r}); the hook still holds"), ""),
+        (true, Some(h), Some(r)) => line(
+            Some(false),
+            &format!("checkout guard can't work here ({h}; {r})"),
+            "agents are still asked (prompt, skill) to work in slots, and the sidebar flags changes in a checkout (✎)",
+        ),
+    }
     if !velmux_pool::gh::available() {
         line(None, "gh not installed (optional: pull request status)", "brew install gh && gh auth login");
     } else if run("gh", &["auth", "status"]).is_some() {

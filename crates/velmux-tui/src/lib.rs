@@ -19,6 +19,7 @@ mod search;
 mod session;
 pub mod skill;
 pub mod ghostty;
+pub mod guard;
 mod theme;
 mod ui;
 
