@@ -23,6 +23,12 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// The slot's pull request: open it (or push and start one), its checks,
+    /// its link, or hand failing checks to the slot's Claude.
+    OpenPr,
+    OpenChecks,
+    CopyPrLink,
+    SendFailures,
     /// Search Claude conversations and open / resume one.
     FindSession,
     /// Open the current slot's `http://localhost:<port>`.
@@ -148,6 +154,10 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("open_pr", Action::OpenPr),
+    ("open_checks", Action::OpenChecks),
+    ("copy_pr_link", Action::CopyPrLink),
+    ("send_failures", Action::SendFailures),
     ("find_session", Action::FindSession),
     ("open_browser", Action::OpenBrowser),
     ("edit_scrollback", Action::EditScrollback),
@@ -174,6 +184,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (ClaimSlot, &["prefix+n", "super+shift+n"]),
         (ReleaseSlot, &["prefix+r", "super+shift+w"]),
         (SyncSlot, &["prefix+u"]),
+        (OpenPr, &["prefix+P"]),
         // New work starts as a conversation in the base; Claude claims a slot itself.
         (AgentBase, &["prefix+a", "super+n"]),
         (NewShell, &["prefix+c"]),
@@ -517,6 +528,7 @@ impl Keymap {
                     (one(ClaimSlot), "claim a slot"),
                     (one(ReleaseSlot), "release slot"),
                     (one(SyncSlot), "sync with base"),
+                    (one(OpenPr), "open PR"),
                     (one(Slot(0)), "slot n"),
                     (one(Base), "base"),
                     (one(LocationPicker), "go to…"),

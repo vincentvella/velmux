@@ -289,6 +289,20 @@ env = { PORT = 3000, RCT_METRO_PORT = 8081 }  # value in the base checkout
 # enabled = false
 ```
 
+### Pull requests
+
+With the GitHub CLI (`gh`) installed and signed in, velmux checks the PRs of
+claimed and parked branches about once a minute. Slot rows show the PR and its
+checks: `#142✓` passing, `#142✗` failing, `#142…` running, `#142⇡` merged. You
+get a notification (and sound) when a claimed branch's PR merges or its checks
+start failing. A slot's right-click menu has **push & open PR** (pushes the
+branch and opens GitHub's new-PR page; `<prefix> P`), or once there's a PR:
+**open PR**, **open checks**, **copy PR link**, and, when checks fail, **send
+failures to Claude**, which asks the slot's Claude to look at `gh pr checks` /
+`gh run view --log-failed` and fix them. When the PR has merged the menu leads
+with **release**, and the branch isn't parked (nothing's left to resume, unless
+there were uncommitted changes).
+
 ### Ports
 
 Each slot gets its own ports, so dev servers in different slots don't collide:

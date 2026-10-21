@@ -4,6 +4,7 @@
 pub mod claude;
 pub mod config;
 pub mod deps;
+pub mod gh;
 pub mod git;
 mod pool;
 pub mod state;

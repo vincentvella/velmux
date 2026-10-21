@@ -51,6 +51,10 @@ pub enum Event {
     Synced { job: String, result: Result<String, String> },
     /// The conversation index, rebuilt in the background.
     Indexed(Vec<crate::search::Doc>),
+    /// Pull requests per project, from a background `gh` call.
+    Prs(Vec<(usize, HashMap<String, velmux_pool::gh::Pr>)>),
+    /// A PR was opened (or failed to): refresh PRs soon.
+    PrOpened { job: String, result: Result<String, String> },
 }
 
 /// A git repo with its pool, or the "unclassified" group of plain folders.
@@ -62,6 +66,8 @@ pub struct Project {
     pub slots: Vec<SlotView>,
     /// Branches released with work on them, waiting to be resumed.
     pub parked: Vec<velmux_pool::ParkedView>,
+    /// Pull requests by head branch (GitHub repos, with `gh` installed).
+    pub prs: HashMap<String, velmux_pool::gh::Pr>,
     /// Unclassified only: its folders, addressed by id in `Loc::slot`.
     pub folders: Vec<Folder>,
     /// Removed from the sidebar. Kept in place (locations refer to projects by
@@ -76,7 +82,7 @@ pub struct Folder {
 
 impl Project {
     fn repo(pool: Pool) -> Project {
-        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), folders: Vec::new(), removed: false }
+        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), folders: Vec::new(), removed: false }
     }
 
     pub fn name(&self) -> &str {
@@ -322,6 +328,9 @@ pub struct App {
     pub sessions: Vec<crate::search::Doc>,
     /// The index is being rebuilt.
     pub indexing: bool,
+    /// A background PR check is running; when the last one started.
+    checking_prs: bool,
+    prs_checked: Option<Instant>,
     status: Option<(String, Instant)>,
     size: (u16, u16),
     events: Sender<Event>,
@@ -459,6 +468,7 @@ pub fn serve() -> Result<()> {
         }
         if last_slots.elapsed() >= Duration::from_secs(2) {
             app.refresh_slots_bg();
+            app.refresh_prs_bg();
             app.check_binary();
             last_slots = Instant::now();
         }
@@ -510,6 +520,8 @@ impl App {
             job_seq: 0,
             sessions: Vec::new(),
             indexing: false,
+            checking_prs: false,
+            prs_checked: None,
             status: None,
             size: (80, 24),
             events,
@@ -594,7 +606,7 @@ impl App {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         // Global settings (agent, editor) apply; a broken config falls back to defaults.
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
-        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), folders: Vec::new(), removed: false });
+        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), folders: Vec::new(), removed: false });
         self.projects.len() - 1
     }
 
@@ -760,6 +772,24 @@ impl App {
                     }
                 }
                 self.dirty = true;
+            }
+            Event::Prs(fresh) => {
+                self.checking_prs = false;
+                for (p, prs) in fresh {
+                    self.pr_changes(p, &prs);
+                    if let Some(project) = self.projects.get_mut(p) {
+                        project.prs = prs;
+                    }
+                }
+                self.dirty = true;
+            }
+            Event::PrOpened { job, result } => {
+                self.jobs.retain(|(k, _)| k != &job);
+                match result {
+                    Ok(msg) => self.toast(&msg),
+                    Err(e) => self.say(e),
+                }
+                self.prs_checked = None;
             }
             Event::Indexed(docs) => {
                 self.sessions = docs;
@@ -1356,7 +1386,136 @@ impl App {
         let Some(port) = self.current_loc().and_then(|l| self.loc_port(&l)) else {
             return self.say("only slots have their own port (see [ports] in the config)");
         };
-        let url = format!("http://localhost:{port}");
+        self.open_url(&format!("http://localhost:{port}"));
+    }
+
+    /// Check PRs for every GitHub repo with claimed or parked branches, about
+    /// once a minute (sooner after opening one), in the background.
+    fn refresh_prs_bg(&mut self) {
+        if self.checking_prs || self.prs_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(60)) || !velmux_pool::gh::available() {
+            return;
+        }
+        let work: Vec<(usize, Arc<Pool>)> = self
+            .projects
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.removed && (p.slots.iter().any(|s| s.status == Status::InUse) || !p.parked.is_empty()))
+            .filter_map(|(i, p)| p.pool.clone().map(|pool| (i, pool)))
+            .collect();
+        if work.is_empty() {
+            return;
+        }
+        self.checking_prs = true;
+        self.prs_checked = Some(Instant::now());
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let fresh = work
+                .into_iter()
+                .filter(|(_, pool)| velmux_pool::gh::on_github(&pool.base))
+                .filter_map(|(i, pool)| velmux_pool::gh::prs(&pool.base).ok().map(|prs| (i, prs)))
+                .collect();
+            let _ = tx.send(Event::Prs(fresh));
+        });
+    }
+
+    /// Tell you when a claimed branch's PR merges or its checks fail.
+    fn pr_changes(&mut self, project: usize, fresh: &HashMap<String, velmux_pool::gh::Pr>) {
+        use velmux_pool::gh::{Checks, PrState};
+        let Some(p) = self.projects.get(project) else { return };
+        let mut news = Vec::new();
+        for slot in p.slots.iter().filter(|s| s.status == Status::InUse) {
+            let Some(branch) = &slot.branch else { continue };
+            let (Some(old), Some(new)) = (p.prs.get(branch), fresh.get(branch)) else { continue };
+            if old.state != PrState::Merged && new.state == PrState::Merged {
+                news.push((format!("#{} merged ({branch}) — release {} from its menu", new.number, slot.id), true));
+            } else if old.checks != Checks::Failing && new.checks == Checks::Failing {
+                news.push((format!("checks failed on #{} ({branch}): {}", new.number, new.failed.join(", ")), false));
+            }
+        }
+        for (body, good) in news {
+            self.toast(&body);
+            self.notify_text(&body, good);
+        }
+    }
+
+    /// A desktop notification and sound (good news: the done sound).
+    fn notify_text(&mut self, body: &str, good: bool) {
+        use crate::notify;
+        if self.notify.desktop {
+            if self.client.is_some() {
+                self.pending_out.extend_from_slice(&notify::osc777("velmux", body));
+                self.dirty = true;
+            } else {
+                notify::system("velmux", body);
+            }
+        }
+        if self.notify.sound {
+            notify::play(if good { &self.notify.done_sound } else { &self.notify.blocked_sound });
+        }
+    }
+
+    /// The current slot's branch and its PR, if it has one.
+    fn current_pr(&self) -> (Option<Loc>, Option<String>, Option<velmux_pool::gh::Pr>) {
+        let Some(loc) = self.current_loc() else { return (None, None, None) };
+        let project = &self.projects[loc.project];
+        let branch = loc.slot.as_ref().and_then(|id| project.slots.iter().find(|s| &s.id == id)).and_then(|s| s.branch.clone());
+        let pr = branch.as_ref().and_then(|b| project.prs.get(b)).cloned();
+        (Some(loc), branch, pr)
+    }
+
+    /// Open the slot's PR, or push the branch and open GitHub's new-PR page.
+    fn open_pr(&mut self) {
+        let (loc, branch, pr) = self.current_pr();
+        if let Some(pr) = pr {
+            return self.open_url(&pr.url);
+        }
+        let (Some(loc), Some(branch)) = (loc, branch) else { return self.say("focus a slot on a branch to open its PR") };
+        if !velmux_pool::gh::available() {
+            return self.say("install the GitHub CLI (gh) for PRs");
+        }
+        let Some(dir) = self.loc_cwd(&loc) else { return };
+        self.job_seq += 1;
+        let job = format!("pr {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("pushing {branch}")));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let result = velmux_pool::gh::push_and_open(&dir, &branch).map(|_| format!("pushed {branch}; finish the PR in your browser")).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::PrOpened { job, result });
+        });
+    }
+
+    fn pr_action(&mut self, action: Action) {
+        let (loc, _, pr) = self.current_pr();
+        let Some(pr) = pr else { return self.say("this slot's branch has no PR yet") };
+        match action {
+            Action::OpenChecks => self.open_url(&format!("{}/checks", pr.url)),
+            Action::CopyPrLink => {
+                self.set_clipboard(&pr.url);
+                self.toast("PR link copied");
+            }
+            _ => {
+                // Hand the failures to the slot's Claude, as if you'd typed it.
+                let Some(loc) = loc else { return };
+                let Some(pane) = self.panes.iter_mut().find(|p| p.loc == loc && (p.agent.is_some() || p.session.is_some())) else {
+                    return self.say("no Claude in this slot to send it to");
+                };
+                let failed = if pr.failed.is_empty() { "some checks".to_string() } else { pr.failed.join(", ") };
+                let text = format!(
+                    "CI failed on PR #{} ({failed}). Run `gh pr checks {}` and `gh run view --log-failed` to see why, then fix it.",
+                    pr.number, pr.number
+                );
+                let id = pane.id;
+                pane.write_input(format!("\x1b[200~{text}\x1b[201~").as_bytes());
+                pane.write_input(b"\r");
+                self.focus = Some(id);
+                self.toast("sent the failures to Claude");
+            }
+        }
+    }
+
+    /// Open a URL in the default browser.
+    fn open_url(&mut self, url: &str) {
+        let url = url.to_string();
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         match std::process::Command::new(opener).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             Ok(mut child) => {
@@ -1907,18 +2066,41 @@ impl App {
                 ("rename space", Action::RenameLocation),
                 ("remove repo", Action::RemovePlace),
             ],
-            // A slot: work on what's already there, then hand it back.
-            (false, true) => vec![
-                ("claude in this slot", Action::AgentHere),
-                ("sync with base", Action::SyncSlot),
-                ("open in browser", Action::OpenBrowser),
-                ("shell here", Action::NewShell),
-                ("new tab", Action::NewTab),
-                ("open in editor", Action::NewEditor),
-                ("copy path", Action::CopyPath),
-                ("rename slot", Action::RenameLocation),
-                ("release slot", Action::RemovePlace),
-            ],
+            // A slot: work on what's already there, get it reviewed, hand it back.
+            (false, true) => {
+                use velmux_pool::gh::{Checks, PrState};
+                let project = &self.projects[target.project];
+                let branch = project.slots.iter().find(|s| Some(&s.id) == target.slot.as_ref()).and_then(|s| s.branch.clone());
+                let pr = branch.as_ref().and_then(|b| project.prs.get(b));
+                let mut items = Vec::new();
+                if pr.is_some_and(|p| p.state == PrState::Merged) {
+                    items.push(("release (PR merged)", Action::RemovePlace));
+                }
+                items.extend([("claude in this slot", Action::AgentHere), ("sync with base", Action::SyncSlot)]);
+                match pr {
+                    Some(p) => {
+                        items.push(("open PR", Action::OpenPr));
+                        if p.checks == Checks::Failing {
+                            items.push(("send failures to Claude", Action::SendFailures));
+                        }
+                        items.extend([("open checks", Action::OpenChecks), ("copy PR link", Action::CopyPrLink)]);
+                    }
+                    None if branch.is_some() => items.push(("push & open PR", Action::OpenPr)),
+                    None => {}
+                }
+                items.extend([
+                    ("open in browser", Action::OpenBrowser),
+                    ("shell here", Action::NewShell),
+                    ("new tab", Action::NewTab),
+                    ("open in editor", Action::NewEditor),
+                    ("copy path", Action::CopyPath),
+                    ("rename slot", Action::RenameLocation),
+                ]);
+                if !pr.is_some_and(|p| p.state == PrState::Merged) {
+                    items.push(("release slot", Action::RemovePlace));
+                }
+                items
+            }
             (true, _) => vec![
                 ("claude here", Action::AgentHere),
                 ("shell here", Action::NewShell),
@@ -2311,6 +2493,8 @@ impl App {
                 self.reindex_sessions();
             }
             Action::OpenBrowser => self.open_browser(),
+            Action::OpenPr => self.open_pr(),
+            Action::OpenChecks | Action::CopyPrLink | Action::SendFailures => self.pr_action(action),
             Action::EditScrollback => self.edit_scrollback(),
             Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
             Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
@@ -2889,6 +3073,10 @@ impl App {
         }
         let tx = self.events.clone();
         let project = loc.project;
+        // A branch whose PR merged has nothing left to resume (unless there
+        // were uncommitted changes): don't park it.
+        let branch = self.projects[project].slots.iter().find(|s| s.id == slot).and_then(|s| s.branch.clone());
+        let merged = branch.as_ref().and_then(|b| self.projects[project].prs.get(b)).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged);
         self.jobs.push((format!("release {slot}"), format!("releasing {slot}")));
         std::thread::spawn(move || {
             // Give killed processes a moment to exit before git touches the tree.
@@ -2896,6 +3084,9 @@ impl App {
             let result = pool
                 .release_with(&slot, false, &sessions)
                 .map(|r| {
+                    if let (true, None, Some(b)) = (merged, &r.stashed, &r.branch) {
+                        let _ = pool.discard(b);
+                    }
                     let mut msg = format!("released {}", r.id);
                     if let Some(b) = r.branch.as_ref().filter(|_| r.stashed.is_some()) {
                         msg = format!("parked {b}");

@@ -282,12 +282,13 @@ fn rollup_of<'a>(t: &Theme, panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'sta
 /// One location row: glyph, label (name, branch or folder), a dim slot number,
 /// and its agents' states on the right. The current one gets a highlight bar.
 /// `◌ feat/login   2 files · 3h`: work waiting on a branch, dimmed.
-fn draw_parked_row(app: &App, parked: &velmux_pool::ParkedView, y: u16, side: u16, buf: &mut Buffer) {
+fn draw_parked_row(app: &App, project: usize, parked: &velmux_pool::ParkedView, y: u16, side: u16, buf: &mut Buffer) {
     let t = &app.theme;
     let dim = Style::new().fg(t.dim);
     let now = velmux_pool::state::now();
     let right_edge = side.saturating_sub(1);
-    let full = format!("{} · {}", parked.what(), parked.age(now));
+    let merged = app.projects[project].prs.get(&parked.branch).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged);
+    let full = if merged { format!("merged · {}", parked.age(now)) } else { format!("{} · {}", parked.what(), parked.age(now)) };
     let x = 3;
     buf.set_string(x, y, "◌", dim);
     let label_x = x + 2;
@@ -342,6 +343,20 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
         }
         if s.behind > 0 {
             marks.push((format!("↓{}", s.behind), Style::new().fg(t.alert)));
+        }
+        // Its PR: number and checks (`#142✓`), or that it merged.
+        if let Some(pr) = s.branch.as_ref().and_then(|b| project.prs.get(b)) {
+            use velmux_pool::gh::{Checks, PrState};
+            let (glyph, color) = match (pr.state, pr.checks) {
+                (PrState::Merged, _) => ("⇡", t.accent),
+                (PrState::Closed, _) => ("×", t.dim),
+                (_, Checks::Failing) => ("✗", t.blocked),
+                (_, Checks::Pending) => ("…", t.working),
+                (_, Checks::Passing) => ("✓", t.done),
+                (_, Checks::None) => ("", t.dim),
+            };
+            let number = if pr.draft || pr.state == PrState::Closed { t.dim } else { t.text2 };
+            marks.push((format!("#{}{glyph}", pr.number), Style::new().fg(if glyph.is_empty() { number } else { color })));
         }
     }
     for (g, n, style) in rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc)) {
@@ -456,7 +471,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
             }
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
-            Row::Parked(p, i) => draw_parked_row(app, &app.projects[p].parked[i], y, side, buf),
+            Row::Parked(p, i) => draw_parked_row(app, p, &app.projects[p].parked[i], y, side, buf),
             Row::Pane(_) | Row::Blank => {}
             Row::TopBar => {
                 let gray = Style::new().fg(t.text2);
