@@ -349,6 +349,11 @@ impl Pane {
         }
     }
 
+    /// The pty's own size (cols, rows), which can differ from the parser's.
+    pub fn pty_size(&self) -> Option<(u16, u16)> {
+        self.master.get_size().ok().map(|s| (s.cols, s.rows))
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let (cur_rows, cur_cols) = self.parser.screen().size();
         if cur_rows.get() == rows.max(1) && cur_cols.get() == cols.max(1) {

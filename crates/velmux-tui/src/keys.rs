@@ -23,6 +23,8 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Repaint the whole screen.
+    Redraw,
     /// Add a repo (from the scratch dir, or a path) as a space.
     NewSpace,
     /// A new scratch session: a shell in the scratch dir.
@@ -158,6 +160,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("redraw", Action::Redraw),
     ("new_space", Action::NewSpace),
     ("new_session", Action::NewSession),
     ("open_pr", Action::OpenPr),
@@ -233,6 +236,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (Settings, &["prefix+s", "super+,"]),
         (ReloadConfig, &["prefix+R"]),
         (RestartServer, &["prefix+ctrl+r"]),
+        (Redraw, &["prefix+ctrl+l"]),
         (Menu, &["prefix+m"]),
         (RemovePlace, &["prefix+X", "super+shift+backspace"]),
         (SidebarView, &["prefix+g"]),

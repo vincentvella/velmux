@@ -93,6 +93,9 @@ enum Cmd {
     Restart,
     /// Stop the TUI server: everything is saved and restored next time.
     Stop,
+    /// Print the focused pane as the server holds it (sizes and rows).
+    #[command(hide = true)]
+    Debug,
     /// Install the Claude Code skill that teaches Claude to work in velmux
     /// (claiming, releasing, parked work, sync, ports, PRs).
     Skill {
@@ -131,6 +134,7 @@ fn run() -> Result<()> {
         Some(Cmd::Restart) => return velmux_tui::restart_server(),
         Some(Cmd::Skill { action }) => return skill(action, &cwd),
         Some(Cmd::Stop) => return velmux_tui::stop_server(),
+        Some(Cmd::Debug) => return velmux_tui::debug_server(),
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, .. }) => return velmux_tui::print_keys(ghostty),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
@@ -248,7 +252,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Skill { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } => unreachable!(),
     }
     Ok(())
 }

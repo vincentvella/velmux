@@ -94,6 +94,10 @@ pub struct Handoff {
     pub saved: Saved,
     pub live: Vec<LivePane>,
     pub focus: Option<u64>,
+    /// The client's terminal size, so the new server lays panes out at it
+    /// instead of shrinking them to a default until the client reconnects.
+    #[serde(default)]
+    pub size: Option<(u16, u16)>,
 }
 
 /// A pane whose pty stays open across `exec`.

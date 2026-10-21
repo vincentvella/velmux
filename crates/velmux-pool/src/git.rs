@@ -3,14 +3,17 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-/// Run `git -C dir args…` and return trimmed stdout.
+/// Run `git -C dir args…` and return trimmed stdout. Never takes git's
+/// *optional* locks (the index refresh `git status` does), so velmux's
+/// background status checks can't make a concurrent stash or switch fail; a
+/// write that still finds `index.lock` held (another git) is retried once.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .context("failed to run git")?;
+    let run = || Command::new("git").arg("-C").arg(dir).arg("--no-optional-locks").args(args).output().context("failed to run git");
+    let mut out = run()?;
+    if !out.status.success() && String::from_utf8_lossy(&out.stderr).contains("index.lock") {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        out = run()?;
+    }
     if !out.status.success() {
         bail!(
             "git {} failed in {}: {}",
@@ -27,6 +30,7 @@ pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
     Command::new("git")
         .arg("-C")
         .arg(dir)
+        .arg("--no-optional-locks")
         .args(args)
         .output()
         .map(|o| o.status.success())

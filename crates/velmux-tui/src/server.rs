@@ -341,6 +341,15 @@ pub struct App {
     prs_checked: Option<Instant>,
     status: Option<(String, Instant)>,
     size: (u16, u16),
+    /// `size` came from a client (or a hand-off), not the startup default:
+    /// until it does, panes aren't resized (a running app would be squeezed
+    /// to the default and might miss the resize back).
+    size_known: bool,
+    /// A redraw squeezed every pane by a column; restore them at this time.
+    nudge: Option<Instant>,
+    /// Panes were adopted from a live restart: nudge them once the client is
+    /// back (heals apps an older server squeezed to the default size).
+    adopted: bool,
     events: Sender<Event>,
     client: Option<Client>,
     next_conn: u64,
@@ -395,6 +404,7 @@ pub fn serve() -> Result<()> {
                     ClientMsg::ImportHerdr { .. }
                     | ClientMsg::Restart
                     | ClientMsg::Stop
+                    | ClientMsg::Debug
                     | ClientMsg::ClaimFor { .. }
                     | ClientMsg::ReleaseFor { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
@@ -483,6 +493,7 @@ pub fn serve() -> Result<()> {
             app.check_binary();
             last_slots = Instant::now();
         }
+        app.finish_nudge();
         if last_history.elapsed() >= Duration::from_secs(60) {
             app.save_histories(false);
             last_history = Instant::now();
@@ -537,6 +548,9 @@ impl App {
             prs_checked: None,
             status: None,
             size: (80, 24),
+            size_known: false,
+            nudge: None,
+            adopted: false,
             events,
             client: None,
             next_conn: 0,
@@ -799,6 +813,7 @@ impl App {
                         return;
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
+                    ClientMsg::Debug => self.debug_dump(),
                     ClientMsg::Stop => {
                         self.quit = true;
                         "stopping — panes and Claude sessions are restored next time you run velmux".into()
@@ -983,6 +998,9 @@ impl App {
                     self.pending_out.extend_from_slice(mouse::ENABLE);
                 }
                 self.resize(cols, rows);
+                if std::mem::take(&mut self.adopted) {
+                    self.redraw();
+                }
                 self.open_cwd(&cwd);
                 if let Some(w) = self.startup_warning.take() {
                     self.say(w);
@@ -991,12 +1009,13 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
         }
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
         self.size = (cols.max(20), rows.max(5));
+        self.size_known = true;
         self.relayout();
     }
 
@@ -1005,6 +1024,11 @@ impl App {
         self.reveal_focus();
         let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
         // Every tab, not just the visible one, so switching tabs never shows a stale size.
+        if !self.size_known {
+            self.full_redraw = true;
+            self.dirty = true;
+            return;
+        }
         let mut sizes = Vec::new();
         for view in self.views.values() {
             for tab in &view.tabs {
@@ -1125,7 +1149,8 @@ impl App {
         }
         let saved = self.snapshot();
         let live: Vec<session::LivePane> = self.panes.iter_mut().filter_map(Pane::handoff).collect();
-        let handoff = session::Handoff { saved, live, focus: self.focus };
+        let size = self.size_known.then_some(self.size);
+        let handoff = session::Handoff { saved, live, focus: self.focus, size };
         let path = session::handoff_file()?;
         std::fs::write(&path, serde_json::to_vec(&handoff)?)?;
         // Also save normally, so a failed hand-off still restores.
@@ -1171,6 +1196,11 @@ impl App {
             std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let _ = std::fs::remove_file(path);
         let Some(handoff) = handoff else { return self.restore() };
+        if let Some(size) = handoff.size {
+            self.size = size;
+            self.size_known = true;
+        }
+        self.adopted = true;
         self.restore_projects(&handoff.saved);
         let mut live: HashMap<u64, session::LivePane> = handoff.live.into_iter().map(|l| (l.id, l)).collect();
         for mut view in handoff.saved.views {
@@ -1500,6 +1530,57 @@ impl App {
             _ => {}
         }
         used
+    }
+
+    /// Repaint everything, and squeeze every pane a column narrower for a
+    /// moment: each app re-reads its size, fixing one stuck at a stale width.
+    fn redraw(&mut self) {
+        for pane in &mut self.panes {
+            let (rows, cols) = pane.parser.screen().size();
+            if cols.get() > 2 {
+                pane.resize(cols.get() - 1, rows.get());
+            }
+        }
+        self.nudge = Some(Instant::now() + Duration::from_millis(200));
+        self.full_redraw = true;
+        self.dirty = true;
+    }
+
+    /// The other half of [`redraw`](Self::redraw): back to the real sizes.
+    pub fn finish_nudge(&mut self) {
+        if self.nudge.is_some_and(|t| Instant::now() >= t) {
+            self.nudge = None;
+            self.relayout();
+        }
+    }
+
+    /// `velmux debug`: the focused pane as velmux holds it (pty and parser
+    /// size, the rect it's drawn in, each row), to compare with the screen.
+    fn debug_dump(&mut self) -> String {
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) else {
+            return "no focused pane".into();
+        };
+        let (rows, cols) = pane.parser.screen().size();
+        let pty = pane.pty_size();
+        let mut out = format!(
+            "pane {} · client {}x{} · pane area {}x{} at col {} · parser {}x{} · pty {} · alt screen {} · scrollback {}\n",
+            pane.id,
+            self.size.0,
+            self.size.1,
+            body.width,
+            body.height,
+            body.x,
+            cols.get(),
+            rows.get(),
+            pty.map_or("?".into(), |(c, r)| format!("{c}x{r}")),
+            pane.parser.screen().alternate_screen(),
+            pane.parser.screen().scrollback(),
+        );
+        for (i, row) in pane.parser.screen().rows(0, cols.get()).enumerate() {
+            out.push_str(&format!("{i:>3}│{}\n", row.trim_end()));
+        }
+        out
     }
 
     /// The current slot's port, if it has one.
@@ -2624,6 +2705,7 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::Redraw => self.redraw(),
             Action::NewSpace => {
                 let repos = self.space_candidates();
                 self.mode = Mode::NewSpace { query: String::new(), selected: 0, repos };

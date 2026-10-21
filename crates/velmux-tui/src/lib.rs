@@ -59,6 +59,12 @@ pub fn restart_server() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `velmux debug`: the focused pane as the server sees it.
+pub fn debug_server() -> anyhow::Result<()> {
+    print!("{}", client::request(proto::ClientMsg::Debug)?);
+    Ok(())
+}
+
 /// `velmux stop`: save and stop the server.
 pub fn stop_server() -> anyhow::Result<()> {
     if std::os::unix::net::UnixStream::connect(paths::socket()?).is_err() {
