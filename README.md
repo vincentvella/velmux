@@ -201,6 +201,7 @@ cd "$(velmux claim feat/login)" # claim LRU free slot, check out branch
 velmux status [--json]
 velmux release [slot]           # stash if dirty → detach to base ref → clean, deps kept
 velmux sync [slot]              # fetch, rebase (or merge) the slot's branch onto the base ref
+velmux env [slot]               # the slot's ports etc. as exports: eval "$(velmux env)"
 velmux parked [--json]          # branches released with work on them
 velmux discard <branch>         # drop a parked branch's stash (branch kept)
 velmux open [slot]              # editor from config / $VISUAL / $EDITOR
@@ -269,7 +270,23 @@ post_claim = ["bun run codegen"]
 install = true
 install_cmd = "bun install"         # override detection
 sync = "merge"                      # per repo
+
+[ports]                             # also settable globally
+stride = 10                         # slot N adds N × stride
+env = { PORT = 3000, RCT_METRO_PORT = 8081 }  # value in the base checkout
+# enabled = false
 ```
+
+### Ports
+
+Each slot gets its own ports, so dev servers in different slots don't collide:
+slot N's panes (and `post_claim` hooks) get `PORT = 3000 + 10·N` by default
+(slot-2 → `3020`), plus `VELMUX_SLOT`. The base checkout is left alone. Add
+variables or move the block with `[ports]` (two repos with slots running at
+once want different bases). The port shows in the header (`slot-2 :3020`) and
+`velmux status`; a slot's right-click menu opens `http://localhost:<port>`.
+Outside velmux, `eval "$(velmux env)"` in a slot (or `velmux env >> .envrc` for
+direnv) sets the same variables.
 
 ## Layout
 

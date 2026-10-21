@@ -72,7 +72,7 @@ pub struct Launch<'a> {
     pub cwd: &'a Path,
     /// Run through the login shell, which takes over when it exits; `None` = plain shell.
     pub command: Option<&'a str>,
-    pub env: &'a [(&'a str, String)],
+    pub env: &'a [(String, String)],
 }
 
 pub struct Pane {

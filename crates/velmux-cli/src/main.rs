@@ -48,6 +48,12 @@ enum Cmd {
         /// Slot id; defaults to the slot containing the current directory.
         slot: Option<String>,
     },
+    /// Print a slot's environment (ports, `VELMUX_SLOT`) as shell exports:
+    /// `eval "$(velmux env)"`, or `velmux env >> .envrc` for direnv.
+    Env {
+        /// Slot id; defaults to the slot containing the current directory.
+        slot: Option<String>,
+    },
     /// Show every slot.
     Status {
         #[arg(long)]
@@ -175,6 +181,12 @@ fn run() -> Result<()> {
                 print_parked(&pool.parked()?);
             }
         }
+        Cmd::Env { slot } => {
+            let id = resolve_slot(&pool, slot, &cwd)?;
+            for (k, v) in pool.slot_env(&id) {
+                println!("export {k}={}", shell_quote(&v));
+            }
+        }
         Cmd::Sync { slot } => {
             let id = resolve_slot(&pool, slot, &cwd)?;
             println!("{}", pool.sync(&id, &|m| eprintln!("{m}"))?);
@@ -236,6 +248,14 @@ fn resolve_slot(pool: &Pool, slot: Option<String>, cwd: &std::path::Path) -> Res
     }
 }
 
+fn shell_quote(s: &str) -> String {
+    if s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:".contains(c)) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 fn print_parked(parked: &[ParkedView]) {
     if parked.is_empty() {
         return;
@@ -270,6 +290,7 @@ fn print_table(pool: &Pool, slots: &[SlotView]) {
             dirty.push_str(&format!(" !{op} in progress"));
         }
         let by = s.claimed_by.as_deref().map(|b| format!("  [{b}]")).unwrap_or_default();
-        println!("  {:<8} {state}  {branch}{dirty}{by}", s.id);
+        let port = pool.slot_port(&s.id).map(|p| format!("  :{p}")).unwrap_or_default();
+        println!("  {:<8} {state}  {branch}{dirty}{by}{port}", s.id);
     }
 }

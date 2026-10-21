@@ -23,6 +23,8 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Open the current slot's `http://localhost:<port>`.
+    OpenBrowser,
     /// Open the focused pane's history in $EDITOR.
     EditScrollback,
     /// Rebase (or merge) the focused slot's branch onto the base ref.
@@ -144,6 +146,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("open_browser", Action::OpenBrowser),
     ("edit_scrollback", Action::EditScrollback),
     ("sync_slot", Action::SyncSlot),
     ("resume_parked", Action::ResumeParked),

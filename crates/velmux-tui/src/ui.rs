@@ -830,7 +830,8 @@ fn draw_header(app: &App, body: Rect, buf: &mut Buffer) {
     let header = match (app.focused(), app.current_loc()) {
         (Some(pane), _) => {
             let title = useful_title(pane).map(|t| format!(" — {t}")).unwrap_or_default();
-            format!("{} · {}{title}", app.loc_name(&pane.loc), pane_label(app, pane))
+            let port = app.loc_port(&pane.loc).map(|p| format!(" :{p}")).unwrap_or_default();
+            format!("{}{port} · {}{title}", app.loc_name(&pane.loc), pane_label(app, pane))
         }
         (None, Some(loc)) => app.loc_name(&loc),
         (None, None) => "velmux".into(),

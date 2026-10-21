@@ -62,6 +62,42 @@ struct GlobalFile {
     sync: Option<SyncMode>,
     /// Minutes between background `git fetch`es of each repo (0 turns it off).
     fetch_every: Option<u64>,
+    ports: Option<PortsFile>,
+}
+
+/// `[ports]`: each slot gets its own block, so dev servers in different slots
+/// don't collide. Slot N's value for each variable is `base + N * stride`.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PortsFile {
+    enabled: Option<bool>,
+    stride: Option<u16>,
+    /// Variable → its value in the base checkout, e.g. `PORT = 3000`.
+    env: Option<std::collections::BTreeMap<String, u16>>,
+}
+
+/// Resolved `[ports]`.
+#[derive(Debug, Clone)]
+pub struct Ports {
+    pub enabled: bool,
+    pub stride: u16,
+    pub env: std::collections::BTreeMap<String, u16>,
+}
+
+impl Ports {
+    /// The variables for slot `n` (the base checkout is `0`, left alone).
+    pub fn for_slot(&self, n: u16) -> Vec<(String, u16)> {
+        if !self.enabled || n == 0 {
+            return Vec::new();
+        }
+        self.env.iter().filter_map(|(k, base)| Some((k.clone(), base.checked_add(n.checked_mul(self.stride)?)?))).collect()
+    }
+
+    /// The one to show and open: `PORT` if set, else the first.
+    pub fn primary(&self, n: u16) -> Option<u16> {
+        let all = self.for_slot(n);
+        all.iter().find(|(k, _)| k == "PORT").or(all.first()).map(|(_, v)| *v)
+    }
 }
 
 /// How "sync with base" brings a slot's branch up to date.
@@ -161,6 +197,7 @@ struct RepoFile {
     install: Option<bool>,
     install_cmd: Option<String>,
     sync: Option<SyncMode>,
+    ports: Option<PortsFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +219,7 @@ pub struct Config {
     pub sync: SyncMode,
     /// Minutes between background fetches (0 = never).
     pub fetch_every: u64,
+    pub ports: Ports,
 }
 
 impl Config {
@@ -213,6 +251,14 @@ impl Config {
             install_cmd: repo.install_cmd,
             sync: repo.sync.or(global.sync).unwrap_or_default(),
             fetch_every: global.fetch_every.unwrap_or(15),
+            ports: {
+                let (g, r) = (global.ports.unwrap_or_default(), repo.ports.unwrap_or_default());
+                Ports {
+                    enabled: r.enabled.or(g.enabled).unwrap_or(true),
+                    stride: r.stride.or(g.stride).unwrap_or(10).max(1),
+                    env: r.env.or(g.env).unwrap_or_else(|| [("PORT".to_string(), 3000)].into()),
+                }
+            },
         }
     }
 }

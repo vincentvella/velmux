@@ -1202,6 +1202,28 @@ impl App {
         });
     }
 
+    /// The current slot's port, if it has one.
+    pub fn loc_port(&self, loc: &Loc) -> Option<u16> {
+        let pool = self.projects.get(loc.project)?.pool.as_ref()?;
+        pool.slot_port(loc.slot.as_ref()?)
+    }
+
+    /// `http://localhost:<port>` for the current slot, in the default browser.
+    fn open_browser(&mut self) {
+        let Some(port) = self.current_loc().and_then(|l| self.loc_port(&l)) else {
+            return self.say("only slots have their own port (see [ports] in the config)");
+        };
+        let url = format!("http://localhost:{port}");
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        match std::process::Command::new(opener).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+                self.toast(&format!("opened {url}"));
+            }
+            Err(e) => self.say(format!("can't open {url}: {e}")),
+        }
+    }
+
     /// Rebase (or merge) a slot's branch onto the base ref, in the background.
     fn sync_slot(&mut self) {
         let Some(loc) = self.current_loc() else { return };
@@ -1746,6 +1768,7 @@ impl App {
             (false, true) => vec![
                 ("claude in this slot", Action::AgentHere),
                 ("sync with base", Action::SyncSlot),
+                ("open in browser", Action::OpenBrowser),
                 ("shell here", Action::NewShell),
                 ("new tab", Action::NewTab),
                 ("open in editor", Action::NewEditor),
@@ -2139,6 +2162,7 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::OpenBrowser => self.open_browser(),
             Action::EditScrollback => self.edit_scrollback(),
             Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
             Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
@@ -2885,13 +2909,12 @@ impl App {
         };
         let path_var = std::env::var_os("PATH");
         let command = command.map(|c| session::resolve_program(&c, path_var.as_deref()));
-        let mut env = Vec::new();
-        if let Some(base) = project.base() {
-            env.push(("VELMUX_BASE", base.to_string_lossy().into_owned()));
-            if let Some(id) = &loc.slot {
-                env.push(("VELMUX_SLOT", id.clone()));
-            }
-        }
+        // Slots get their own ports (and `VELMUX_SLOT`), so dev servers don't collide.
+        let env = match (&project.pool, &loc.slot) {
+            (Some(pool), Some(id)) => pool.slot_env(id),
+            (Some(pool), None) => vec![("VELMUX_BASE".to_string(), pool.base.to_string_lossy().into_owned())],
+            (None, _) => Vec::new(),
+        };
         let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
         let id = self.next_pane;
         self.next_pane += 1;

@@ -173,6 +173,28 @@ fn sync_backs_out_of_conflicts() {
 }
 
 #[test]
+fn each_slot_gets_its_own_ports() {
+    let f = fixture("slots = 2\npost_claim = [\"echo $PORT $METRO > port.txt\"]\n[ports]\nstride = 100\nenv = { PORT = 3000, METRO = 8081 }\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    let env = pool.slot_env("slot-2");
+    assert!(env.contains(&("PORT".into(), "3200".into())) && env.contains(&("METRO".into(), "8281".into())), "{env:?}");
+    assert!(env.contains(&("VELMUX_SLOT".into(), "slot-2".into())));
+    assert_eq!(pool.slot_port("slot-1"), Some(3100));
+    // Hooks see them.
+    let s = pool.claim(&opts(Some("feat/p")), &quiet).unwrap();
+    let n = velmux_pool::config::Ports { enabled: true, stride: 100, env: Default::default() };
+    assert!(n.for_slot(1).is_empty());
+    let want = if s.id == "slot-1" { "3100 8181" } else { "3200 8281" };
+    assert_eq!(std::fs::read_to_string(s.path.join("port.txt")).unwrap().trim(), want);
+    // Off, and the default (PORT = 3000 + 10·n).
+    let off = fixture("[ports]\nenabled = false\n");
+    assert_eq!(Pool::discover(off.env.clone(), &off.base).unwrap().slot_port("slot-1"), None);
+    let plain = fixture("");
+    assert_eq!(Pool::discover(plain.env.clone(), &plain.base).unwrap().slot_port("slot-3"), Some(3030));
+}
+
+#[test]
 fn detached_commits_are_rescued_on_release() {
     let f = fixture("slots = 1\n");
     let pool = Pool::discover(f.env.clone(), &f.base).unwrap();

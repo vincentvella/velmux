@@ -115,9 +115,15 @@ fn seed_from_base(slot: &Path, base: &Path, report: &dyn Fn(&str)) -> Result<()>
 }
 
 pub fn run_shell(dir: &Path, command: &str) -> Result<()> {
+    run_shell_with(dir, command, &[])
+}
+
+/// [`run_shell`] with extra environment variables.
+pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Result<()> {
     let out = Command::new("sh")
         .arg("-c")
         .arg(command)
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(dir)
         .output()
         .with_context(|| format!("running `{command}`"))?;

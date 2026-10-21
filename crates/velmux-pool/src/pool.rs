@@ -93,6 +93,11 @@ impl ParkedView {
     }
 }
 
+/// `slot-3` → 3 (0 for anything else).
+pub fn slot_number(id: &str) -> u16 {
+    id.strip_prefix("slot-").and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 fn stash_marker(branch: &str) -> String {
     format!("velmux[{branch}]")
 }
@@ -248,7 +253,7 @@ impl Pool {
         }
         for hook in &self.cfg.post_claim {
             report(&format!("hook: {hook}"));
-            deps::run_shell(dir, hook)?;
+            deps::run_shell_with(dir, hook, &self.slot_env(&slot.id))?;
         }
         Ok(())
     }
@@ -346,6 +351,18 @@ impl Pool {
             return Err(e.context(format!("syncing {id}; backed out")));
         }
         Ok(format!("{id} {verb} {} (+{behind})", self.base_ref))
+    }
+
+    /// A slot's environment: `VELMUX_BASE`, `VELMUX_SLOT` and its ports.
+    pub fn slot_env(&self, id: &str) -> Vec<(String, String)> {
+        let mut env = vec![("VELMUX_BASE".to_string(), self.base.display().to_string()), ("VELMUX_SLOT".to_string(), id.to_string())];
+        env.extend(self.cfg.ports.for_slot(slot_number(id)).into_iter().map(|(k, v)| (k, v.to_string())));
+        env
+    }
+
+    /// The slot's main port (`PORT`, else the first configured), if ports are on.
+    pub fn slot_port(&self, id: &str) -> Option<u16> {
+        self.cfg.ports.primary(slot_number(id))
     }
 
     /// Fetch the repo's remote (no-op without one); slots see the new base ref.
