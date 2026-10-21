@@ -165,13 +165,15 @@ fn a_merged_pr_offers_release_and_isnt_parked() {
 
     let opened = env.root.join("opened.txt");
     let ui = env.attach(&repo);
-    ui.wait_for("#7⇡");
+    ui.wait_for("#7⇡ · ⏏ free");
     // Its number opens the PR.
     ui.click_on("#7⇡", false);
     env.until("the PR to open", || std::fs::read_to_string(&opened).is_ok_and(|t| t.trim() == "https://github.com/acme/app/pull/7"));
+    // The slot's menu offers to release it, and so does `⏏ free` on its row.
     ui.click_on("feat/pr", true);
     ui.wait_for("release (PR merged)");
-    ui.send(b"\r");
+    ui.send(b"\x1b");
+    ui.click_on("⏏ free", false);
     ui.wait_for("y yes");
     ui.send(b"y");
     env.until("slot-1 to be free", || env.slot(&repo, "slot-1")["status"] == "free");

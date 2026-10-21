@@ -395,6 +395,8 @@ pub struct Piece {
     pub text: String,
     pub style: Style,
     pub url: Option<String>,
+    /// Clicking it frees the slot (its PR merged).
+    pub free: bool,
 }
 
 /// A slot's second line, dim under its branch: `@2 · ↓3 ↑1 · #142✓`, plus
@@ -408,7 +410,7 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
     let Some(id) = &loc.slot else { return Vec::new() };
     let slot = project.slots.iter().find(|s| &s.id == id);
     let dim = base.fg(t.dim);
-    let piece = |text: String, style: Style| (text, style, None::<String>);
+    let piece = |text: String, style: Style| (text, style, None::<String>, false);
     let mut parts = vec![vec![piece(format!("@{}", id.trim_start_matches("slot-")), dim)]];
     // Renamed, the first line shows the name: the branch goes here.
     if let (Some(_), Some(branch)) = (app.views.get(loc).and_then(|v| v.name.as_ref()), slot.and_then(|s| s.branch.clone())) {
@@ -421,6 +423,8 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
         if let Some(c) = &s.conflict {
             parts.push(vec![piece(format!("! {c}"), base.fg(t.blocked).add_modifier(Modifier::BOLD))]);
         }
+        // Once its PR has merged, how it stands against the base no longer matters.
+        let merged = s.branch.as_ref().and_then(|b| project.prs.get(b)).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged);
         let mut drift = Vec::new();
         if s.behind > 0 {
             drift.push(piece(format!("↓{}", s.behind), base.fg(t.alert)));
@@ -428,7 +432,7 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
         if s.ahead > 0 {
             drift.push(piece(format!("↑{}", s.ahead), dim));
         }
-        if !drift.is_empty() {
+        if !drift.is_empty() && !merged {
             parts.push(drift);
         }
         // Its PR: number and checks (`#142✓`), or that it merged.
@@ -445,7 +449,13 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
             let number = if pr.draft || pr.state == PrState::Closed { t.dim } else { t.text2 };
             let style = base.fg(if glyph.is_empty() { number } else { color });
             let url = (!pr.url.is_empty() && !pr.url.chars().any(char::is_control)).then(|| pr.url.clone());
-            parts.push(vec![(format!("#{}{glyph}", pr.number), style, url)]);
+            if pr.state == PrState::Merged {
+                // Done: offer to hand the slot back.
+                parts.push(vec![(format!("#{}{glyph}", pr.number), style, url, false)]);
+                parts.push(vec![("⏏ free".into(), base.fg(t.accent).add_modifier(Modifier::BOLD), None, true)]);
+            } else {
+                parts.push(vec![(format!("#{}{glyph}", pr.number), style, url, false)]);
+            }
         }
     }
     let (mut x, end) = (5u16, side.saturating_sub(1));
@@ -455,10 +465,10 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
             if x + 3 > end {
                 break;
             }
-            out.push(Piece { x, text: " · ".into(), style: dim, url: None });
+            out.push(Piece { x, text: " · ".into(), style: dim, url: None, free: false });
             x += 3;
         }
-        for (j, (text, style, url)) in part.into_iter().enumerate() {
+        for (j, (text, style, url, free)) in part.into_iter().enumerate() {
             let gap = (j > 0) as u16;
             let room = end.saturating_sub(x + gap) as usize;
             if room == 0 {
@@ -466,7 +476,7 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
             }
             let text: String = text.chars().take(room).collect();
             let w = text.chars().count() as u16;
-            out.push(Piece { x: x + gap, text, style, url });
+            out.push(Piece { x: x + gap, text, style, url, free });
             x += gap + w;
         }
     }
@@ -483,6 +493,19 @@ fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool,
     for p in detail_pieces(app, loc, side, selected) {
         buf.set_string(p.x, y, &p.text, p.style);
     }
+}
+
+/// The slot whose `⏏ free` is at sidebar column `x`, row `y`, if any.
+pub fn free_at(app: &App, cols: u16, rows: u16, x: u16, y: u16) -> Option<Loc> {
+    let side = sidebar_width(cols, app.sidebar_hidden, app.sidebar_cols);
+    let current = app.current_loc();
+    sidebar_rows(app, rows).into_iter().find_map(|(ry, row)| match row {
+        Row::Detail(loc) if ry == y => detail_pieces(app, &loc, side, current.as_ref() == Some(&loc))
+            .iter()
+            .any(|p| p.free && (p.x..p.x + p.text.chars().count() as u16).contains(&x))
+            .then_some(loc),
+        _ => None,
+    })
 }
 
 /// Every link in the sidebar: (row, first column, width, url).

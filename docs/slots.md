@@ -126,7 +126,7 @@ your claimed and parked branches about once a minute:
 | `#142✓` | checks passing |
 | `#142✗` | checks failing |
 | `#142…` | checks running |
-| `#142⇡` | merged |
+| `#142⇡ · ⏏ free` | merged: click **⏏ free** to release the slot |
 
 You get a notification when a PR merges or its checks start failing. The slot's
 right-click menu has **push & open PR** (pushes the branch and opens GitHub's

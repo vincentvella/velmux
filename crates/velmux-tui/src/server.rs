@@ -2499,6 +2499,11 @@ impl App {
     }
 
     fn sidebar_click(&mut self, x: u16, y: u16) {
+        // `⏏ free` on a merged slot hands it back (asking first).
+        if let Some(loc) = ui::free_at(self, self.size.0, self.size.1, x, y) {
+            self.go_to(loc);
+            return self.run(Action::RemovePlace);
+        }
         // A PR number opens the PR.
         if let Some((.., url)) = ui::sidebar_links(self, self.size.0, self.size.1).into_iter().find(|&(ly, lx, w, _)| ly == y && (lx..lx + w).contains(&x)) {
             return self.open_url(&url);
