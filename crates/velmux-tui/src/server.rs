@@ -3824,8 +3824,16 @@ impl App {
         }
     }
 
+    /// The previous / next place in the sidebar, as it lists them (bases,
+    /// claimed slots, folders), whether or not it has panes open.
     fn step_location(&mut self, step: isize) {
-        let locs = self.live_locations();
+        let locs: Vec<Loc> = ui::display_rows(self)
+            .into_iter()
+            .filter_map(|r| match r {
+                ui::Row::Location(loc) => Some(loc),
+                _ => None,
+            })
+            .collect();
         if locs.is_empty() {
             return;
         }

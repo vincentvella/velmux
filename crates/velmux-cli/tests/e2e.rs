@@ -500,6 +500,26 @@ fn a_new_claude_from_a_slot_starts_in_the_checkout() {
 }
 
 #[test]
+fn next_and_previous_place_follow_the_sidebar() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    for b in ["feat/a", "feat/b"] {
+        assert!(env.velmux(&repo, &["claim", b, "--no-fetch", "--no-install"]).status.success());
+    }
+    let ui = env.attach(&repo);
+    ui.wait_for("feat/b");
+    // ⌘⌃] (as Ghostty sends it) steps through every place listed, panes or not.
+    let next = || ui.send(b"\x1b[93;13u");
+    for want in ["app › slot-1", "app › slot-2", "app › base"] {
+        next();
+        ui.wait_for(want);
+    }
+    ui.send(b"\x1b[91;13u");
+    ui.wait_for("app › slot-2");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");
