@@ -404,6 +404,31 @@ fn an_agent_with_a_session_hook_is_resumed() {
 }
 
 #[test]
+fn the_sidebar_resizes_by_its_edge_and_keys_and_keeps_its_width() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    // The column of the sidebar's edge, on the second row.
+    let edge = |ui: &common::Ui| ui.screen().lines().nth(1).and_then(|l| l.chars().position(|c| c == '│')).unwrap();
+    let start = edge(&ui);
+    // Press on the edge, drag it 10 columns right, let go (SGR mouse, 1-based).
+    let row = 5;
+    ui.send(format!("\x1b[<0;{};{row}M", start + 1).as_bytes());
+    ui.send(format!("\x1b[<32;{};{row}M", start + 6).as_bytes());
+    ui.send(format!("\x1b[<32;{};{row}M", start + 11).as_bytes());
+    ui.send(format!("\x1b[<0;{};{row}m", start + 11).as_bytes());
+    env.until("the edge to follow the drag", || edge(&ui) == start + 10);
+    // The keys move it 4 at a time.
+    ui.prefix("<");
+    env.until("the sidebar to narrow", || edge(&ui) == start + 6);
+    // It stays that wide after a restart.
+    env.stop(&repo);
+    drop(ui);
+    let ui = env.attach(&repo);
+    env.until("the width to come back", || edge(&ui) == start + 6);
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

@@ -84,6 +84,7 @@ press next:
 | `o` | jump to the next agent that needs you |
 | `X` | remove this place (or release it, in a slot) |
 | `b` | hide / show the sidebar |
+| `<` / `>` | sidebar narrower / wider |
 | `[` / `]` | copy mode / the pane's whole history in `$EDITOR` |
 | `j` / `k`, `x` | cycle panes, close a pane |
 | `s` / `R` | settings (edit the config) / reload it |
@@ -121,7 +122,8 @@ Rebind anything in the [config](configuration.md#keys).
 ## Mouse
 
 Click a pane to focus it, a sidebar row to go there, a tab to switch. Drag a
-divider to resize. The wheel scrolls a pane's history (and closes it again at
+divider to resize, or the sidebar's edge to make it wider or narrower (it
+keeps that width). The wheel scrolls a pane's history (and closes it again at
 the bottom), sends arrow keys to full-screen apps like `less`, and passes
 straight through to apps that ask for the mouse (vim with `mouse=a`, full-screen
 TUIs). Hold Shift (Option in iTerm2) for your terminal's own selection.

@@ -160,6 +160,8 @@ enum Drag {
     /// Pressing on a repo heading or a folder in the sidebar: a click on release,
     /// or a reorder once it moves.
     Sidebar { grab: Grab, start: (u16, u16), moved: bool },
+    /// Resizing the sidebar by its edge.
+    SidebarEdge,
     /// Resizing the split behind a divider.
     Divider { loc: Loc, path: Vec<bool>, span: Rect, dir: Dir },
     /// Selecting text; copy mode opens on the first motion, copies on release.
@@ -335,6 +337,8 @@ pub struct App {
     /// Per-role overrides from config, re-applied when the theme changes.
     theme_colors: std::collections::BTreeMap<String, String>,
     pub sidebar_hidden: bool,
+    /// The width you've set the sidebar to (dragging its edge, `<prefix> <` / `>`).
+    pub sidebar_cols: Option<u16>,
     pub sidebar_view: ui::SidebarView,
     /// Display order of projects (indices into `projects`, which never move,
     /// since locations refer to projects by index).
@@ -572,6 +576,7 @@ impl App {
             theme: crate::theme::builtin("default").unwrap(),
             theme_colors: Default::default(),
             sidebar_hidden: false,
+            sidebar_cols: None,
             sidebar_view: ui::SidebarView::Spaces,
             project_order: Vec::new(),
             sidebar_drag: None,
@@ -653,7 +658,7 @@ impl App {
     /// Outer rect of every pane in `loc`'s view, plus dividers (none when zoomed).
     pub fn view_rects(&self, loc: &Loc) -> (Vec<(u64, Rect)>, Vec<layout::Divider>) {
         let Some(view) = self.views.get(loc) else { return (Vec::new(), Vec::new()) };
-        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden, self.sidebar_cols);
         match view.zoomed {
             Some(id) => (vec![(id, body)], Vec::new()),
             None => view.layout.rects(body),
@@ -1119,9 +1124,19 @@ impl App {
     }
 
     /// Size every pane to its rect in its location's layout.
+    /// Set the sidebar to `cols` wide (kept within bounds) and fit the panes.
+    fn set_sidebar_width(&mut self, cols: u16) {
+        let width = ui::sidebar_width(self.size.0, false, Some(cols));
+        if self.sidebar_cols != Some(width) {
+            self.sidebar_cols = Some(width);
+            self.full_redraw = true;
+            self.relayout();
+        }
+    }
+
     fn relayout(&mut self) {
         self.reveal_focus();
-        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden, self.sidebar_cols);
         // Every tab, not just the visible one, so switching tabs never shows a stale size.
         if !self.size_known {
             self.full_redraw = true;
@@ -1214,6 +1229,7 @@ impl App {
             .collect();
         Saved {
             version: 1,
+            sidebar_width: self.sidebar_cols,
             // Saved in display order, so restore rebuilds that order.
             projects: self
                 .ordered_projects()
@@ -1357,6 +1373,7 @@ impl App {
     /// Bring back the projects, layouts and panes of the last server. Claude panes
     /// resume their conversation in the slot they ran in; slots released since are skipped.
     fn restore_projects(&mut self, saved: &Saved) {
+        self.sidebar_cols = saved.sidebar_width;
         let env = Env::from_process().ok();
         for base in &saved.projects {
             let Some(pool) = env.clone().and_then(|e| Pool::discover(e, base).ok()) else { continue };
@@ -1666,7 +1683,7 @@ impl App {
     /// `velmux debug`: the focused pane as velmux holds it (pty and parser
     /// size, the rect it's drawn in, each row), to compare with the screen.
     fn debug_dump(&mut self) -> String {
-        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden, self.sidebar_cols);
         let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) else {
             return "no focused pane".into();
         };
@@ -2075,7 +2092,7 @@ impl App {
                 match item {
                     Some(i) => self.run_menu_item(context, i),
                     // Right-clicking another place opens its menu instead.
-                    None if ev.is_right() && !area.contains(at) && ev.x < ui::sidebar_width(cols, self.sidebar_hidden) => {
+                    None if ev.is_right() && !area.contains(at) && ev.x < ui::sidebar_width(cols, self.sidebar_hidden, self.sidebar_cols) => {
                         self.open_context_menu(ev.x, ev.y)
                     }
                     None => {}
@@ -2086,7 +2103,13 @@ impl App {
         if !matches!(self.mode, Mode::Normal | Mode::Copy) {
             return;
         }
-        if ev.x < ui::sidebar_width(cols, self.sidebar_hidden) {
+        let side = ui::sidebar_width(cols, self.sidebar_hidden, self.sidebar_cols);
+        // Its edge drags to resize it.
+        if !self.sidebar_hidden && ev.x == side && ev.is_press() && ev.is_left() {
+            self.drag = Some(Drag::SidebarEdge);
+            return;
+        }
+        if ev.x < side {
             if ev.is_press() && ev.is_right() {
                 return self.open_context_menu(ev.x, ev.y);
             }
@@ -2108,7 +2131,7 @@ impl App {
                 return;
             }
             if ev.is_press() && ev.is_left() {
-                let body = ui::pane_area(cols, rows, self.sidebar_hidden);
+                let body = ui::pane_area(cols, rows, self.sidebar_hidden, self.sidebar_cols);
                 match ui::tab_hit(self, body, ev.x) {
                     Some(ui::TabHit::Tab(i)) => self.goto_tab(i),
                     Some(ui::TabHit::New) => self.new_tab(),
@@ -2119,7 +2142,7 @@ impl App {
         }
         // An empty screen: its actions are clickable.
         if self.focused().is_none() && ev.is_press() && ev.is_left() {
-            let body = ui::pane_area(cols, rows, self.sidebar_hidden);
+            let body = ui::pane_area(cols, rows, self.sidebar_hidden, self.sidebar_cols);
             if let Some(action) = ui::empty_hit(self, body, ev.x, ev.y) {
                 if action == Action::Help {
                     self.mode = Mode::Prefix;
@@ -2256,6 +2279,15 @@ impl App {
                     self.sidebar_drag = gap.map(|(_, line)| (grab.clone(), line));
                 }
                 self.drag = Some(Drag::Sidebar { grab, start, moved });
+            }
+            Drag::SidebarEdge => {
+                if ev.release {
+                    return self.save();
+                }
+                if ev.is_motion() {
+                    self.set_sidebar_width(ev.x);
+                }
+                self.drag = Some(Drag::SidebarEdge);
             }
             Drag::Divider { loc, path, span, dir } => {
                 if ev.release {
@@ -2412,7 +2444,7 @@ impl App {
         let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else {
             return;
         };
-        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden);
+        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
         match row {
             ui::Row::TopBar => {
                 return self.run(if x < side / 2 { Action::NewSpace } else { Action::Menu });
@@ -3031,7 +3063,7 @@ impl App {
                 if items.is_empty() {
                     return self.say("no coding agent found on PATH (claude, codex, gemini, opencode)");
                 }
-                let side = ui::sidebar_width(self.size.0, self.sidebar_hidden);
+                let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
                 self.mode = Mode::Menu {
                     selected: 0,
                     context: Some(MenuContext { target, parked: None, title: "new conversation with…".into(), items, at: (side + 2, 2) }),
@@ -3177,6 +3209,13 @@ impl App {
             Action::ToggleSidebar => {
                 self.sidebar_hidden = !self.sidebar_hidden;
                 self.relayout();
+            }
+            Action::SidebarWider | Action::SidebarNarrower => {
+                let now = ui::sidebar_width(self.size.0, false, self.sidebar_cols);
+                let to = if action == Action::SidebarWider { now + 4 } else { now.saturating_sub(4) };
+                self.sidebar_hidden = false;
+                self.set_sidebar_width(to);
+                self.save();
             }
             Action::Attention => self.next_attention(),
             Action::LocationPicker => {
@@ -4057,7 +4096,7 @@ impl App {
             (None, _) => Vec::new(),
         };
         env.extend(agent_env);
-        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
+        let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden, self.sidebar_cols);
         let id = self.next_pane;
         self.next_pane += 1;
         let launch = Launch { cwd: &cwd, command: command.as_deref(), env: &env };

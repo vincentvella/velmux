@@ -11,16 +11,25 @@ use crate::layout::Dir;
 use crate::pane::{Kind, Loc, Pane};
 use crate::server::{App, Mode};
 
-pub fn sidebar_width(cols: u16, hidden: bool) -> u16 {
+/// The sidebar's width: the one you dragged it to (`want`), else 32 columns
+/// (a third of a narrow terminal), always leaving the panes room.
+pub fn sidebar_width(cols: u16, hidden: bool, want: Option<u16>) -> u16 {
     if hidden {
         return 0;
     }
-    32.min(cols / 3).max(12)
+    match want {
+        Some(w) => w.min(cols.saturating_sub(MIN_PANES + 1)).max(MIN_SIDEBAR),
+        None => 32.min(cols / 3).max(MIN_SIDEBAR),
+    }
 }
 
+pub const MIN_SIDEBAR: u16 = 12;
+/// Columns the panes always keep beside a widened sidebar.
+const MIN_PANES: u16 = 20;
+
 /// The rectangle every pane is sized to.
-pub fn pane_area(cols: u16, rows: u16, hidden: bool) -> Rect {
-    let x = if hidden { 0 } else { sidebar_width(cols, false) + 1 };
+pub fn pane_area(cols: u16, rows: u16, hidden: bool, want: Option<u16>) -> Rect {
+    let x = if hidden { 0 } else { sidebar_width(cols, false, want) + 1 };
     Rect::new(x, 1, cols.saturating_sub(x).max(1), rows.saturating_sub(1).max(1))
 }
 
@@ -106,7 +115,7 @@ pub fn menu_area(app: &App, cols: u16, rows: u16) -> Rect {
         let y = if below + height <= rows { below } else { c.at.1.saturating_sub(height) };
         return Rect::new(x, y, width, height);
     }
-    let side = sidebar_width(cols, app.sidebar_hidden);
+    let side = sidebar_width(cols, app.sidebar_hidden, app.sidebar_cols);
     let width = 30.min(cols.saturating_sub(2)).max(side.saturating_sub(2).min(30));
     let height = (MENU.len() as u16 + 2).min(rows.saturating_sub(2));
     let x = if app.sidebar_hidden { 1 } else { side.saturating_sub(width).max(1) };
@@ -454,7 +463,7 @@ pub fn useful_title(pane: &Pane) -> Option<&str> {
 pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let area = buf.area;
     let (cols, rows) = (area.width, area.height);
-    let side = sidebar_width(cols, app.sidebar_hidden);
+    let side = sidebar_width(cols, app.sidebar_hidden, app.sidebar_cols);
     let focused = app.focused();
     let current = app.current_loc();
 
@@ -552,7 +561,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     }
 
     // Header + pane body.
-    let body = pane_area(cols, rows, app.sidebar_hidden);
+    let body = pane_area(cols, rows, app.sidebar_hidden, app.sidebar_cols);
     draw_header(app, body, buf);
 
     let mut cursor = None;

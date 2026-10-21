@@ -93,7 +93,7 @@
 
 <text x="66.4" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="243.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">sync with base</text>
+<text x="91.6" y="243.5" fill="#bac2de" xml:space="preserve" textLength="159.6" lengthAdjust="spacingAndGlyphs">agent in this slot…</text>
 
 <text x="419.2" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
@@ -103,7 +103,7 @@
 <text x="58.0" y="261.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">b</text>
 <text x="66.4" y="261.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="261.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">open PR</text>
+<text x="91.6" y="261.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">sync with base</text>
 
 <text x="419.2" y="261.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="261.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">ckout/CheckoutScreen.tsx)                                              </text>
@@ -113,7 +113,7 @@
 <text x="58.0" y="279.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">f</text>
 <text x="66.4" y="279.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="279.5" fill="#bac2de" xml:space="preserve" textLength="193.2" lengthAdjust="spacingAndGlyphs">send failures to Claude</text>
+<text x="91.6" y="279.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">open PR</text>
 
 <text x="419.2" y="279.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="279.5" fill="#cdd6f4" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">h </text>
@@ -125,7 +125,7 @@
 <text x="24.4" y="297.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">─────</text>
 <text x="66.4" y="297.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="297.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">open checks</text>
+<text x="91.6" y="297.5" fill="#bac2de" xml:space="preserve" textLength="193.2" lengthAdjust="spacingAndGlyphs">send failures to Claude</text>
 
 <text x="419.2" y="297.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
@@ -133,28 +133,28 @@
 <text x="41.2" y="315.5" fill="#bac2de" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">scr</text>
 <text x="66.4" y="315.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="315.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">copy PR link</text>
+<text x="91.6" y="315.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">open checks</text>
 
 <text x="419.2" y="315.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="315.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">src/checkout)                                                          </text>
 
 <text x="66.4" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="333.5" fill="#bac2de" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">open in browser</text>
+<text x="91.6" y="333.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">copy PR link</text>
 
 <text x="419.2" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
 <text x="66.4" y="351.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="351.5" fill="#bac2de" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">shell here</text>
+<text x="91.6" y="351.5" fill="#bac2de" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">open in browser</text>
 
 <text x="419.2" y="351.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
 <text x="66.4" y="369.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="369.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">new tab</text>
+<text x="91.6" y="369.5" fill="#bac2de" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">shell here</text>
 
 <text x="419.2" y="369.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="369.5" fill="#ff875f" xml:space="preserve" textLength="302.4" lengthAdjust="spacingAndGlyphs">saved-cards list… (esc to interrupt)</text>
@@ -162,36 +162,40 @@
 
 <text x="66.4" y="387.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="387.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">open in editor</text>
+<text x="91.6" y="387.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">new tab</text>
 
 <text x="419.2" y="387.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
 <text x="66.4" y="405.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="405.5" fill="#bac2de" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">copy path</text>
+<text x="91.6" y="405.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">open in editor</text>
 
 <text x="419.2" y="405.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="405.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">──────────────────────────────────────────────────────────────╮        </text>
 
 <text x="66.4" y="423.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="423.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">rename slot</text>
+<text x="91.6" y="423.5" fill="#bac2de" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">copy path</text>
 
 <text x="419.2" y="423.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="423.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">                                                              │        </text>
 
 <text x="66.4" y="441.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="441.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">release slot</text>
+<text x="91.6" y="441.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">rename slot</text>
 
 <text x="419.2" y="441.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="441.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">──────────────────────────────────────────────────────────────╯        </text>
 
-<text x="66.4" y="459.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╰─────────────────────────────────────────╯</text>
+<text x="66.4" y="459.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+
+<text x="91.6" y="459.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">release slot</text>
+
+<text x="419.2" y="459.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="284.8" y="477.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="66.4" y="477.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╰─────────────────────────────────────────╯</text>
 
 
 <text x="284.8" y="495.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>

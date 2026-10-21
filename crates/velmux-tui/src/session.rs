@@ -21,6 +21,9 @@ pub struct Saved {
     #[serde(default)]
     pub folders: Vec<SavedFolder>,
     pub views: Vec<SavedView>,
+    /// The width you set the sidebar to.
+    #[serde(default)]
+    pub sidebar_width: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize)]
