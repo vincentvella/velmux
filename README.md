@@ -192,6 +192,7 @@ velmux init                     # create slots (idempotent, grows to config)
 cd "$(velmux claim feat/login)" # claim LRU free slot, check out branch
 velmux status [--json]
 velmux release [slot]           # stash if dirty → detach to base ref → clean, deps kept
+velmux sync [slot]              # fetch, rebase (or merge) the slot's branch onto the base ref
 velmux parked [--json]          # branches released with work on them
 velmux discard <branch>         # drop a parked branch's stash (branch kept)
 velmux open [slot]              # editor from config / $VISUAL / $EDITOR
@@ -207,6 +208,14 @@ whichever slot it lands, and brings back the Claude that was working on it: the
 conversation itself if it's still open in the base, else resumed from its
 transcript. Detached commits are kept on a `velmux/rescue/*` branch, parked
 like any other.
+
+Slot rows show their health: `↓3` the base has 3 commits the slot doesn't (repos
+are fetched in the background every `fetch_every` minutes), `!` a rebase or
+merge stopped on conflicts, `⋯` still being prepared (checkout, dependency
+install; the step shows in the status line). **Sync with base** (a slot's
+right-click menu, `<prefix> u`, or `velmux sync`) fetches and rebases the
+branch onto the base ref with uncommitted work set aside and put back; on
+conflicts it backs out and leaves the slot as it was.
 
 ## How it stays small
 
@@ -237,6 +246,8 @@ prefix = "C-b"                           # TUI prefix: C-a, ctrl+space, ^], …
 mouse = true                             # click / drag / wheel in the TUI
 auto_restart = true                      # live-restart when the velmux binary changes
 claude_history = true
+fetch_every = 15                         # minutes between background fetches (0 = off)
+sync = "rebase"                          # or "merge": how "sync with base" catches up
 ```
 
 `<repo>/.velmux.toml`:
@@ -249,6 +260,7 @@ link = [".env.local"]               # shared from base (default: gitignored .env
 post_claim = ["bun run codegen"]
 install = true
 install_cmd = "bun install"         # override detection
+sync = "merge"                      # per repo
 ```
 
 ## Layout

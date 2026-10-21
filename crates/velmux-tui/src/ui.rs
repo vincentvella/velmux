@@ -327,17 +327,32 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
     let dim = base.fg(t.dim);
 
-    // Right side first, so the label knows how much room it has.
-    let badges = rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc));
-    let badge_text: Vec<String> =
-        badges.iter().map(|(g, n, _)| if *n > 1 { format!("{g}{n}") } else { g.to_string() }).collect();
-    let badge_w = badge_text.iter().map(|b| b.chars().count() as u16).sum::<u16>() + badge_text.len().saturating_sub(1) as u16;
+    // Right side first, so the label knows how much room it has: the slot's
+    // health (still being prepared, a rebase/merge stopped on conflicts,
+    // commits behind the base), then its agents' states.
+    let mut marks: Vec<(String, Style)> = Vec::new();
+    let slot = loc.slot.as_ref().filter(|_| !project.is_unclassified()).and_then(|id| project.slots.iter().find(|s| &s.id == id));
+    if app.preparing.contains_key(loc) {
+        marks.push(("⋯".into(), Style::new().fg(t.dim)));
+    }
+    if let Some(s) = slot {
+        if s.conflict.is_some() {
+            marks.push(("!".into(), Style::new().fg(t.blocked).add_modifier(Modifier::BOLD)));
+        }
+        if s.behind > 0 {
+            marks.push((format!("↓{}", s.behind), Style::new().fg(t.alert)));
+        }
+    }
+    for (g, n, style) in rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc)) {
+        marks.push((if n > 1 { format!("{g}{n}") } else { g.to_string() }, style));
+    }
+    let badge_w = marks.iter().map(|(m, _)| m.chars().count() as u16).sum::<u16>() + marks.len().saturating_sub(1) as u16;
     let right_edge = side.saturating_sub(1);
     if badge_w > 0 && badge_w + 6 < side {
         let mut x = right_edge - badge_w;
-        for ((_, _, style), t) in badges.iter().zip(&badge_text) {
-            buf.set_string(x, y, t, style.patch(base));
-            x += t.chars().count() as u16 + 1;
+        for (m, style) in &marks {
+            buf.set_string(x, y, m, style.patch(base));
+            x += m.chars().count() as u16 + 1;
         }
     }
     let mut x = 3;
@@ -570,7 +585,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             None => (format!("{} for keys", app.prefix.label), bar.fg(t.dim)),
         },
     };
-    let jobs = (!app.jobs.is_empty()).then(|| format!(" {} ", app.jobs.join(" · ")));
+    let jobs = (!app.jobs.is_empty()).then(|| format!(" {} ", app.jobs.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join(" · ")));
     let strip = if app.sidebar_hidden {
         (!text.is_empty() || jobs.is_some()).then(|| Rect::new(0, sy, cols, 1))
     } else {

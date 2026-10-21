@@ -59,6 +59,18 @@ struct GlobalFile {
     /// UI theme name (`velmux` has the list), and per-role colour overrides.
     theme: Option<String>,
     theme_colors: Option<std::collections::BTreeMap<String, String>>,
+    sync: Option<SyncMode>,
+    /// Minutes between background `git fetch`es of each repo (0 turns it off).
+    fetch_every: Option<u64>,
+}
+
+/// How "sync with base" brings a slot's branch up to date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    #[default]
+    Rebase,
+    Merge,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -148,6 +160,7 @@ struct RepoFile {
     post_claim: Option<Vec<String>>,
     install: Option<bool>,
     install_cmd: Option<String>,
+    sync: Option<SyncMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +179,9 @@ pub struct Config {
     pub post_claim: Vec<String>,
     pub install: bool,
     pub install_cmd: Option<String>,
+    pub sync: SyncMode,
+    /// Minutes between background fetches (0 = never).
+    pub fetch_every: u64,
 }
 
 impl Config {
@@ -195,6 +211,8 @@ impl Config {
             post_claim: repo.post_claim.unwrap_or_default(),
             install: repo.install.unwrap_or(true),
             install_cmd: repo.install_cmd,
+            sync: repo.sync.or(global.sync).unwrap_or_default(),
+            fetch_every: global.fetch_every.unwrap_or(15),
         }
     }
 }

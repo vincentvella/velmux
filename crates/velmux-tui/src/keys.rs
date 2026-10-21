@@ -23,6 +23,8 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Rebase (or merge) the focused slot's branch onto the base ref.
+    SyncSlot,
     /// Resume / discard the parked branch a right-click menu was opened on.
     ResumeParked,
     DiscardParked,
@@ -140,6 +142,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("sync_slot", Action::SyncSlot),
     ("resume_parked", Action::ResumeParked),
     ("discard_parked", Action::DiscardParked),
 ];
@@ -161,6 +164,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
     vec![
         (ClaimSlot, &["prefix+n", "super+shift+n"]),
         (ReleaseSlot, &["prefix+r", "super+shift+w"]),
+        (SyncSlot, &["prefix+u"]),
         // New work starts as a conversation in the base; Claude claims a slot itself.
         (AgentBase, &["prefix+a", "super+n"]),
         (NewShell, &["prefix+c"]),
@@ -501,6 +505,7 @@ impl Keymap {
                     (one(AgentBase), "new claude"),
                     (one(ClaimSlot), "claim a slot"),
                     (one(ReleaseSlot), "release slot"),
+                    (one(SyncSlot), "sync with base"),
                     (one(Slot(0)), "slot n"),
                     (one(Base), "base"),
                     (one(LocationPicker), "go to…"),

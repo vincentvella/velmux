@@ -27,6 +27,9 @@ use crate::session::{self, Saved, SavedFolder, SavedPane, SavedTab, SavedView};
 use crate::{paths, ui};
 
 
+/// One project's slots and parked work, as a background refresh found them.
+pub type PoolHealth = (usize, Option<Vec<SlotView>>, Option<Vec<velmux_pool::ParkedView>>);
+
 pub enum Event {
     /// A new connection and its first message (`Hello` attaches).
     Client(UnixStream, ClientMsg),
@@ -39,8 +42,13 @@ pub enum Event {
     /// `for_pane`: claimed by `velmux claim` inside that pane, which moves to
     /// the slot; the stream gets the slot's path.
     /// `resume`: Claude sessions that worked on a parked branch, to bring back in the slot.
-    Claimed { project: usize, result: Result<SlotView, String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String> },
+    Claimed { project: usize, job: String, result: Result<SlotView, String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String> },
     Released { project: usize, slot: String, result: Result<String, String> },
+    /// A step of a background job (`job` key); a leading `slot-N:` names the slot.
+    Progress { project: usize, job: String, text: String },
+    /// Fresh slot health and parked work, per project, from a background refresh.
+    Pools(Vec<PoolHealth>),
+    Synced { job: String, result: Result<String, String> },
 }
 
 /// A git repo with its pool, or the "unclassified" group of plain folders.
@@ -293,7 +301,16 @@ pub struct App {
     pub sidebar_drag: Option<(Grab, u16)>,
     /// Shown once a client attaches (e.g. an invalid `prefix` in config).
     startup_warning: Option<String>,
-    pub jobs: Vec<String>,
+    /// Background work in the status line: (key, what it's doing now).
+    pub jobs: Vec<(String, String)>,
+    /// Slots being claimed: (job key, current step: checking out, installing…).
+    pub preparing: HashMap<Loc, (String, String)>,
+    /// A background slot/parked refresh is running.
+    refreshing: bool,
+    /// When each repo was last fetched in the background.
+    fetched: HashMap<usize, Instant>,
+    /// For unique job keys.
+    job_seq: u64,
     status: Option<(String, Instant)>,
     size: (u16, u16),
     events: Sender<Event>,
@@ -430,7 +447,7 @@ pub fn serve() -> Result<()> {
             last_detect = Instant::now();
         }
         if last_slots.elapsed() >= Duration::from_secs(2) {
-            app.refresh_slots();
+            app.refresh_slots_bg();
             app.check_binary();
             last_slots = Instant::now();
         }
@@ -471,6 +488,10 @@ impl App {
             sidebar_drag: None,
             startup_warning,
             jobs: Vec::new(),
+            preparing: HashMap::new(),
+            refreshing: false,
+            fetched: HashMap::new(),
+            job_seq: 0,
             status: None,
             size: (80, 24),
             events,
@@ -665,8 +686,9 @@ impl App {
                     self.reload_config();
                 }
             }
-            Event::Claimed { project, result, for_pane, resume } => {
-                self.jobs.retain(|j| j != "claiming");
+            Event::Claimed { project, job, result, for_pane, resume } => {
+                self.jobs.retain(|(k, _)| k != &job);
+                self.preparing.retain(|_, (k, _)| k != &job);
                 self.refresh_slots();
                 match (result, for_pane) {
                     (Ok(slot), None) if !resume.is_empty() => {
@@ -693,8 +715,44 @@ impl App {
                     }
                 }
             }
+            Event::Progress { project, job, text } => {
+                // `slot-2: installing: bun install` → that slot is busy with that step.
+                let (slot, step) = match text.split_once(": ") {
+                    Some((s, rest)) if s.starts_with("slot-") => (Some(s.to_string()), rest.to_string()),
+                    _ => (None, text.clone()),
+                };
+                if let Some(slot) = slot {
+                    self.preparing.insert(Loc { project, slot: Some(slot) }, (job.clone(), step.clone()));
+                }
+                let name = self.projects.get(project).map(|p| p.name().to_string()).unwrap_or_default();
+                if let Some(entry) = self.jobs.iter_mut().find(|(k, _)| k == &job) {
+                    entry.1 = format!("{name}: {step}");
+                }
+                self.dirty = true;
+            }
+            Event::Pools(fresh) => {
+                self.refreshing = false;
+                for (p, slots, parked) in fresh {
+                    let Some(project) = self.projects.get_mut(p) else { continue };
+                    if let Some(slots) = slots {
+                        project.slots = slots;
+                    }
+                    if let Some(parked) = parked {
+                        project.parked = parked;
+                    }
+                }
+                self.dirty = true;
+            }
+            Event::Synced { job, result } => {
+                self.jobs.retain(|(k, _)| k != &job);
+                match result {
+                    Ok(msg) => self.toast(&msg),
+                    Err(e) => self.say(format!("sync: {e}")),
+                }
+                self.refresh_slots();
+            }
             Event::Released { project, slot, result } => {
-                self.jobs.retain(|j| j != &format!("releasing {slot}"));
+                self.jobs.retain(|(k, _)| k != &format!("release {slot}"));
                 self.refresh_slots();
                 match result {
                     Ok(msg) => self.say(msg),
@@ -1100,6 +1158,57 @@ impl App {
         }
         self.current = Some(loc);
         self.save();
+    }
+
+    /// [`refresh_slots`](Self::refresh_slots) off the main thread (git status
+    /// and friends can be slow in big repos), fetching repos that are due.
+    pub fn refresh_slots_bg(&mut self) {
+        if self.refreshing {
+            return;
+        }
+        self.refreshing = true;
+        let mut work = Vec::new();
+        for (i, project) in self.projects.iter().enumerate() {
+            let Some(pool) = project.pool.clone() else { continue };
+            if project.removed {
+                continue;
+            }
+            let every = project.cfg.fetch_every;
+            let due = every > 0 && self.fetched.get(&i).is_none_or(|t| t.elapsed() >= Duration::from_secs(every * 60));
+            if due {
+                self.fetched.insert(i, Instant::now());
+            }
+            work.push((i, pool, due));
+        }
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let fresh = work
+                .into_iter()
+                .map(|(i, pool, fetch)| {
+                    if fetch {
+                        let _ = pool.fetch();
+                    }
+                    (i, pool.status().ok(), pool.parked().ok())
+                })
+                .collect();
+            let _ = tx.send(Event::Pools(fresh));
+        });
+    }
+
+    /// Rebase (or merge) a slot's branch onto the base ref, in the background.
+    fn sync_slot(&mut self) {
+        let Some(loc) = self.current_loc() else { return };
+        let (Some(slot), Some(pool)) = (loc.slot.clone(), self.projects[loc.project].pool.clone()) else {
+            return self.say("focus a slot to sync it with the base");
+        };
+        self.job_seq += 1;
+        let job = format!("sync {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("syncing {slot}")));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let result = pool.sync(&slot, &|_| {}).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::Synced { job, result });
+        });
     }
 
     pub fn refresh_slots(&mut self) {
@@ -1629,6 +1738,7 @@ impl App {
             // A slot: work on what's already there, then hand it back.
             (false, true) => vec![
                 ("claude in this slot", Action::AgentHere),
+                ("sync with base", Action::SyncSlot),
                 ("shell here", Action::NewShell),
                 ("new tab", Action::NewTab),
                 ("open in editor", Action::NewEditor),
@@ -2021,6 +2131,7 @@ impl App {
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
+            Action::SyncSlot => self.sync_slot(),
             Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
             Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
                 Some(path) => {
@@ -2501,7 +2612,7 @@ impl App {
         }
         let tx = self.events.clone();
         let project = loc.project;
-        self.jobs.push(format!("releasing {slot}"));
+        self.jobs.push((format!("release {slot}"), format!("releasing {slot}")));
         std::thread::spawn(move || {
             // Give killed processes a moment to exit before git touches the tree.
             std::thread::sleep(Duration::from_millis(300));
@@ -2543,18 +2654,25 @@ impl App {
             _ => Vec::new(),
         };
         let tx = self.events.clone();
-        self.jobs.push("claiming".into());
+        self.job_seq += 1;
+        let job = format!("claim {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("claiming {}", branch.as_deref().unwrap_or("a slot"))));
         std::thread::spawn(move || {
-            let quiet = |_: &str| {};
+            let progress = {
+                let (tx, job) = (tx.clone(), job.clone());
+                move |text: &str| {
+                    let _ = tx.send(Event::Progress { project, job: job.clone(), text: text.to_string() });
+                }
+            };
             let result = (|| {
                 if pool.status()?.is_empty() {
-                    pool.init(&quiet)?;
+                    pool.init(&|_| {})?;
                 }
                 let opts = ClaimOpts { branch, by: Some("velmux".into()), fetch: true, install: true };
-                pool.claim(&opts, &quiet)
+                pool.claim(&opts, &progress)
             })()
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Claimed { project, result, for_pane, resume });
+            let _ = tx.send(Event::Claimed { project, job, result, for_pane, resume });
         });
     }
 

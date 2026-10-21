@@ -8,6 +8,6 @@ pub mod git;
 mod pool;
 pub mod state;
 
-pub use config::{tui_settings, Config, Env, NotifySettings, TuiSettings};
+pub use config::{tui_settings, Config, Env, NotifySettings, SyncMode, TuiSettings};
 pub use pool::{ClaimOpts, ParkedView, Pool, Released, SlotView};
 pub use state::Status;

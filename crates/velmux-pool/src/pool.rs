@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
-use crate::config::{Config, Env};
+use crate::config::{Config, Env, SyncMode};
 use crate::deps::{self, Outcome};
 use crate::git::{self, git};
 use crate::state::{now, Parked, Slot, Status, Store};
@@ -37,6 +37,11 @@ pub struct SlotView {
     pub claimed_by: Option<String>,
     pub claimed_at: Option<u64>,
     pub dirty: bool,
+    /// Commits on the base ref the slot doesn't have yet, and the reverse.
+    pub behind: usize,
+    pub ahead: usize,
+    /// `rebase` / `merge` stopped part-way (conflicts to resolve).
+    pub conflict: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,8 +215,10 @@ impl Pool {
 
     fn prepare(&self, slot: &Slot, opts: &ClaimOpts, report: &dyn Fn(&str)) -> Result<()> {
         let dir = &slot.path;
+        // Progress lines start with the slot id, so callers know which slot is busy.
+        report(&format!("{}: checking out {}", slot.id, opts.branch.as_deref().unwrap_or(&self.base_ref)));
         if opts.fetch && git::has_remote(dir) {
-            report("fetching origin");
+            report(&format!("{}: fetching origin", slot.id));
             git(dir, &["fetch", "--quiet", "origin"])?;
         }
         match &opts.branch {
@@ -302,6 +309,51 @@ impl Pool {
             Ok(())
         })?;
         Ok(Released { id: id.to_string(), branch, stashed, rescued })
+    }
+
+    /// Bring a slot's branch up to date with the base ref (fetching first):
+    /// rebase (or merge, per `sync`) with uncommitted work set aside and put
+    /// back. On conflicts it backs out, leaving the slot as it was.
+    pub fn sync(&self, id: &str, report: &dyn Fn(&str)) -> Result<String> {
+        let slot = self.view(id)?;
+        if slot.status != Status::InUse {
+            bail!("{id} is free; nothing to sync");
+        }
+        let dir = &slot.path;
+        if let Some(op) = git::conflict(dir) {
+            bail!("{id} has a {op} in progress; finish or abort it first");
+        }
+        if git::has_remote(dir) {
+            report(&format!("{id}: fetching origin"));
+            git(dir, &["fetch", "--quiet", "origin"])?;
+        }
+        let (behind, _) = git::behind_ahead(dir, &self.base_ref);
+        if behind == 0 {
+            return Ok(format!("{id} is up to date with {}", self.base_ref));
+        }
+        let (verb, args, abort): (&str, Vec<&str>, &[&str]) = match self.cfg.sync {
+            SyncMode::Rebase => ("rebased onto", vec!["rebase", "--autostash", "--quiet", &self.base_ref], &["rebase", "--abort"]),
+            SyncMode::Merge => ("merged", vec!["merge", "--autostash", "--no-edit", "--quiet", &self.base_ref], &["merge", "--abort"]),
+        };
+        report(&format!("{id}: {} {behind} commit(s) from {}", if self.cfg.sync == SyncMode::Rebase { "rebasing onto" } else { "merging" }, self.base_ref));
+        if let Err(e) = git(dir, &args) {
+            let files = git(dir, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+            let n = files.lines().count();
+            let _ = git(dir, abort);
+            if n > 0 {
+                bail!("conflicts in {n} file(s) ({}); backed out, {id} is unchanged", files.lines().take(3).collect::<Vec<_>>().join(", "));
+            }
+            return Err(e.context(format!("syncing {id}; backed out")));
+        }
+        Ok(format!("{id} {verb} {} (+{behind})", self.base_ref))
+    }
+
+    /// Fetch the repo's remote (no-op without one); slots see the new base ref.
+    pub fn fetch(&self) -> Result<()> {
+        if git::has_remote(&self.base) {
+            git(&self.base, &["fetch", "--quiet", "origin"])?;
+        }
+        Ok(())
     }
 
     /// Branches with work waiting to be resumed, newest first. Ones with nothing
@@ -398,7 +450,11 @@ impl Pool {
 
     fn describe(&self, s: &Slot) -> SlotView {
         let live = s.status == Status::InUse && s.path.exists();
+        let (behind, ahead) = if live { git::behind_ahead(&s.path, &self.base_ref) } else { (0, 0) };
         SlotView {
+            behind,
+            ahead,
+            conflict: if live { git::conflict(&s.path).map(String::from) } else { None },
             id: s.id.clone(),
             path: s.path.clone(),
             status: s.status,

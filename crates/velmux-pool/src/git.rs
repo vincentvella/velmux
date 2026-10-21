@@ -95,6 +95,25 @@ pub fn stash_files(dir: &Path, stash: &str) -> usize {
     tracked.lines().chain(untracked.lines()).filter(|l| !l.is_empty()).count()
 }
 
+/// (behind, ahead): commits on `base` that `HEAD` lacks, and the reverse.
+pub fn behind_ahead(dir: &Path, base: &str) -> (usize, usize) {
+    let Ok(out) = git(dir, &["rev-list", "--left-right", "--count", &format!("{base}...HEAD")]) else { return (0, 0) };
+    let mut n = out.split_whitespace().map(|x| x.parse().unwrap_or(0));
+    (n.next().unwrap_or(0), n.next().unwrap_or(0))
+}
+
+/// A rebase or merge stopped part-way in this worktree, if any.
+pub fn conflict(dir: &Path) -> Option<&'static str> {
+    let exists = |p: &str| git(dir, &["rev-parse", "--git-path", p]).ok().is_some_and(|path| dir.join(path).exists());
+    if exists("rebase-merge") || exists("rebase-apply") {
+        Some("rebase")
+    } else if exists("MERGE_HEAD") {
+        Some("merge")
+    } else {
+        None
+    }
+}
+
 /// Commits on `branch` that aren't on `base`.
 pub fn ahead(dir: &Path, base: &str, branch: &str) -> usize {
     git(dir, &["rev-list", "--count", &format!("{base}..{branch}")]).ok().and_then(|n| n.parse().ok()).unwrap_or(0)

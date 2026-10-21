@@ -43,6 +43,11 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Rebase (or merge, per `sync` in config) a slot's branch onto the base ref.
+    Sync {
+        /// Slot id; defaults to the slot containing the current directory.
+        slot: Option<String>,
+    },
     /// Show every slot.
     Status {
         #[arg(long)]
@@ -170,6 +175,10 @@ fn run() -> Result<()> {
                 print_parked(&pool.parked()?);
             }
         }
+        Cmd::Sync { slot } => {
+            let id = resolve_slot(&pool, slot, &cwd)?;
+            println!("{}", pool.sync(&id, &|m| eprintln!("{m}"))?);
+        }
         Cmd::Parked { json } => {
             let parked = pool.parked()?;
             if json {
@@ -250,7 +259,16 @@ fn print_table(pool: &Pool, slots: &[SlotView]) {
             Status::InUse => "in-use",
         };
         let branch = s.branch.as_deref().unwrap_or("-");
-        let dirty = if s.dirty { " *" } else { "" };
+        let mut dirty = if s.dirty { " *".to_string() } else { String::new() };
+        if s.behind > 0 {
+            dirty.push_str(&format!(" ↓{}", s.behind));
+        }
+        if s.ahead > 0 {
+            dirty.push_str(&format!(" ↑{}", s.ahead));
+        }
+        if let Some(op) = &s.conflict {
+            dirty.push_str(&format!(" !{op} in progress"));
+        }
         let by = s.claimed_by.as_deref().map(|b| format!("  [{b}]")).unwrap_or_default();
         println!("  {:<8} {state}  {branch}{dirty}{by}", s.id);
     }

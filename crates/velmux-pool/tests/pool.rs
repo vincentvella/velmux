@@ -138,6 +138,41 @@ fn released_work_is_listed_as_parked_until_resumed_or_discarded() {
 }
 
 #[test]
+fn slots_report_how_far_behind_and_sync_brings_them_up_to_date() {
+    let f = fixture("slots = 1\nbase_ref = \"main\"\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    let s = pool.claim(&opts(Some("feat/s")), &quiet).unwrap();
+    sh(&s.path, "echo mine > mine.txt && git add mine.txt && git commit -qm mine");
+    sh(&f.base, "echo base > base.txt && git add base.txt && git commit -qm base1 && echo 2 >> base.txt && git commit -qam base2");
+    std::fs::write(s.path.join("wip.txt"), "uncommitted\n").unwrap();
+    let v = pool.view(&s.id).unwrap();
+    assert_eq!((v.behind, v.ahead, v.conflict.clone()), (2, 1, None));
+
+    let msg = pool.sync(&s.id, &quiet).unwrap();
+    assert!(msg.contains("rebased"), "{msg}");
+    let v = pool.view(&s.id).unwrap();
+    assert_eq!((v.behind, v.ahead), (0, 1));
+    assert!(s.path.join("base.txt").exists() && s.path.join("wip.txt").exists(), "rebased, wip kept");
+    assert!(pool.sync(&s.id, &quiet).unwrap().contains("up to date"));
+}
+
+#[test]
+fn sync_backs_out_of_conflicts() {
+    let f = fixture("slots = 1\nbase_ref = \"main\"\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    let s = pool.claim(&opts(Some("feat/c")), &quiet).unwrap();
+    sh(&s.path, "echo slot > README.md && git commit -qam slot");
+    sh(&f.base, "echo base > README.md && git commit -qam base");
+    let head = sh(&s.path, "git rev-parse HEAD");
+    let err = pool.sync(&s.id, &quiet).unwrap_err().to_string();
+    assert!(err.contains("conflicts in 1 file") && err.contains("README.md"), "{err}");
+    assert_eq!(sh(&s.path, "git rev-parse HEAD"), head, "left as it was");
+    assert_eq!(pool.view(&s.id).unwrap().conflict, None);
+}
+
+#[test]
 fn detached_commits_are_rescued_on_release() {
     let f = fixture("slots = 1\n");
     let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
