@@ -76,6 +76,16 @@ The [Homebrew tap](https://github.com/vincentvella/homebrew-tap) notices the
 new release within the hour and regenerates its formula (run its "Update
 formulas" workflow to do it now).
 
+## The site
+
+velmux.com is `site/` (Astro + Starlight), built from `docs/` by
+`site/scripts/sync-docs.mjs`. It deploys by hand, not on push:
+
+```sh
+cd site && bun install && bun run dev   # preview at localhost:4321
+cd .. && vercel deploy --prod           # from the repo root (.vercelignore keeps the upload to site/ + docs/)
+```
+
 ## Notes
 
 - Agent-state detection rules are adapted from
