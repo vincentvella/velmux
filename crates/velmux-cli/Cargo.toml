@@ -17,3 +17,8 @@ clap.workspace = true
 serde_json.workspace = true
 velmux-pool = { path = "../velmux-pool" }
 velmux-tui = { path = "../velmux-tui" }
+
+[dev-dependencies]
+portable-pty = "0.9"
+vt100 = "0.18"
+tempfile.workspace = true

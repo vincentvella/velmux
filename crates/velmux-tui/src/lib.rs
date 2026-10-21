@@ -59,6 +59,16 @@ pub fn restart_server() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `velmux stop`: save and stop the server.
+pub fn stop_server() -> anyhow::Result<()> {
+    if std::os::unix::net::UnixStream::connect(paths::socket()?).is_err() {
+        println!("no velmux server running");
+        return Ok(());
+    }
+    println!("{}", client::request(proto::ClientMsg::Stop)?);
+    Ok(())
+}
+
 /// `velmux keys --test`: show the bytes each key press sends and what velmux
 /// would do with them. Run it in a plain terminal tab (not inside velmux, which
 /// would act on the keys first). ctrl+c exits.

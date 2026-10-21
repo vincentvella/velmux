@@ -219,6 +219,7 @@ velmux discard <branch>         # drop a parked branch's stash (branch kept)
 velmux open [slot]              # editor from config / $VISUAL / $EDITOR
 velmux gc                       # prune dead worktrees, recreate missing slots
 velmux restart                  # live-restart the TUI server (panes keep running)
+velmux stop                     # stop it (everything's restored next time)
 ```
 
 Releasing a branch with work on it (uncommitted changes, or commits past the
@@ -319,6 +320,17 @@ direnv) sets the same variables.
 - `crates/velmux-pool` — library: state (`pool.json` under `flock`), git ops, deps, Claude linking
 - `crates/velmux-cli` — the `velmux` binary
 - `crates/velmux-tui` — server (ptys, vt100, ratatui render) + thin client over a Unix socket
+
+## Testing
+
+`cargo test` runs unit tests, the pool's integration tests (temporary git repos),
+and end-to-end tests (`crates/velmux-cli/tests/e2e.rs`): the real binary in a
+pseudo-terminal, driven with keys and mouse clicks, against a fake Claude
+(`examples/fake_claude.rs`, installed so velmux detects it as Claude) and a fake
+`gh`, each on its own socket, state, config, Claude dir and `HOME`. They cover
+claiming from the base and releasing back, parked work resuming with its
+Claude (live or from its transcript), restore after a stop (Claude and
+scrollback), live restart, finding a conversation, and merged PRs.
 
 ## License
 

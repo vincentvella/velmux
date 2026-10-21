@@ -386,6 +386,7 @@ pub fn serve() -> Result<()> {
                 let ev = match first {
                     ClientMsg::ImportHerdr { .. }
                     | ClientMsg::Restart
+                    | ClientMsg::Stop
                     | ClientMsg::ClaimFor { .. }
                     | ClientMsg::ReleaseFor { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
@@ -679,6 +680,10 @@ impl App {
                         return;
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
+                    ClientMsg::Stop => {
+                        self.quit = true;
+                        "stopping — panes and Claude sessions are restored next time you run velmux".into()
+                    }
                     ClientMsg::Restart => {
                         let _ = ServerMsg::Reply("restarting — panes keep running".into()).write(&mut stream);
                         drop(stream);
@@ -864,7 +869,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } => {}
         }
     }
 
@@ -1305,7 +1310,7 @@ impl App {
     /// ran (its slot, if still on that branch), by resuming the branch if it's
     /// parked, or in the repo's base.
     fn open_session(&mut self, doc: &crate::search::Doc) {
-        if let Some(pane) = self.panes.iter().find(|p| p.session.as_deref() == Some(doc.id.as_str())).map(|p| p.id) {
+        if let Some(pane) = self.live_session_pane(&doc.id, None) {
             if self.copy.is_some() {
                 self.exit_copy();
             }
@@ -3149,12 +3154,21 @@ impl App {
         });
     }
 
+    /// The pane where conversation `id` is running right now (Claude in the
+    /// foreground: a pane whose Claude exited keeps the id, but is a shell).
+    pub fn live_session_pane(&self, id: &str, project: Option<usize>) -> Option<u64> {
+        self.panes
+            .iter()
+            .find(|p| p.session.as_deref() == Some(id) && p.agent == Some("claude") && project.is_none_or(|i| p.loc.project == i))
+            .map(|p| p.id)
+    }
+
     /// A resumed branch's Claude, in its new slot: the conversation itself if
     /// it's still open (back in the base after `velmux release`), moved over;
     /// else the session resumed from its transcript; else a fresh Claude.
     fn resume_sessions(&mut self, loc: Loc, sessions: &[String]) {
         for id in sessions {
-            if let Some(pane) = self.panes.iter().find(|p| p.session.as_ref() == Some(id) && p.loc.project == loc.project).map(|p| p.id) {
+            if let Some(pane) = self.live_session_pane(id, Some(loc.project)) {
                 self.move_pane(pane, loc.clone());
                 self.focus = Some(pane);
                 self.current = Some(loc);

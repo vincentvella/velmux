@@ -1051,7 +1051,7 @@ fn draw_sessions(app: &App, query: &str, selected: usize, body: Rect, buf: &mut 
             buf.set_string(inner.x.saturating_sub(1), y + 1, "▌", base.fg(t.accent));
         }
         // Right: open in a pane, where it ran, and its age.
-        let live = app.panes.iter().any(|p| p.session.as_deref() == Some(hit.doc.id.as_str()));
+        let live = app.live_session_pane(&hit.doc.id, None).is_some();
         let place = app.session_loc(hit.doc).map(|(l, _)| app.loc_name(&l)).unwrap_or_default();
         let branch = hit.doc.branch.as_deref().map(|b| format!(" · {b}")).unwrap_or_default();
         let age = ago(now.duration_since(hit.doc.mtime).unwrap_or_default().as_secs());

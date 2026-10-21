@@ -1804,9 +1804,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "portable-pty",
  "serde_json",
+ "tempfile",
  "velmux-pool",
  "velmux-tui",
+ "vt100",
 ]
 
 [[package]]

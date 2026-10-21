@@ -14,6 +14,8 @@ pub enum ClientMsg {
     ImportHerdr { path: PathBuf, with_latest_claude: bool },
     /// One-shot control request: live-restart the server.
     Restart,
+    /// One-shot: save everything and stop the server (panes close; restored next time).
+    Stop,
     /// One-shot: claim a slot for the pane `velmux claim` runs in, moving it there.
     ClaimFor { pane: u64, branch: Option<String> },
     /// One-shot: release the slot that pane is in, moving it back to the base.
@@ -71,6 +73,7 @@ impl ClientMsg {
             ClientMsg::Input(bytes) => write_frame(w, 2, bytes),
             ClientMsg::Resize { cols, rows } => write_frame(w, 3, &size_bytes(*cols, *rows)),
             ClientMsg::Restart => write_frame(w, 5, &[]),
+            ClientMsg::Stop => write_frame(w, 8, &[]),
             ClientMsg::ClaimFor { pane, branch } => {
                 let mut p = pane.to_be_bytes().to_vec();
                 p.extend_from_slice(branch.as_deref().unwrap_or("").as_bytes());
@@ -99,6 +102,7 @@ impl ClientMsg {
                 Ok(ClientMsg::Resize { cols, rows })
             }
             5 => Ok(ClientMsg::Restart),
+            8 => Ok(ClientMsg::Stop),
             6 if p.len() >= 8 => {
                 let branch = String::from_utf8_lossy(&p[8..]).into_owned();
                 Ok(ClientMsg::ClaimFor {
