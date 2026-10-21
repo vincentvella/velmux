@@ -105,6 +105,16 @@ pub fn request(msg: ClientMsg) -> Result<String> {
     }
 }
 
+/// `argv[0]` as an absolute path, symlinks kept: as typed if it has a `/`,
+/// else the first match on `PATH`.
+fn launched_as() -> Option<std::path::PathBuf> {
+    let arg0 = std::path::PathBuf::from(std::env::args_os().next()?);
+    if arg0.components().count() > 1 {
+        return Some(if arg0.is_absolute() { arg0 } else { std::env::current_dir().ok()?.join(arg0) });
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(&arg0)).find(|p| p.is_file())
+}
+
 fn connect_or_spawn() -> Result<UnixStream> {
     let sock = paths::socket()?;
     if let Ok(s) = UnixStream::connect(&sock) {
@@ -116,8 +126,14 @@ fn connect_or_spawn() -> Result<UnixStream> {
         .open(paths::log()?)?;
     let exe = std::env::current_exe()?;
     use std::os::unix::process::CommandExt;
-    Command::new(exe)
-        .arg("__server")
+    let mut cmd = Command::new(exe);
+    // The path you ran (e.g. Homebrew's `bin/velmux` link), not the versioned
+    // file behind it: an upgrade replaces what it points at, and the server
+    // watches it to restart into the new version.
+    if let Some(launched) = launched_as() {
+        cmd.env("VELMUX_EXE", launched);
+    }
+    cmd.arg("__server")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)

@@ -44,7 +44,7 @@ caches and all kept warm. Claiming one takes about a second.
 ## Quickstart
 
 ```sh
-cargo install --git https://github.com/vincentvella/velmux velmux-cli
+brew install vincentvella/tap/velmux
 velmux skill install      # teach Claude to work in velmux
 cd ~/Workspace/your-repo
 velmux                    # open it

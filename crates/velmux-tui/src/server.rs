@@ -564,7 +564,13 @@ impl App {
             notified: HashMap::new(),
             toast: None,
             last_click: None,
-            exe: std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).map(|p| {
+            // How it was launched (kept across restarts: exec keeps the env),
+            // else the binary itself.
+            exe: std::env::var_os("VELMUX_EXE")
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .or_else(|| std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()))
+                .map(|p| {
                 let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
                 (p, mtime)
             }),

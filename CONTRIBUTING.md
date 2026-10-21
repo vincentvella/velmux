@@ -64,6 +64,18 @@ builds a demo scene with the end-to-end harness (fake Claudes drawing mock
 screens, a fake `gh` for PR status) and writes each view as SVG to
 `docs/screenshots/`. Rerun it after UI changes.
 
+## Releasing
+
+1. Bump `version` in the workspace `Cargo.toml` (and `cargo build` to update
+   `Cargo.lock`), commit, push.
+2. Tag it: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release workflow builds macOS (arm64, x86_64) and static Linux (x86_64,
+arm64) binaries and publishes them with their checksums as a GitHub release.
+The [Homebrew tap](https://github.com/vincentvella/homebrew-tap) notices the
+new release within the hour and regenerates its formula (run its "Update
+formulas" workflow to do it now).
+
 ## Notes
 
 - Agent-state detection rules are adapted from

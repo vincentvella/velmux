@@ -2,14 +2,19 @@
 
 ## Install
 
-velmux is a single binary. You need git, and Rust to build it.
+velmux is a single binary for macOS and Linux. You need git.
 
 ```sh
-cargo install --git https://github.com/vincentvella/velmux velmux-cli
+brew install vincentvella/tap/velmux
 ```
 
-From a clone, `cargo install --path crates/velmux-cli` does the same (or symlink
-`target/release/velmux` onto your `PATH` while developing).
+Or download it for your platform from the
+[releases](https://github.com/vincentvella/velmux/releases) (Apple Silicon and
+Intel Macs; static x86_64 and arm64 Linux builds) and put `velmux` on your
+`PATH`. Or build it with Rust:
+`cargo install --git https://github.com/vincentvella/velmux velmux-cli`.
+
+A running velmux restarts into a new version by itself when you upgrade.
 
 Optional, but worth it:
 
