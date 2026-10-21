@@ -100,6 +100,81 @@ pub struct Pane {
     pub command_override: Option<String>,
     /// Output held back while copy mode reads the history (`None` = live).
     frozen: Option<Vec<u8>>,
+    /// Name of this pane's saved history file (see [`history_formatted`](Pane::history_formatted)).
+    pub history_key: String,
+    /// Bumped on output; the history is rewritten when it moved past `dumped`.
+    pub output_seq: u64,
+    pub dumped_seq: u64,
+}
+
+/// Every scrollback row (and, `with_screen` and not on the alternate screen,
+/// the visible rows), formatted, one per line, oldest first.
+pub fn history_formatted<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, with_screen: bool) -> String {
+    let mut out = String::new();
+    for text in history_rows(p, with_screen, true) {
+        out.push_str(text.trim_end_matches(' '));
+        out.push_str("\x1b[m\r\n");
+    }
+    out
+}
+
+/// The same rows as plain text, for reading in an editor.
+pub fn history_text<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>) -> String {
+    let mut out = String::new();
+    for text in history_rows(p, true, false) {
+        out.push_str(text.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+fn history_rows<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, with_screen: bool, formatted: bool) -> Vec<String> {
+    let saved = p.screen().scrollback();
+    let total = p.screen().scrollback_len();
+    let (rows, cols) = p.screen().size();
+    let (rows, cols) = (rows.get() as usize, cols.get());
+    let visible = |p: &vt100::Parser<CB>| -> Vec<String> {
+        if formatted { p.screen().rows_formatted(0, cols).collect() } else { p.screen().rows(0, cols).collect() }
+    };
+    let mut out = Vec::new();
+    // At offset `o` the top visible row is history line `total - o`.
+    let mut offset = total;
+    while offset > 0 {
+        p.screen_mut().set_scrollback(offset);
+        let take = rows.min(offset);
+        out.extend(visible(p).into_iter().take(take));
+        offset -= take;
+    }
+    p.screen_mut().set_scrollback(0);
+    if with_screen && !p.screen().alternate_screen() {
+        let rows = visible(p);
+        // Blank rows at the bottom of the screen aren't history.
+        let plain: Vec<String> = p.screen().rows(0, cols).collect();
+        let used = plain.iter().rposition(|r| !r.trim().is_empty()).map_or(0, |i| i + 1);
+        out.extend(rows.into_iter().take(used));
+    }
+    p.screen_mut().set_scrollback(saved);
+    out
+}
+
+/// Feed `history` (from [`history_formatted`]) into a fresh parser so it all
+/// lands in the scrollback, leaving the screen empty with the cursor home.
+pub fn replay_history<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, history: &str, note: Option<&str>) {
+    if history.is_empty() {
+        return;
+    }
+    let rows = p.screen().size().0.get();
+    p.process(b"\x1b[H\x1b[2J");
+    p.process(history.as_bytes());
+    if let Some(note) = note {
+        p.process(format!("\x1b[2m── {note} ──\x1b[m\r\n").as_bytes());
+    }
+    // Push what's still on screen up into the scrollback: from the bottom row,
+    // each newline scrolls the top row off.
+    let on_screen = p.screen().cursor_position().0;
+    p.process(format!("\x1b[{rows};1H").as_bytes());
+    p.process("\n".repeat(on_screen as usize).as_bytes());
+    p.process(b"\x1b[H\x1b[2J");
 }
 
 /// Past this much held output, copy mode stops freezing the pane.
@@ -147,7 +222,9 @@ impl Pane {
         let master: Box<dyn MasterPty + Send> = Box::new(crate::pty_raw::RawMaster::new(live.fd));
         let child: Box<dyn Child + Send + Sync> = Box::new(crate::pty_raw::RawChild::new(live.pid));
         let mut pane = Pane::assemble(id, loc, kind, master, child, (live.cols, live.rows), events)?;
+        replay_history(&mut pane.parser, &live.history, None);
         pane.parser.process(live.screen.as_bytes());
+        pane.output_seq = 1; // its history isn't saved under this pane's key yet
         pane.parser.callbacks_mut().title = live.title.clone();
         Ok(pane)
     }
@@ -168,6 +245,7 @@ impl Pane {
             rows: rows.get(),
             cols: cols.get(),
             screen: self.parser.screen().state_formatted(),
+            history: history_formatted(&mut self.parser, false),
             title: self.title().to_string(),
         })
     }
@@ -217,11 +295,27 @@ impl Pane {
             cwd_override: None,
             command_override: None,
             frozen: None,
+            history_key: format!("{}-{id}", SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis())),
+            output_seq: 0,
+            dumped_seq: 0,
         })
+    }
+
+    /// The pane's history as replayable terminal text, oldest first: the
+    /// scrollback, then (`with_screen`, main screen only) the visible rows.
+    pub fn history_formatted(&mut self, with_screen: bool) -> String {
+        history_formatted(&mut self.parser, with_screen)
+    }
+
+    /// Put saved history back into the scrollback (above an empty screen),
+    /// with `note` as a dim last line when given.
+    pub fn restore_history(&mut self, history: &str, note: Option<&str>) {
+        replay_history(&mut self.parser, history, note);
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
         self.last_output = Instant::now();
+        self.output_seq += 1;
         if let Some(held) = &mut self.frozen {
             if held.len() + bytes.len() <= FREEZE_CAP {
                 held.extend_from_slice(bytes);
@@ -417,6 +511,32 @@ mod tests {
         let mut p = vt100::Parser::new_with_callbacks(nz(10), nz(40), 0, Term::default());
         p.process(input);
         std::mem::take(&mut p.callbacks_mut().replies)
+    }
+
+    #[test]
+    fn history_survives_a_dump_and_replay() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(5), nz(20), 100, Term::default());
+        for i in 0..30 {
+            p.process(format!("\x1b[31mline {i}\x1b[m\r\n").as_bytes());
+        }
+        p.process(b"prompt$ ");
+        let text = history_text(&mut p);
+        let dump = history_formatted(&mut p, true);
+
+        let mut q = vt100::Parser::new_with_callbacks(nz(5), nz(20), 100, Term::default());
+        replay_history(&mut q, &dump, None);
+        assert_eq!(history_text(&mut q), text, "same lines, all in the scrollback");
+        assert_eq!(q.screen().contents().trim(), "", "screen left empty");
+        let back = q.screen().scrollback_len();
+        q.screen_mut().set_scrollback(back);
+        assert_eq!(q.screen().cell(0, 0).unwrap().fgcolor(), vt100::Color::Idx(1), "colours kept");
+
+        // A note goes last, and history from the alternate screen isn't taken.
+        let mut r = vt100::Parser::new_with_callbacks(nz(5), nz(20), 100, Term::default());
+        replay_history(&mut r, &dump, Some("restored"));
+        assert!(history_text(&mut r).trim_end().ends_with("── restored ──"));
+        p.process(b"\x1b[?1049hfullscreen app");
+        assert!(!history_text(&mut p).contains("fullscreen app"));
     }
 
     #[test]

@@ -83,6 +83,9 @@ pub struct SavedPane {
     /// Exact command, when the pane runs something other than the configured agent.
     #[serde(default)]
     pub command: Option<String>,
+    /// Its saved scrollback: `scrollback/<key>.ansi` in the state dir.
+    #[serde(default)]
+    pub history: Option<String>,
 }
 
 /// State passed to the next server across a live restart.
@@ -103,7 +106,17 @@ pub struct LivePane {
     pub cols: u16,
     /// The screen and terminal modes, replayed into the new parser.
     pub screen: String,
+    /// The scrollback above it, replayed first.
+    #[serde(default)]
+    pub history: String,
     pub title: String,
+}
+
+/// Where pane histories are saved between runs.
+pub fn history_dir() -> Result<PathBuf> {
+    let dir = paths::state_dir()?.join("scrollback");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 pub fn handoff_file() -> Result<PathBuf> {

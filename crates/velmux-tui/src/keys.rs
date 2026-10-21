@@ -23,6 +23,8 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Open the focused pane's history in $EDITOR.
+    EditScrollback,
     /// Rebase (or merge) the focused slot's branch onto the base ref.
     SyncSlot,
     /// Resume / discard the parked branch a right-click menu was opened on.
@@ -142,6 +144,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("edit_scrollback", Action::EditScrollback),
     ("sync_slot", Action::SyncSlot),
     ("resume_parked", Action::ResumeParked),
     ("discard_parked", Action::DiscardParked),
@@ -182,6 +185,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (ResizeUp, &["prefix+K"]),
         (ResizeDown, &["prefix+J"]),
         (CopyMode, &["prefix+["]),
+        (EditScrollback, &["prefix+]"]),
         (CopyModePageUp, &["prefix+pageup"]),
         (NextPane, &["prefix+j"]),
         (PrevPane, &["prefix+k"]),
@@ -523,6 +527,7 @@ impl Keymap {
                     (one(RenameTab), "rename tab"),
                     (one(Zoom), "zoom"),
                     (one(CopyMode), "copy mode"),
+                    (one(EditScrollback), "history in editor"),
                     (one(ClosePane), "close"),
                 ],
             ),

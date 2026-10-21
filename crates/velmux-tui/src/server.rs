@@ -431,8 +431,8 @@ pub fn serve() -> Result<()> {
         }
         None => app.restore(),
     }
-    let (mut last_detect, mut last_slots, mut last_render) =
-        (Instant::now(), Instant::now(), Instant::now());
+    let (mut last_detect, mut last_slots, mut last_render, mut last_history) =
+        (Instant::now(), Instant::now(), Instant::now(), Instant::now());
     loop {
         match rx.recv_timeout(Duration::from_millis(30)) {
             Ok(ev) => app.handle(ev),
@@ -451,7 +451,12 @@ pub fn serve() -> Result<()> {
             app.check_binary();
             last_slots = Instant::now();
         }
+        if last_history.elapsed() >= Duration::from_secs(60) {
+            app.save_histories(false);
+            last_history = Instant::now();
+        }
         if app.quit {
+            app.save_histories(true);
             break;
         }
         if app.dirty && last_render.elapsed() >= Duration::from_millis(16) {
@@ -889,6 +894,7 @@ impl App {
                                 started_at: secs(p.started_at),
                                 cwd: p.cwd_override.clone(),
                                 command: p.command_override.clone(),
+                                history: (p.dumped_seq > 0).then(|| p.history_key.clone()),
                             })
                             .collect(),
                     })
@@ -1106,6 +1112,7 @@ impl App {
                 let opts = LaunchOpts { resume, cwd: p.cwd, command: p.command };
                 match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
+                        self.restore_history(new, p.history.as_deref());
                         ids.insert(p.id, new);
                         panes += 1;
                         resumed += resuming as usize;
@@ -2132,6 +2139,7 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::EditScrollback => self.edit_scrollback(),
             Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
             Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
                 Some(path) => {
@@ -2272,6 +2280,103 @@ impl App {
 
     /// Open the global config in the editor, in a new "settings" tab here
     /// (creating it from a template first). Closing the editor reloads it.
+    /// Replay a pane's saved scrollback (from before the server stopped) above
+    /// its fresh screen.
+    fn restore_history(&mut self, id: u64, key: Option<&str>) {
+        let Some(key) = key else { return };
+        let Ok(dir) = session::history_dir() else { return };
+        let Ok(text) = std::fs::read_to_string(dir.join(format!("{key}.ansi"))) else { return };
+        if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
+            pane.restore_history(&text, Some("restored from the last session"));
+            // Dirty, so the next save writes it under the pane's new key.
+            pane.output_seq += 1;
+        }
+    }
+
+    /// Save each pane's scrollback that changed since last time (`all`: every
+    /// pane, written before returning, for shutdown), and drop files no pane
+    /// uses any more. Writes happen off the main thread otherwise.
+    pub fn save_histories(&mut self, all: bool) {
+        let Ok(dir) = session::history_dir() else { return };
+        let mut writes = Vec::new();
+        for pane in self.panes.iter_mut().filter(|p| all || p.output_seq != p.dumped_seq) {
+            if pane.output_seq == 0 && pane.dumped_seq == 0 {
+                continue;
+            }
+            writes.push((pane.history_key.clone(), pane.history_formatted(true)));
+            pane.dumped_seq = pane.output_seq.max(1);
+        }
+        let keep: std::collections::HashSet<String> = self.panes.iter().filter(|p| p.dumped_seq > 0).map(|p| format!("{}.ansi", p.history_key)).collect();
+        if !writes.is_empty() {
+            self.save();
+        }
+        let job = move || {
+            for (key, text) in writes {
+                let tmp = dir.join(format!("{key}.tmp"));
+                if std::fs::write(&tmp, text).is_ok() {
+                    let _ = std::fs::rename(&tmp, dir.join(format!("{key}.ansi")));
+                }
+            }
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let stale_view = name.starts_with("history-")
+                        && e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600));
+                    if (name.ends_with(".ansi") && !keep.contains(&name)) || stale_view {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+        };
+        if all {
+            job();
+        } else {
+            std::thread::spawn(job);
+        }
+    }
+
+    /// Open the focused pane's whole history (scrollback and screen) as text in
+    /// your editor, in a new tab that closes with it.
+    fn edit_scrollback(&mut self) {
+        let Some(loc) = self.current_loc() else { return };
+        let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) else {
+            return self.say("no pane to read");
+        };
+        let text = crate::pane::history_text(&mut pane.parser);
+        let name = format!("history-{}.txt", pane.id);
+        let Ok(path) = session::history_dir().map(|d| d.join(name)) else { return };
+        if let Err(e) = std::fs::write(&path, text) {
+            return self.say(format!("can't write {}: {e}", path.display()));
+        }
+        // A terminal editor ($VISUAL / $EDITOR) first: it runs in the tab.
+        let editor = std::env::var("VISUAL")
+            .ok()
+            .or_else(|| std::env::var("EDITOR").ok())
+            .or_else(|| self.projects[loc.project].cfg.editor.clone())
+            .unwrap_or_else(|| "vi".into());
+        let program = editor.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
+        let at_end = if matches!(program, "vi" | "vim" | "nvim") { " +" } else { "" };
+        let opts = LaunchOpts { command: Some(format!("exec {editor}{at_end} {}", shell_quote(&path.display().to_string()))), ..LaunchOpts::default() };
+        match self.launch(&loc, Kind::Editor, opts) {
+            Ok(id) => {
+                let mut tab = Tab::new(Layout::Leaf(id), None);
+                tab.name = Some("history".into());
+                match self.views.get_mut(&loc) {
+                    Some(view) => {
+                        view.tabs.push(tab);
+                        view.set_active(view.tabs.len() - 1);
+                    }
+                    None => {
+                        self.views.insert(loc.clone(), View::single(tab));
+                    }
+                }
+                self.focus = Some(id);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
     fn open_settings(&mut self) {
         let Some(loc) = self.current_loc() else {
             return self.say("run velmux from inside a repo to open settings");

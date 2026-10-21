@@ -65,6 +65,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `o` | jump to the next agent that's blocked or finished unseen |
 | `b` | hide / show the sidebar |
 | `[` / `PgUp` | copy mode |
+| `]` | the pane's whole history in `$EDITOR` |
 | `j` / `k`, `x` | cycle panes, close pane |
 | `d` / `Q` | detach / stop the server |
 | `<prefix>` | send the prefix key itself |
@@ -175,6 +176,13 @@ exact session comes from Claude's own per-process record
 (`~/.claude/sessions/<pid>.json`), so it follows `/clear` and also covers a
 Claude you started by hand in a shell, which comes back as Claude. Slots
 released in the meantime are skipped.
+
+Scrollback comes back too: each pane's history is saved (every minute while
+it changes, and on quit, to `~/.local/state/velmux/scrollback/`) and replayed
+above the restored pane, ending at a dim `── restored from the last session ──`
+line; a live restart carries it across directly. `<prefix> ]` opens the focused
+pane's whole history as text in `$VISUAL` / `$EDITOR` in a new tab, to search or
+copy from with your own tools.
 
 ### Live restart (hot reload)
 
