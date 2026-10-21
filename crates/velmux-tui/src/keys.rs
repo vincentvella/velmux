@@ -23,6 +23,10 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Choose which agent to start a conversation with.
+    AgentPicker,
+    /// A conversation with `agents::ALL[n]` (here in a slot, else the repo's checkout).
+    AgentWith(u8),
     /// Update velmux (checking first if no update is known).
     Update,
     /// Sync every claimed slot that's behind the base.
@@ -176,6 +180,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("agent_picker", Action::AgentPicker),
     ("update", Action::Update),
     ("sync_all", Action::SyncAll),
     ("move_to_slot", Action::MoveToSlot),

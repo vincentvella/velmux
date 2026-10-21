@@ -176,9 +176,12 @@ pub enum Grab {
 /// Overrides for a new pane (restore and import).
 #[derive(Default)]
 struct LaunchOpts {
+    /// A session to resume (a reference: it names its agent).
     resume: Option<String>,
     cwd: Option<PathBuf>,
     command: Option<String>,
+    /// For an agent pane: which agent (else the configured one).
+    agent: Option<crate::agents::Agent>,
 }
 
 /// Bytes used by a key with no binding after the prefix (so its tail doesn't leak
@@ -387,6 +390,8 @@ pub struct App {
     /// Raw bytes for the client terminal itself (e.g. OSC 52 clipboard).
     pending_out: Vec<u8>,
     mouse: bool,
+    /// Focus the pane under the pointer as it moves.
+    focus_follows_mouse: bool,
     /// Restart in place when the binary changes.
     auto_restart: bool,
     notify: velmux_pool::NotifySettings,
@@ -448,6 +453,7 @@ pub fn serve() -> Result<()> {
             TuiSettings {
                 prefix: None,
                 mouse: true,
+                focus_follows_mouse: false,
                 auto_restart: true,
                 keys: Default::default(),
                 notify: Default::default(),
@@ -480,6 +486,7 @@ pub fn serve() -> Result<()> {
         });
     }
     let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
+    app.focus_follows_mouse = settings.focus_follows_mouse;
     app.auto_restart = settings.auto_restart;
     app.notify = settings.notify.clone();
     app.scratch_dir = settings.scratch_dir.clone();
@@ -594,6 +601,7 @@ impl App {
             copy: None,
             pending_out: Vec::new(),
             mouse,
+            focus_follows_mouse: false,
             auto_restart: true,
             notify: Default::default(),
             notified: HashMap::new(),
@@ -1072,7 +1080,7 @@ impl App {
         match msg {
             ClientMsg::Hello { cols, rows, cwd } => {
                 if self.mouse {
-                    self.pending_out.extend_from_slice(mouse::ENABLE);
+                    self.pending_out.extend_from_slice(self.mouse_mode());
                 }
                 // Focus reporting: whether you're looking at this terminal at all.
                 self.pending_out.extend_from_slice(b"\x1b[?1004h");
@@ -1390,14 +1398,14 @@ impl App {
                     (Some(env), Kind::Agent) if p.command.is_none() => p
                         .claude_session
                         .clone()
-                        .filter(|id| claude::session_exists(&env.claude_dir, id) && !taken.contains(id)),
+                        .filter(|id| crate::agents::exists(id, &env.claude_dir) && !taken.contains(id)),
                     _ => None,
                 };
                 if let Some(id) = &resume {
                     taken.push(id.clone());
                 }
                 let resuming = resume.is_some();
-                let opts = LaunchOpts { resume, cwd: p.cwd, command: p.command };
+                let opts = LaunchOpts { resume, cwd: p.cwd, command: p.command, agent: None };
                 match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
                         self.restore_history(new, p.history.as_deref());
@@ -1511,8 +1519,19 @@ impl App {
         }
         self.indexing = true;
         let (dirs, old, tx) = (self.transcript_dirs(), self.sessions.clone(), self.events.clone());
+        // Codex and Gemini keep every project's chats together: keep the ones
+        // that ran in velmux's places.
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for project in self.projects.iter().filter(|p| !p.removed) {
+            roots.extend(project.base().map(Path::to_path_buf));
+            roots.extend(project.slots.iter().map(|s| s.path.clone()));
+            roots.extend(project.folders.iter().map(|f| f.path.clone()));
+        }
         std::thread::spawn(move || {
-            let _ = tx.send(Event::Indexed(crate::search::scan(&dirs, old)));
+            let mut docs = crate::search::scan_others(&roots, &old);
+            docs.extend(crate::search::scan(&dirs, old));
+            docs.sort_by_key(|d| std::cmp::Reverse(d.mtime));
+            let _ = tx.send(Event::Indexed(docs));
         });
     }
 
@@ -2003,7 +2022,34 @@ impl App {
 
     // ---- mouse ----
 
+    /// What mouse reporting to ask the terminal for.
+    fn mouse_mode(&self) -> &'static [u8] {
+        if self.focus_follows_mouse { mouse::ENABLE_HOVER } else { mouse::ENABLE }
+    }
+
+    /// Focus follows mouse: the pane under the pointer, as it moves (only in
+    /// the pane area, and not while a menu, picker or copy mode is open).
+    fn hover(&mut self, ev: MouseEvent) {
+        if !self.focus_follows_mouse || !matches!(self.mode, Mode::Normal) || self.copy.is_some() {
+            return;
+        }
+        let Some(loc) = self.current_loc() else { return };
+        let at = Position::new(ev.x, ev.y);
+        let (rects, _) = self.view_rects(&loc);
+        if let Some((id, _)) = rects.into_iter().find(|(_, r)| r.contains(at)) {
+            if self.focus != Some(id) {
+                self.focus = Some(id);
+                self.dirty = true;
+            }
+        }
+    }
+
     fn mouse_event(&mut self, ev: MouseEvent) {
+        // Plain movement is only reported for focus follows mouse; it never
+        // reaches the apps in panes (they asked for clicks and drags).
+        if ev.is_hover() && self.drag.is_none() {
+            return self.hover(ev);
+        }
         self.dirty = true;
         if let Some(drag) = self.drag.take() {
             return self.continue_drag(drag, ev);
@@ -2441,8 +2487,11 @@ impl App {
                 if p.base_changes > 0 {
                     items.push(("move changes to a slot…", Action::MoveToSlot));
                 }
+                items.push(("new conversation", Action::AgentBase));
+                if crate::agents::ALL.iter().filter(|a| a.installed()).count() > 1 {
+                    items.push(("new conversation with…", Action::AgentPicker));
+                }
                 items.extend([
-                ("new conversation", Action::AgentBase),
                 ("claim a slot…", Action::ClaimSlot),
                 ("shell in base", Action::NewShell),
                 ("open base in editor", Action::NewEditor),
@@ -2464,7 +2513,11 @@ impl App {
                 if pr.is_some_and(|p| p.state == PrState::Merged) {
                     items.push(("release (PR merged)", Action::RemovePlace));
                 }
-                items.extend([("claude in this slot", Action::AgentHere), ("sync with base", Action::SyncSlot)]);
+                items.push(("claude in this slot", Action::AgentHere));
+                if crate::agents::ALL.iter().filter(|a| a.installed()).count() > 1 {
+                    items.push(("agent in this slot…", Action::AgentPicker));
+                }
+                items.push(("sync with base", Action::SyncSlot));
                 match pr {
                     Some(p) => {
                         items.push(("open PR", Action::OpenPr));
@@ -2956,6 +3009,31 @@ impl App {
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
+            Action::AgentPicker => {
+                let Some(target) = self.current_loc() else { return self.say("go to a repo or session first") };
+                let items: Vec<(&'static str, Action)> = crate::agents::ALL
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.installed())
+                    .map(|(i, a)| (a.label(), Action::AgentWith(i as u8)))
+                    .collect();
+                if items.is_empty() {
+                    return self.say("no coding agent found on PATH (claude, codex, gemini, opencode)");
+                }
+                let side = ui::sidebar_width(self.size.0, self.sidebar_hidden);
+                self.mode = Mode::Menu {
+                    selected: 0,
+                    context: Some(MenuContext { target, parked: None, title: "new conversation with…".into(), items, at: (side + 2, 2) }),
+                };
+            }
+            Action::AgentWith(n) => {
+                let Some(agent) = crate::agents::ALL.get(n as usize).copied() else { return };
+                if let Some(loc) = self.current_loc() {
+                    // In a slot, there; else (a repo) its checkout, like a new conversation.
+                    let loc = if loc.slot.is_some() || self.projects[loc.project].is_unclassified() { loc } else { Loc { slot: None, ..loc } };
+                    self.spawn_with(loc, Kind::Agent, None, LaunchOpts { agent: Some(agent), ..LaunchOpts::default() });
+                }
+            }
             Action::AgentHere => {
                 if let Some(loc) = self.current_loc() {
                     self.spawn(loc, Kind::Agent, None);
@@ -3256,6 +3334,54 @@ impl App {
         }
     }
 
+    /// What velmux adds when starting `agent` in `loc`: in a repo's checkout,
+    /// its instructions and the slots' folder; in a repo or its slots, the
+    /// checkout guard, for the agents that have one.
+    fn agent_context(&self, loc: &Loc, agent: crate::agents::Agent) -> crate::agents::Context {
+        use crate::agents::Agent;
+        let project = &self.projects[loc.project];
+        let mut ctx = crate::agents::Context { claude_dir: self.claude_dir.clone(), ..Default::default() };
+        let Some(pool) = project.pool.as_ref() else { return ctx };
+        if loc.slot.is_none() {
+            let _ = std::fs::create_dir_all(&pool.dir);
+            let prompt = BASE_PROMPT.replace("{repo}", &pool.name);
+            if agent == Agent::Opencode {
+                ctx.prompt_file = crate::paths::state_dir().ok().map(|d| d.join("instructions").join(format!("{}.md", velmux_pool::claude::sanitize(&pool.base)))).filter(|f| {
+                    std::fs::create_dir_all(f.parent().unwrap()).is_ok() && std::fs::write(f, &prompt).is_ok()
+                });
+            }
+            ctx.pool_dir = Some(pool.dir.clone());
+            ctx.prompt = Some(prompt);
+        }
+        if project.cfg.guard {
+            match agent {
+                Agent::Claude => ctx.claude_settings = self.guard_settings(pool),
+                Agent::Gemini => ctx.gemini_policy = self.gemini_policy(pool),
+                _ => {}
+            }
+        }
+        ctx
+    }
+
+    /// Gemini CLI's version of the checkout guard: a policy denying its file
+    /// writes under the checkout (unless the pool lives inside it).
+    fn gemini_policy(&self, pool: &Pool) -> Option<PathBuf> {
+        if pool.dir.starts_with(&pool.base) {
+            return None;
+        }
+        let base = pool.base.display().to_string();
+        let escaped: String = base.chars().flat_map(|c| if r"\.^$|?*+()[]{}".contains(c) { vec!['\\', c] } else { vec![c] }).collect();
+        let text = format!(
+            "# velmux: keep edits out of {base}; agents work in slots (velmux claim <branch>).\n[[rule]]\ntoolName = [\"write_file\", \"replace\"]\nargsPattern = '\"file_path\":\"{escaped}/'\ndecision = \"deny\"\npriority = 900\ndenyMessage = \"This is the repo's checkout, which velmux keeps clean: run `velmux claim <branch>` and make the edit in the slot it prints.\"\n"
+        );
+        let path = crate::paths::state_dir().ok()?.join("guard").join(format!("{}.gemini.toml", velmux_pool::claude::sanitize(&pool.base)));
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::create_dir_all(path.parent()?).ok()?;
+            std::fs::write(&path, text).ok()?;
+        }
+        Some(path)
+    }
+
     /// The `--settings` file keeping Claudes in `pool`'s repo out of its
     /// checkout (see [`crate::guard`]): one per repo, in the state dir.
     fn guard_settings(&self, pool: &Pool) -> Option<PathBuf> {
@@ -3435,9 +3561,13 @@ impl App {
         self.theme = theme;
         self.theme_colors = settings.theme_colors.clone();
         warnings.extend(theme_warnings);
-        if settings.mouse != self.mouse {
+        if settings.mouse != self.mouse || settings.focus_follows_mouse != self.focus_follows_mouse {
             self.mouse = settings.mouse;
-            self.pending_out.extend_from_slice(if self.mouse { mouse::ENABLE } else { mouse::DISABLE });
+            self.focus_follows_mouse = settings.focus_follows_mouse;
+            self.pending_out.extend_from_slice(mouse::DISABLE);
+            if self.mouse {
+                self.pending_out.extend_from_slice(self.mouse_mode());
+            }
         }
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         for project in &mut self.projects {
@@ -3789,7 +3919,7 @@ impl App {
     pub fn live_session_pane(&self, id: &str, project: Option<usize>) -> Option<u64> {
         self.panes
             .iter()
-            .find(|p| p.session.as_deref() == Some(id) && p.agent == Some("claude") && project.is_none_or(|i| p.loc.project == i))
+            .find(|p| p.session.as_deref() == Some(id) && p.agent.is_some() && project.is_none_or(|i| p.loc.project == i))
             .map(|p| p.id)
     }
 
@@ -3806,9 +3936,9 @@ impl App {
                 return;
             }
         }
-        let resumable = sessions.iter().find(|id| claude::session_exists(&self.claude_dir, id)).cloned();
+        let resumable = sessions.iter().find(|id| crate::agents::exists(id, &self.claude_dir)).cloned();
         let Some(id) = resumable else { return self.spawn(loc, Kind::Agent, None) };
-        match self.launch(&loc, Kind::Agent, LaunchOpts { resume: Some(id), cwd: None, command: None }) {
+        match self.launch(&loc, Kind::Agent, LaunchOpts { resume: Some(id), ..LaunchOpts::default() }) {
             Ok(pane) => {
                 self.insert_into_view(&loc, pane, None);
                 self.focus = Some(pane);
@@ -3829,7 +3959,11 @@ impl App {
 
     /// Open a pane in `loc`, splitting the focused pane there (`dir`, or along its longer side).
     fn spawn(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>) {
-        match self.launch(&loc, kind, LaunchOpts::default()) {
+        self.spawn_with(loc, kind, dir, LaunchOpts::default())
+    }
+
+    fn spawn_with(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>, opts: LaunchOpts) {
+        match self.launch(&loc, kind, opts) {
             Ok(id) => {
                 self.insert_into_view(&loc, id, dir);
                 self.focus = Some(id);
@@ -3862,34 +3996,27 @@ impl App {
         let project = &self.projects[loc.project];
         let cfg = &project.cfg;
         let mut session = None;
+        let mut agent_env = Vec::new();
         let command = match kind {
             _ if opts.command.is_some() => opts.command.clone(),
-            Kind::Agent if session::is_claude(&cfg.agent) => {
-                let mut agent = cfg.agent.clone();
-                // In a repo or its slots: keep edits out of the checkout.
-                if let Some(pool) = project.pool.as_ref().filter(|_| cfg.guard) {
-                    if let Some(settings) = self.guard_settings(pool) {
-                        agent = format!("{agent} --settings {}", shell_quote(&settings.display().to_string()));
+            Kind::Agent => {
+                // The agent: the one a resumed session belongs to, the one
+                // asked for, else the configured one.
+                let resume = resume.as_deref().map(crate::agents::parse_ref);
+                let configured = crate::agents::Agent::of_command(&cfg.agent);
+                match resume.map(|(a, _)| a).or(opts.agent).or(configured) {
+                    Some(agent) => {
+                        // Your configured command (and its flags) when it's this agent.
+                        let base = if configured == Some(agent) { cfg.agent.clone() } else { agent.name().to_string() };
+                        let ctx = self.agent_context(loc, agent);
+                        let l = crate::agents::launch(agent, &base, resume.map(|(_, id)| id), &ctx);
+                        session = l.session;
+                        agent_env = l.env;
+                        Some(l.command)
                     }
+                    None => Some(cfg.agent.clone()),
                 }
-                if let (None, Some(pool)) = (&loc.slot, &project.pool) {
-                    let _ = std::fs::create_dir_all(&pool.dir);
-                    let prompt = BASE_PROMPT.replace("{repo}", &pool.name);
-                    agent = format!("{agent} --add-dir {} --append-system-prompt {}", shell_quote(&pool.dir.display().to_string()), shell_quote(&prompt));
-                }
-                Some(match resume {
-                    Some(id) => {
-                        session = Some(id.clone());
-                        format!("{agent} --resume {id}")
-                    }
-                    None => {
-                        let id = session::new_session_id();
-                        session = Some(id.clone());
-                        format!("{agent} --session-id {id}")
-                    }
-                })
             }
-            Kind::Agent => Some(cfg.agent.clone()),
             Kind::Shell => None,
             Kind::Editor => {
                 let editor = cfg
@@ -3904,7 +4031,7 @@ impl App {
         let path_var = std::env::var_os("PATH");
         let command = command.map(|c| session::resolve_program(&c, path_var.as_deref()));
         // Slots get their own ports (and `VELMUX_SLOT`), so dev servers don't collide.
-        let env = match (&project.pool, &loc.slot) {
+        let mut env = match (&project.pool, &loc.slot) {
             (Some(pool), Some(id)) => pool.slot_env(id),
             (Some(pool), None) => vec![
                 ("VELMUX_BASE".to_string(), pool.base.to_string_lossy().into_owned()),
@@ -3912,6 +4039,7 @@ impl App {
             ],
             (None, _) => Vec::new(),
         };
+        env.extend(agent_env);
         let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);
         let id = self.next_pane;
         self.next_pane += 1;
@@ -3969,7 +4097,7 @@ impl App {
             let mut ids = HashMap::new();
             let resumes = plan_tab.panes.iter().filter(|p| p.resume.is_some()).count();
             for p in plan_tab.panes {
-                let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command };
+                let opts = LaunchOpts { resume: p.resume, cwd: p.cwd, command: p.command, agent: None };
                 match self.launch(&loc, p.kind, opts) {
                     Ok(new) => {
                         ids.insert(p.id, new);

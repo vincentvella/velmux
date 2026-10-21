@@ -320,6 +320,17 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
             let path = target(project)?;
             let verb = skills::install(&path)?;
             println!("{verb} {}", path.display());
+            // The other agents read instruction files instead of skills.
+            if !project {
+                for (agent, file) in skills::agent_files() {
+                    let text = std::fs::read_to_string(&file).unwrap_or_default();
+                    let new = skills::with_block(&text);
+                    if new != text {
+                        std::fs::write(&file, new).with_context(|| format!("writing {}", file.display()))?;
+                        println!("added velmux's instructions for {agent} to {}", file.display());
+                    }
+                }
+            }
             println!("new Claude sessions pick it up; it's used whenever Claude runs in velmux");
         }
         SkillCmd::Uninstall { project } => {
@@ -331,6 +342,16 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("not installed at {}", path.display()),
                 Err(e) => return Err(e.into()),
+            }
+            if !project {
+                for (agent, file) in skills::agent_files() {
+                    let text = std::fs::read_to_string(&file).unwrap_or_default();
+                    let new = skills::without_block(&text);
+                    if new != text {
+                        if new.is_empty() { std::fs::remove_file(&file)? } else { std::fs::write(&file, new)? }
+                        println!("removed velmux's instructions for {agent} from {}", file.display());
+                    }
+                }
             }
         }
     }

@@ -3,7 +3,7 @@
 //! slot it ran in.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -144,14 +144,6 @@ pub fn load() -> Option<Saved> {
     serde_json::from_str(&text).ok().filter(|s: &Saved| s.version == 1)
 }
 
-/// Whether the configured agent command launches Claude Code.
-pub fn is_claude(agent: &str) -> bool {
-    agent
-        .split_whitespace()
-        .next()
-        .and_then(|prog| Path::new(prog).file_name())
-        .is_some_and(|name| name == "claude")
-}
 
 /// Pin a command's program to an absolute path using `path_var` (the server's
 /// PATH, inherited from the terminal that started velmux). Panes run through a
@@ -196,13 +188,6 @@ pub fn new_session_id() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn detects_claude_commands() {
-        assert!(is_claude("claude"));
-        assert!(is_claude("/Users/me/.local/bin/claude --model opus"));
-        assert!(!is_claude("codex"));
-        assert!(!is_claude("claude-wrapper"));
-    }
 
     #[test]
     fn resolves_programs_with_the_given_path_order() {

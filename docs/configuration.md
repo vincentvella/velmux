@@ -16,6 +16,7 @@ scratch_dir = "~/Workspace"              # new sessions start here; new space li
 agent = "claude"                         # the command agent panes run
 editor = "code"                          # for "open in editor" (else $VISUAL / $EDITOR)
 mouse = true
+focus_follows_mouse = false              # focus the pane under the pointer as it moves
 auto_restart = true                      # restart in place when the velmux binary changes
 claude_history = true                    # group each slot's Claude transcripts under its repo
 fetch_every = 15                         # minutes between background fetches (0 = off)

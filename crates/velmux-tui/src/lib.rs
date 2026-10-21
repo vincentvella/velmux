@@ -19,6 +19,7 @@ mod search;
 mod session;
 pub mod skill;
 pub mod ghostty;
+pub mod agents;
 pub mod guard;
 pub mod update;
 mod theme;

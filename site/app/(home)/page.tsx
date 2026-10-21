@@ -78,11 +78,11 @@ export default function HomePage() {
       </section>
 
       <p className="text-sm text-fd-muted-foreground">
-        Runs on macOS and Linux. Works with any agent CLI; built around{' '}
-        <a href="https://claude.com/claude-code" className="underline">
-          Claude Code
-        </a>
-        . Free and open source (MIT).
+        Runs on macOS and Linux. Works with any agent CLI, and knows{' '}
+        <Link href="/docs/agents" className="underline">
+          Claude Code, Codex, Gemini CLI and opencode
+        </Link>{' '}
+        well. Free and open source (MIT).
       </p>
     </main>
   );

@@ -24,11 +24,62 @@ pub fn foreground_agent(pgid: Option<libc::pid_t>) -> Option<&'static str> {
     let mut pids = group_members(pgid);
     pids.retain(|&p| p != pgid);
     pids.insert(0, pgid);
-    pids.into_iter().find_map(|pid| {
-        let path = exe_path(pid)?.to_string_lossy().to_lowercase();
-        // Claude installs as `…/claude/versions/<semver>`, so match path components.
-        AGENTS.iter().copied().find(|a| path.split('/').any(|part| part == *a))
-    })
+    pids.into_iter().find_map(agent_of)
+}
+
+/// The agent process `pid` is, if any: by its executable's path (Claude installs
+/// as `…/claude/versions/<semver>`, so path components are matched), or, for
+/// agents that run under Node (npm installs of Codex and Gemini), by the
+/// script it runs.
+fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
+    let path = exe_path(pid)?.to_string_lossy().to_lowercase();
+    if let Some(a) = AGENTS.iter().copied().find(|a| path.split('/').any(|part| part == *a)) {
+        return Some(a);
+    }
+    let runtime = path.rsplit('/').next().unwrap_or_default();
+    if matches!(runtime, "node" | "bun" | "deno") {
+        let args = process_args(pid)?;
+        return args.iter().skip(1).take(3).find_map(|a| script_agent(&a.to_lowercase()));
+    }
+    None
+}
+
+/// The agent a Node script path belongs to.
+fn script_agent(arg: &str) -> Option<&'static str> {
+    if arg.contains("@openai/codex") || arg.ends_with("/codex.js") || arg.ends_with("/codex") {
+        Some("codex")
+    } else if arg.contains("gemini-cli") || arg.ends_with("/gemini.js") || arg.ends_with("/gemini") {
+        Some("gemini")
+    } else {
+        None
+    }
+}
+
+/// A process's arguments (`argv`), program first.
+#[cfg(target_os = "macos")]
+fn process_args(pid: libc::pid_t) -> Option<Vec<String>> {
+    // KERN_PROCARGS2: argc (i32), the exec path, padding NULs, then argv.
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) } != 0 || size < 4 {
+        return None;
+    }
+    let mut buf = vec![0u8; size];
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    buf.truncate(size);
+    let argc = i32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
+    let rest = &buf[4..];
+    let exec_end = rest.iter().position(|&b| b == 0)?;
+    let start = exec_end + rest[exec_end..].iter().position(|&b| b != 0)?;
+    Some(rest[start..].split(|&b| b == 0).take(argc).map(|a| String::from_utf8_lossy(a).into_owned()).collect())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_args(pid: libc::pid_t) -> Option<Vec<String>> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    Some(raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect())
 }
 
 const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "elvish", "xonsh", "login"];
@@ -59,13 +110,8 @@ pub fn foreground(pgid: Option<libc::pid_t>) -> Foreground {
         .into_iter()
         .filter_map(|pid| {
             let path = exe_path(pid)?;
-            let lower = path.to_string_lossy().to_lowercase();
-            // Versioned installs (`…/claude/versions/2.1.303`) take their agent's name.
-            let name = AGENTS
-                .iter()
-                .find(|a| lower.split('/').any(|part| part == **a))
-                .map(|a| a.to_string())
-                .or_else(|| path.file_name().map(|f| f.to_string_lossy().into_owned()))?;
+            // Agents take their own name (`…/claude/versions/2.1.303`, `node …/codex.js`).
+            let name = agent_of(pid).map(String::from).or_else(|| path.file_name().map(|f| f.to_string_lossy().into_owned()))?;
             Some((pid, name))
         })
         .collect();
@@ -162,6 +208,50 @@ fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
 }
 
+/// What agent `agent` is doing: from what it reports (Codex's OSC 7501
+/// `status`), its window title, or its screen (`lines`, top to bottom). Agents
+/// without rules count as working while their output is flowing (`busy`).
+pub fn classify(agent: &str, title: &str, lines: &[String], status: Option<&str>, busy: bool) -> AgentState {
+    let recent: Vec<String> = lines.iter().rev().filter(|l| !l.trim().is_empty()).take(12).map(|l| l.to_lowercase()).collect();
+    let any = |pat: &str| recent.iter().any(|l| l.contains(pat));
+    let title_l = title.trim().to_lowercase();
+    let spinner = |t: &str| t.chars().next().is_some_and(|c| ('\u{2800}'..='\u{28FF}').contains(&c));
+    match agent {
+        "claude" => classify_claude(title, lines),
+        "codex" => match status {
+            Some("working") => AgentState::Working,
+            Some("blocked") => AgentState::Blocked,
+            Some(_) => AgentState::Idle,
+            None if any("press enter to confirm or esc to cancel") || title_l.contains("action required") => AgentState::Blocked,
+            None if any("would you like to") && recent.iter().any(|l| l.trim_start().trim_start_matches('›').trim_start().starts_with("1. yes")) => {
+                AgentState::Blocked
+            }
+            None if any("to interrupt)") || spinner(title) => AgentState::Working,
+            None => AgentState::Idle,
+        },
+        "gemini" => {
+            if title_l.starts_with('✋') || title_l.contains("action required") || any("waiting for user confirmation") {
+                AgentState::Blocked
+            } else if title_l.starts_with('✦') || title_l.starts_with('⏲') || any("(esc to cancel") {
+                AgentState::Working
+            } else {
+                AgentState::Idle
+            }
+        }
+        "opencode" => {
+            if any("permission required") {
+                AgentState::Blocked
+            } else if any("esc interrupt") || any("esc again to interrupt") {
+                AgentState::Working
+            } else {
+                AgentState::Idle
+            }
+        }
+        _ if busy => AgentState::Working,
+        _ => AgentState::Idle,
+    }
+}
+
 /// Classify a Claude Code screen. `lines` are the visible rows, top to bottom.
 pub fn classify_claude(title: &str, lines: &[String]) -> AgentState {
     let recent: Vec<String> = lines
@@ -232,5 +322,48 @@ mod tests {
 
         assert_eq!(classify_claude("✳ Claude Code", &lines("❯ \n")), AgentState::Idle);
         assert_eq!(classify_claude("⠋ Claude Code", &lines("❯ \n")), AgentState::Working);
+    }
+
+    #[test]
+    fn codex_states() {
+        // Its own status report wins.
+        assert_eq!(classify("codex", "", &lines("› "), Some("working"), false), AgentState::Working);
+        assert_eq!(classify("codex", "", &lines("› "), Some("blocked"), false), AgentState::Blocked);
+        assert_eq!(classify("codex", "", &lines("› "), Some("idle"), false), AgentState::Idle);
+        // Else the screen.
+        assert_eq!(classify("codex", "", &lines("⠙ Working (12s • esc to interrupt)\n› "), None, false), AgentState::Working);
+        let approval = lines("Would you like to run the following command?\n  $ rm -rf dist\n› 1. Yes, proceed (y)\n  3. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel");
+        assert_eq!(classify("codex", "", &approval, None, false), AgentState::Blocked);
+        assert_eq!(classify("codex", "[ ! ] Action Required", &lines("› "), None, false), AgentState::Blocked);
+        assert_eq!(classify("codex", "", &lines("› "), None, true), AgentState::Idle, "output alone isn't work");
+    }
+
+    #[test]
+    fn gemini_states() {
+        assert_eq!(classify("gemini", "✋  Action Required (app)      ", &lines(""), None, false), AgentState::Blocked);
+        assert_eq!(classify("gemini", "✦  Working… (app)", &lines(""), None, false), AgentState::Working);
+        assert_eq!(classify("gemini", "◇  Ready (app)", &lines(""), None, false), AgentState::Idle);
+        // Title off: the screen.
+        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠏ Waiting for user confirmation..."), None, false), AgentState::Blocked);
+        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠋ Thinking... (esc to cancel, 12s)"), None, false), AgentState::Working);
+    }
+
+    #[test]
+    fn opencode_states() {
+        assert_eq!(classify("opencode", "OC | fix", &lines("⠋ esc interrupt"), None, false), AgentState::Working);
+        assert_eq!(classify("opencode", "OC | fix", &lines("△ Permission required\n  Edit src/a.ts\nAllow once  Allow always  Reject"), None, false), AgentState::Blocked);
+        assert_eq!(classify("opencode", "OC | fix", &lines("> "), None, false), AgentState::Idle);
+        // Agents without rules: working while output flows.
+        assert_eq!(classify("aider", "", &lines(""), None, true), AgentState::Working);
+    }
+
+    #[test]
+    fn reads_process_arguments() {
+        let me = std::process::id() as libc::pid_t;
+        let args = process_args(me).expect("argv of this test process");
+        assert!(args[0].contains("velmux_tui") || args[0].contains("deps"), "{args:?}");
+        assert_eq!(script_agent("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
+        assert_eq!(script_agent("/usr/local/lib/node_modules/@google/gemini-cli/bundle/gemini.js"), Some("gemini"));
+        assert_eq!(script_agent("/srv/app/server.js"), None);
     }
 }

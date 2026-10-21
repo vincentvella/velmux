@@ -126,6 +126,10 @@ the bottom), sends arrow keys to full-screen apps like `less`, and passes
 straight through to apps that ask for the mouse (vim with `mouse=a`, full-screen
 TUIs). Hold Shift (Option in iTerm2) for your terminal's own selection.
 
+`focus_follows_mouse = true` in the [config](configuration.md) focuses whichever
+pane the pointer is over as it moves (handy before dropping a file into a
+split). Movement alone is never passed on to the apps in panes.
+
 ## Copying
 
 Drag over text in any pane to copy it, even in apps that use the mouse; a click

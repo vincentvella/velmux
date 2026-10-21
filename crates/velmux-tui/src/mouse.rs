@@ -6,7 +6,9 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 /// Turn on button + drag reporting with SGR coordinates in the client terminal.
 pub const ENABLE: &[u8] = b"\x1b[?1002h\x1b[?1006h";
-pub const DISABLE: &[u8] = b"\x1b[?1002l\x1b[?1006l";
+/// Also every movement with no button held (for focus follows mouse).
+pub const ENABLE_HOVER: &[u8] = b"\x1b[?1003h\x1b[?1006h";
+pub const DISABLE: &[u8] = b"\x1b[?1003l\x1b[?1002l\x1b[?1006l";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
@@ -19,6 +21,11 @@ pub struct MouseEvent {
 }
 
 impl MouseEvent {
+    /// Moving with no button held (only reported with [`ENABLE_HOVER`]).
+    pub fn is_hover(&self) -> bool {
+        self.is_motion() && self.code & 0b11 == 3
+    }
+
     pub fn is_motion(&self) -> bool {
         self.code & 32 != 0
     }

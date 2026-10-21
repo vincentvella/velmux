@@ -16,6 +16,10 @@ use std::process::Command;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Installed as `codex` (…/codex/bin/codex), it plays Codex instead.
+    if std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str() == "codex")) {
+        return fake_codex(&args);
+    }
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let (id, resumed) = match (flag("--resume"), flag("--session-id")) {
         (Some(id), _) => (id, true),
@@ -116,4 +120,42 @@ fn record(transcript: &Path, role: &str, text: &str, cwd: &Path) {
     let line = serde_json::json!({"type": role, "message": {"role": role, "content": content}, "cwd": cwd, "gitBranch": branch});
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(transcript).unwrap();
     writeln!(f, "{line}").unwrap();
+}
+
+/// Codex as velmux sees it: `codex resume <id>` resumes; a new session picks
+/// its own id and writes `$CODEX_HOME/sessions/Y/M/D/rollout-<time>-<id>.jsonl`
+/// (a `session_meta` line with its cwd first); state goes out as OSC 7501.
+fn fake_codex(args: &[String]) {
+    let home = PathBuf::from(std::env::var("CODEX_HOME").expect("CODEX_HOME"));
+    let cwd = std::env::current_dir().unwrap();
+    let resumed = args.iter().position(|a| a == "resume").and_then(|i| args.get(i + 1)).cloned();
+    let id = resumed.clone().unwrap_or_else(|| format!("019f0000-0000-7000-8000-{:012}", std::process::id()));
+    let day = home.join("sessions/2026/10/21");
+    std::fs::create_dir_all(&day).unwrap();
+    let file = day.join(format!("rollout-2026-10-21T10-00-00-{id}.jsonl"));
+    if resumed.is_none() {
+        let meta = serde_json::json!({"timestamp": "2026-10-21T10:00:00.000Z", "type": "session_meta", "payload": {"id": id, "cwd": cwd}});
+        std::fs::write(&file, format!("{meta}\n")).unwrap();
+    }
+    print!("\x1b]7501;state=idle:app=codex\x1b\\");
+    println!("FAKE-CODEX id={id} mode={}", if resumed.is_some() { "resume" } else { "new" });
+    let stdin = std::io::stdin();
+    loop {
+        print!("> ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        match line.trim() {
+            "exit" => break,
+            "" => {}
+            said => {
+                let msg = serde_json::json!({"type": "event_msg", "payload": {"type": "user_message", "message": said}});
+                let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+                writeln!(f, "{msg}").unwrap();
+                println!("said {said}");
+            }
+        }
+    }
 }

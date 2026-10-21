@@ -30,6 +30,8 @@ pub enum Kind {
 #[derive(Default)]
 pub struct Term {
     pub title: String,
+    /// What the agent reports about itself (Codex's OSC 7501 `state=`).
+    pub status: Option<String>,
     /// Replies to write back to the app.
     replies: Vec<u8>,
 }
@@ -58,6 +60,15 @@ impl vt100::Callbacks for Term {
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        // OSC 7501 ; state=<idle|working|blocked|done|error>[:app=…][:kind=…]
+        if params.first() == Some(&&b"7501"[..]) {
+            let text = params[1..].iter().map(|p| String::from_utf8_lossy(p).into_owned()).collect::<Vec<_>>().join(";");
+            if let Some(state) = text.strip_prefix("state=") {
+                let state = state.split(':').next().unwrap_or_default();
+                self.status = (state != "clear" && !state.is_empty()).then(|| state.to_string());
+            }
+            return;
+        }
         // OSC 10/11 colour queries: report a dark theme (light fg on black).
         if let [which @ (b"10" | b"11"), b"?"] = params {
             let rgb = if *which == b"10" { "c0c0/c0c0/c0c0" } else { "0000/0000/0000" };
@@ -92,8 +103,11 @@ pub struct Pane {
     /// Agent finished while the pane wasn't focused.
     pub unseen_done: bool,
     pub last_output: Instant,
-    /// Claude session this pane runs, when the agent is Claude Code.
+    /// The agent session this pane runs (a reference naming its agent; see
+    /// `agents`), so restore and search can bring it back.
     pub session: Option<String>,
+    /// When its session was last looked for (agents found by scanning).
+    probed: Option<Instant>,
     pub started_at: SystemTime,
     /// Launch overrides, persisted so restore reproduces the pane.
     pub cwd_override: Option<std::path::PathBuf>,
@@ -291,6 +305,7 @@ impl Pane {
             unseen_done: false,
             last_output: Instant::now(),
             session: None,
+            probed: None,
             started_at: SystemTime::now(),
             cwd_override: None,
             command_override: None,
@@ -408,8 +423,19 @@ impl Pane {
         let agent = detect::foreground_agent(pgid);
         let fg = detect::foreground(pgid);
         let fg_changed = fg != self.fg;
-        let live = match (agent, fg.pid) {
-            (Some("claude"), Some(pid)) => velmux_pool::claude::running_session(claude_dir, pid),
+        let live = match (agent.and_then(crate::agents::Agent::from_name), fg.pid) {
+            // Claude's per-process record is cheap to read every time.
+            (Some(a @ crate::agents::Agent::Claude), Some(pid)) => crate::agents::running_session(a, pid, None, self.started_at, claude_dir),
+            // The others mean scanning transcripts: only until it's known,
+            // and not more than every few seconds.
+            (Some(a), Some(pid)) if !self.session.as_deref().is_some_and(|s| crate::agents::parse_ref(s).0 == a) => {
+                if self.probed.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3)) {
+                    None
+                } else {
+                    self.probed = Some(Instant::now());
+                    crate::agents::running_session(a, pid, fg.cwd.as_deref(), self.started_at, claude_dir)
+                }
+            }
             _ => None,
         };
         match live {
@@ -420,15 +446,13 @@ impl Pane {
         }
         self.fg = fg;
         let state = match agent {
-            Some("claude") => {
+            Some(name) => {
                 let screen = self.parser.screen();
                 let (_, cols) = screen.size();
                 let lines: Vec<String> = screen.rows(0, cols.get()).collect();
-                Some(detect::classify_claude(self.title(), &lines))
+                let busy = self.last_output.elapsed().as_millis() < 1500;
+                Some(detect::classify(name, self.title(), &lines, self.parser.callbacks().status.as_deref(), busy))
             }
-            // Other agents: working while output is flowing.
-            Some(_) if self.last_output.elapsed().as_millis() < 1500 => Some(AgentState::Working),
-            Some(_) => Some(AgentState::Idle),
             None => None,
         };
         // Debounce working → idle so a redraw gap doesn't flicker the sidebar.

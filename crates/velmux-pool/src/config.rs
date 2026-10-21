@@ -51,6 +51,8 @@ struct GlobalFile {
     claude_history: Option<bool>,
     prefix: Option<String>,
     mouse: Option<bool>,
+    /// Focus the pane under the mouse pointer as it moves.
+    focus_follows_mouse: Option<bool>,
     /// Restart the TUI server in place when the velmux binary changes.
     auto_restart: Option<bool>,
     /// TUI key bindings: action name → one spec or a list.
@@ -141,6 +143,8 @@ pub struct TuiSettings {
     pub prefix: Option<String>,
     /// Mouse support (default on).
     pub mouse: bool,
+    /// Focus the pane under the mouse pointer as it moves (default off).
+    pub focus_follows_mouse: bool,
     /// Live-restart when the velmux binary changes (default on).
     pub auto_restart: bool,
     /// Key binding overrides: action name → specs (empty = unbound).
@@ -191,6 +195,7 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
     Ok(TuiSettings {
         prefix: global.prefix,
         mouse: global.mouse.unwrap_or(true),
+        focus_follows_mouse: global.focus_follows_mouse.unwrap_or(false),
         auto_restart: global.auto_restart.unwrap_or(true),
         keys,
         notify,

@@ -61,6 +61,11 @@ impl Env {
         std::fs::create_dir_all(&versions).unwrap();
         std::fs::copy(fake_claude(), versions.join("9.9.9")).unwrap();
         std::os::unix::fs::symlink(versions.join("9.9.9"), bin.join("claude")).unwrap();
+        // The same fake, installed as Codex (`…/codex/bin/codex`), plays Codex.
+        let codex = root.join("install/codex/bin");
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::copy(fake_claude(), codex.join("codex")).unwrap();
+        std::os::unix::fs::symlink(codex.join("codex"), bin.join("codex")).unwrap();
         let gh = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'gh version 0 (fake)' ;;\n  pr) cat \"$FAKE_GH_PRS\" 2>/dev/null || echo '[]' ;;\nesac\n";
         std::fs::write(bin.join("gh"), gh).unwrap();
         sh(&bin, "chmod +x gh");
@@ -94,6 +99,7 @@ impl Env {
             ("VELMUX_STATE_DIR", self.state.display().to_string()),
             ("VELMUX_CONFIG", self.root.join("config.toml").display().to_string()),
             ("CLAUDE_CONFIG_DIR", self.claude_dir.display().to_string()),
+            ("CODEX_HOME", self.root.join("codex").display().to_string()),
             ("VELMUX_BIN", VELMUX.into()),
             ("FAKE_GH_PRS", self.root.join("prs.json").display().to_string()),
             ("GIT_TERMINAL_PROMPT", "0".into()),

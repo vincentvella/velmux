@@ -1,6 +1,7 @@
-//! Searching Claude conversations: an index of each transcript's title, your
-//! prompts and Claude's replies (tool calls and results left out), rebuilt in
-//! the background for files that changed.
+//! Searching agent conversations: an index of each transcript's title, your
+//! prompts and the agent's replies (tool calls and results left out), rebuilt
+//! in the background for files that changed. Claude Code, Codex and Gemini CLI
+//! transcripts; a doc's `id` is a session reference (see `agents`).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -115,6 +116,112 @@ fn index_file(path: &Path, mtime: SystemTime, size: u64) -> Option<Doc> {
     Some(Doc { id, path: path.to_path_buf(), mtime, size, title: one_line(&title, 120), cwd, branch, text, lower })
 }
 
+/// Append `text` (one line per message) up to `cap`.
+fn keep(buf: &mut String, text: &str, cap: usize) {
+    if buf.len() < cap && !text.trim().is_empty() {
+        buf.push_str(truncate(text, cap - buf.len()));
+        buf.push('\n');
+    }
+}
+
+/// `file`: its path, modified time and size; `said`: prompts, then replies.
+fn doc(id: String, file: (&Path, SystemTime, u64), cwd: Option<PathBuf>, branch: Option<String>, said: (String, String)) -> Option<Doc> {
+    let ((path, mtime, size), (prompts, replies)) = (file, said);
+    if prompts.is_empty() && replies.is_empty() {
+        return None;
+    }
+    let title = one_line(prompts.lines().next().unwrap_or_default(), 120);
+    let text = format!("{prompts}{replies}");
+    let lower = text.to_ascii_lowercase();
+    Some(Doc { id, path: path.to_path_buf(), mtime, size, title, cwd, branch, text, lower })
+}
+
+/// Codex and Gemini CLI conversations that ran under one of `roots` (velmux's
+/// repos, slots and sessions), reusing `old` docs whose file is unchanged.
+pub fn scan_others(roots: &[PathBuf], old: &[Doc]) -> Vec<Doc> {
+    let old: HashMap<&Path, &Doc> = old.iter().map(|d| (d.path.as_path(), d)).collect();
+    let within = |cwd: &Path| roots.iter().any(|r| cwd.starts_with(r));
+    let mut docs = Vec::new();
+    let mut reuse_or = |path: &Path, index: &dyn Fn(SystemTime, u64) -> Option<Doc>| {
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        let (mtime, size) = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
+        match old.get(path) {
+            Some(d) if d.mtime == mtime && d.size == size => docs.push((*d).clone()),
+            _ => docs.extend(index(mtime, size)),
+        }
+    };
+    for (_, path) in crate::agents::codex_rollouts(&crate::agents::codex_home(), None) {
+        reuse_or(&path, &|mtime, size| index_codex(&path, mtime, size, &within));
+    }
+    for project in std::fs::read_dir(crate::agents::gemini_home().join("tmp")).into_iter().flatten().flatten() {
+        let Some(root) = std::fs::read_to_string(project.path().join(".project_root")).ok().map(|r| PathBuf::from(r.trim())) else { continue };
+        if !within(&root) {
+            continue;
+        }
+        for f in std::fs::read_dir(project.path().join("chats")).into_iter().flatten().flatten() {
+            let path = f.path();
+            if path.extension().is_some_and(|x| x == "jsonl") {
+                reuse_or(&path, &|mtime, size| index_gemini(&path, mtime, size, &root));
+            }
+        }
+    }
+    docs
+}
+
+/// A Codex rollout: `session_meta` first (id, cwd, git branch), then events;
+/// your messages are `user_message`s and its replies `agent_message`s.
+fn index_codex(path: &Path, mtime: SystemTime, size: u64, within: &dyn Fn(&Path) -> bool) -> Option<Doc> {
+    let mut lines = BufReader::new(std::fs::File::open(path).ok()?).lines();
+    let meta: serde_json::Value = serde_json::from_str(&lines.next()?.ok()?).ok()?;
+    let p = &meta["payload"];
+    let cwd = PathBuf::from(p["cwd"].as_str()?);
+    if meta["type"] != "session_meta" || !within(&cwd) {
+        return None;
+    }
+    let id = p["id"].as_str().or(p["session_id"].as_str())?;
+    let branch = p["git"]["branch"].as_str().map(String::from);
+    let (mut prompts, mut replies) = (String::new(), String::new());
+    for line in lines.map_while(Result::ok) {
+        if !line.contains(r#""type":"event_msg""#) || !(line.contains("user_message") || line.contains("agent_message")) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let text = v["payload"]["message"].as_str().unwrap_or_default();
+        match v["payload"]["type"].as_str() {
+            Some("user_message") => keep(&mut prompts, text, PROMPT_CAP),
+            Some("agent_message") => keep(&mut replies, text, REPLY_CAP),
+            _ => {}
+        }
+    }
+    doc(format!("codex:{id}"), (path, mtime, size), Some(cwd), branch, (prompts, replies))
+}
+
+/// A Gemini CLI chat: metadata first (`sessionId`), then `user` / `gemini`
+/// messages; it ran in the project folder its directory belongs to.
+fn index_gemini(path: &Path, mtime: SystemTime, size: u64, root: &Path) -> Option<Doc> {
+    let mut lines = BufReader::new(std::fs::File::open(path).ok()?).lines();
+    let meta: serde_json::Value = serde_json::from_str(&lines.next()?.ok()?).ok()?;
+    if meta["kind"] == "subagent" {
+        return None;
+    }
+    let id = meta["sessionId"].as_str()?.to_string();
+    let (mut prompts, mut replies) = (String::new(), String::new());
+    for line in lines.map_while(Result::ok) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let text = match &v["content"] {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+            _ => continue,
+        };
+        match v["type"].as_str() {
+            Some("user") => keep(&mut prompts, &text, PROMPT_CAP),
+            Some("gemini") => keep(&mut replies, &text, REPLY_CAP),
+            _ => {}
+        }
+    }
+    doc(format!("gemini:{id}"), (path, mtime, size), Some(root.to_path_buf()), None, (prompts, replies))
+}
+
 /// A message's text: a plain string, or its `text` parts.
 fn message_text(v: &serde_json::Value) -> String {
     let content = &v["message"]["content"];
@@ -225,6 +332,37 @@ mod tests {
 
     fn reply(text: &str) -> serde_json::Value {
         serde_json::json!({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":text},{"type":"tool_use","name":"Bash","input":{"command":"secret-tool-input"}}]}})
+    }
+
+    #[test]
+    fn indexes_codex_and_gemini_transcripts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("ws/app");
+        let within = |c: &Path| c.starts_with(&repo);
+        let rollout = tmp.path().join("rollout.jsonl");
+        let lines = [
+            serde_json::json!({"type":"session_meta","payload":{"id":"019f-a","cwd":repo,"git":{"branch":"feat/x"}}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"add rate limits"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"secret-tool-input"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":"Added a token bucket."}}),
+        ];
+        std::fs::write(&rollout, lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+        let d = index_codex(&rollout, SystemTime::now(), 1, &within).unwrap();
+        assert_eq!((d.id.as_str(), d.title.as_str(), d.branch.as_deref()), ("codex:019f-a", "add rate limits", Some("feat/x")));
+        assert!(d.text.contains("token bucket") && !d.text.contains("secret-tool-input"));
+        assert!(index_codex(&rollout, SystemTime::now(), 1, &|_: &Path| false).is_none(), "not velmux's");
+
+        let chat = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({"sessionId":"g-1","kind":"main","startTime":"x"}),
+            serde_json::json!({"id":"1","type":"user","content":[{"text":"why is search flaky"}]}),
+            serde_json::json!({"id":"2","type":"gemini","content":"It re-mounts on each keystroke."}),
+            serde_json::json!({"$set":{"lastUpdated":"y"}}),
+        ];
+        std::fs::write(&chat, lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+        let g = index_gemini(&chat, SystemTime::now(), 1, &repo).unwrap();
+        assert_eq!((g.id.as_str(), g.title.as_str()), ("gemini:g-1", "why is search flaky"));
+        assert!(g.text.contains("re-mounts"));
     }
 
     #[test]

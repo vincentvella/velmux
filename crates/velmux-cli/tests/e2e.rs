@@ -338,3 +338,63 @@ fn update_swaps_in_a_downloaded_binary() {
     let (_, now) = run(&["--version"]);
     assert!(now.contains(env!("CARGO_PKG_VERSION")), "left as it was: {now}");
 }
+
+#[test]
+fn a_codex_conversation_is_followed_and_resumed() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    // Pick Codex for a new conversation in the repo.
+    ui.click_on("◆ base", true);
+    ui.wait_for("new conversation with…");
+    let menu = ui.screen();
+    let down = menu.lines().skip_while(|l| !l.contains("new conversation")).position(|l| l.contains("new conversation with…")).unwrap();
+    for _ in 0..down {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    ui.wait_for("new conversation with…");
+    ui.wait_for("Codex");
+    let picker = ui.screen();
+    let at = picker.lines().skip_while(|l| !l.contains("new conversation with…")).skip(1).position(|l| l.contains("Codex")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    let screen = ui.wait_for("FAKE-CODEX id=");
+    let id = screen.split("FAKE-CODEX id=").nth(1).unwrap().split_whitespace().next().unwrap().to_string();
+    assert!(screen.contains("mode=new"));
+    // velmux finds its session from the transcript (a few seconds), saves it,
+    // and brings it back as `codex resume` after a stop.
+    std::thread::sleep(Duration::from_secs(5));
+    env.stop(&repo);
+    drop(ui);
+    let ui = env.attach(&repo);
+    ui.wait_for(&format!("FAKE-CODEX id={id} mode=resume"));
+}
+
+#[test]
+fn focus_follows_the_mouse_when_turned_on() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let config = env.root.join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("focus_follows_mouse = true\n{text}")).unwrap();
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for("$");
+    ui.prefix("|"); // split right; the new right pane has focus
+    std::thread::sleep(Duration::from_secs(1));
+    let focused = || {
+        let out = env.velmux(&repo, &["debug"]);
+        String::from_utf8_lossy(&out.stdout).split_whitespace().nth(1).unwrap_or_default().to_string()
+    };
+    let right = focused();
+    // Move (no button) over the left pane: SGR code 35.
+    ui.send(b"\x1b[<35;40;10M");
+    env.until("focus to follow the pointer left", || focused() != right);
+    let left = focused();
+    ui.send(b"\x1b[<35;110;10M");
+    env.until("focus to follow it back right", || focused() == right);
+    assert_ne!(left, right);
+}

@@ -54,14 +54,15 @@ Then press `ctrl+b a` to start a Claude in your repo, and ask it for something.
 [Getting started](docs/getting-started.md) covers the rest, including the
 ⌘ shortcuts for Ghostty.
 
-Runs on macOS and Linux. Works with any agent CLI; built around
-[Claude Code](https://claude.com/claude-code).
+Runs on macOS and Linux. Works with any agent CLI, and knows Claude Code,
+Codex, Gemini CLI and opencode well.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
 - [Using velmux](docs/using-velmux.md): the sidebar, tabs, keys, mouse, copying, themes
 - [Working in slots](docs/slots.md): claiming, parked work, syncing, ports, pull requests
+- [Agents](docs/agents.md): Claude Code, Codex, Gemini CLI, opencode
 - [Configuration](docs/configuration.md)
 - [Command line](docs/cli.md)
 - [How it works](docs/how-it-works.md)
