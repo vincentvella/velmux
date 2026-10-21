@@ -1,0 +1,13 @@
+/* velmux's accent: the blue of its sidebar highlights. */
+:root {
+	--sl-color-accent-low: #1d2a4d;
+	--sl-color-accent: #5b8def;
+	--sl-color-accent-high: #b9ccfa;
+}
+:root[data-theme='light'] {
+	--sl-color-accent-low: #d6e2fb;
+	--sl-color-accent: #3561c9;
+	--sl-color-accent-high: #1b315f;
+}
+.hero { padding-bottom: 1rem; }
+main img[src$='.svg'] { border-radius: 10px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.35); }

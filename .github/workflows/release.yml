@@ -60,6 +60,11 @@ jobs:
           cp "target/${{ matrix.target }}/release/velmux" README.md LICENSE NOTICE "$name/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          # Also without the version, so .../releases/latest/download/<file>
+          # always works (the site's download links and install.sh).
+          plain="velmux-${{ matrix.target }}.tar.gz"
+          cp "$name.tar.gz" "$plain"
+          shasum -a 256 "$plain" > "$plain.sha256"
           "$name/velmux" --version || true
       - uses: actions/upload-artifact@v4
         with:

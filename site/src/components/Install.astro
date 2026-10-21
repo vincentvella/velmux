@@ -1,0 +1,54 @@
+---
+// Install: Homebrew, the script, or a download, with the visitor's platform
+// picked out (a guess from the browser; every option stays visible).
+const latest = 'https://github.com/vincentvella/velmux/releases/latest/download';
+const downloads = [
+	{ id: 'mac-arm', label: 'macOS · Apple Silicon', file: 'velmux-aarch64-apple-darwin.tar.gz' },
+	{ id: 'mac-intel', label: 'macOS · Intel', file: 'velmux-x86_64-apple-darwin.tar.gz' },
+	{ id: 'linux-x64', label: 'Linux · x86_64', file: 'velmux-x86_64-unknown-linux-musl.tar.gz' },
+	{ id: 'linux-arm', label: 'Linux · arm64', file: 'velmux-aarch64-unknown-linux-musl.tar.gz' },
+];
+---
+
+<div class="install">
+	<div class="cmd">
+		<span class="label">Homebrew</span>
+		<code>brew install vincentvella/tap/velmux</code>
+		<button data-copy="brew install vincentvella/tap/velmux">Copy</button>
+	</div>
+	<div class="cmd">
+		<span class="label">Script</span>
+		<code>curl -fsSL https://velmux.com/install.sh | sh</code>
+		<button data-copy="curl -fsSL https://velmux.com/install.sh | sh">Copy</button>
+	</div>
+	<div class="downloads">
+		{downloads.map((d) => <a class="download" data-platform={d.id} href={`${latest}/${d.file}`}>{d.label}</a>)}
+	</div>
+	<p class="note">Then <code>velmux skill install</code> and <code>velmux</code> in a repo. <a href="/docs/getting-started/">Getting started →</a></p>
+</div>
+
+<script>
+	for (const b of document.querySelectorAll<HTMLButtonElement>('.install button[data-copy]')) {
+		b.addEventListener('click', async () => {
+			await navigator.clipboard.writeText(b.dataset.copy ?? '');
+			b.textContent = 'Copied';
+			setTimeout(() => (b.textContent = 'Copy'), 1500);
+		});
+	}
+	const ua = navigator.userAgent.toLowerCase();
+	const guess = ua.includes('mac') ? 'mac-arm' : ua.includes('linux') ? (ua.includes('aarch64') || ua.includes('arm') ? 'linux-arm' : 'linux-x64') : null;
+	if (guess) document.querySelector(`.download[data-platform="${guess}"]`)?.classList.add('yours');
+</script>
+
+<style>
+	.install { display: grid; gap: 0.6rem; margin: 1.5rem 0; }
+	.cmd { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.8rem; border: 1px solid var(--sl-color-gray-5); border-radius: 0.5rem; background: var(--sl-color-black); }
+	.cmd .label { font-size: var(--sl-text-sm); color: var(--sl-color-gray-3); min-width: 5.5rem; }
+	.cmd code { flex: 1; background: none; font-size: var(--sl-text-sm); overflow-x: auto; white-space: nowrap; }
+	.cmd button { font: inherit; font-size: var(--sl-text-xs); padding: 0.2rem 0.6rem; border-radius: 0.3rem; border: 1px solid var(--sl-color-gray-5); background: var(--sl-color-gray-6); color: var(--sl-color-white); cursor: pointer; }
+	.downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.5rem; }
+	.download { padding: 0.55rem 0.8rem; border: 1px solid var(--sl-color-gray-5); border-radius: 0.5rem; text-decoration: none; font-size: var(--sl-text-sm); color: var(--sl-color-white); }
+	.download:hover, .download.yours { border-color: var(--sl-color-accent); }
+	.download.yours::after { content: ' · yours'; color: var(--sl-color-accent-high); }
+	.note { font-size: var(--sl-text-sm); color: var(--sl-color-gray-3); margin: 0.25rem 0 0; }
+</style>
