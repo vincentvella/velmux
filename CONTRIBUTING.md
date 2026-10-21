@@ -79,11 +79,14 @@ formulas" workflow to do it now).
 ## The site
 
 velmux.com is `site/` (Astro + Starlight), built from `docs/` by
-`site/scripts/sync-docs.mjs`. It deploys by hand, not on push:
+`site/scripts/sync-docs.mjs`. It only deploys when you run a deploy (the
+Vercel project isn't connected to the repo), and it builds on your machine, so
+deploys use no Vercel build minutes:
 
 ```sh
-cd site && bun install && bun run dev   # preview at localhost:4321
-cd .. && vercel deploy --prod           # from the repo root (.vercelignore keeps the upload to site/ + docs/)
+cd site
+bun install && bun run dev   # preview at localhost:4321
+bun run deploy               # build locally, upload the result to production
 ```
 
 ## Notes

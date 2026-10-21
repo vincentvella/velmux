@@ -7,7 +7,8 @@
     "dev": "node scripts/sync-docs.mjs && astro dev",
     "build": "node scripts/sync-docs.mjs && astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "deploy": "cd .. && vercel pull --yes --environment=production && vercel build --prod && vercel deploy --prebuilt --prod"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
