@@ -5,6 +5,12 @@ Each repo has a pool of **slots**: git worktrees at
 is either free or claimed for a branch. Claiming one is fast because its
 dependencies and build caches are still there from last time.
 
+Already have a pool laid out beside the repo, the way some other tools do it
+(`~/Workspace/shop-pool-1`, `shop-pool-2`…, or `shop-slot-N`)? velmux uses those
+worktrees as the repo's slots, where they are: one that's detached and clean is
+free, one on a branch is in use, and nothing in them is touched. Slots it adds
+later go beside them, as `shop-pool-N`.
+
 ![a slot's right-click menu](screenshots/slot-menu.svg)
 
 ## Your checkout

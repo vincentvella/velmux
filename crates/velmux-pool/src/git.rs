@@ -50,6 +50,17 @@ pub fn base_of(path: &Path) -> Result<PathBuf> {
     Ok(base.canonicalize()?)
 }
 
+/// Every worktree of the repo at `dir` (the checkout included), from
+/// `git worktree list`.
+pub fn worktrees(dir: &Path) -> Vec<PathBuf> {
+    git(dir, &["worktree", "list", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect()
+}
+
 /// `origin/HEAD` when a remote exists, else the base checkout's current branch.
 pub fn default_base_ref(base: &Path) -> String {
     if let Ok(r) = git(base, &["rev-parse", "--abbrev-ref", "origin/HEAD"]) {

@@ -305,3 +305,30 @@ fn install_is_skipped_while_lockfile_is_unchanged() {
     pool.claim(&opts(Some("c")), &quiet).unwrap();
     assert_eq!(count(), 2);
 }
+
+#[test]
+fn adopts_a_pool_laid_out_beside_the_repo() {
+    let f = fixture("slots = 3\n");
+    let ws = f.base.parent().unwrap().to_path_buf();
+    // Another tool's pool: `app-pool-N` next to the repo, one free, one at work.
+    sh(&f.base, "git worktree add -q --detach ../app-pool-1 && git worktree add -q -b feat ../app-pool-2");
+    sh(&ws, "mkdir app-pool-9"); // not a worktree: left alone
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    assert_eq!(pool.siblings().len(), 2);
+    let slots = pool.init(&quiet).unwrap();
+    assert_eq!(slots.len(), 3);
+    assert_eq!((slots[0].id.as_str(), slots[0].path.clone(), slots[0].status), ("slot-1", ws.join("app-pool-1"), Status::Free));
+    assert_eq!((slots[1].path.clone(), slots[1].status, slots[1].branch.as_deref()), (ws.join("app-pool-2"), Status::InUse, Some("feat")));
+    // New slots follow the same layout.
+    assert_eq!(slots[2].path, ws.join("app-pool-3"));
+    assert!(ws.join("app-pool-3/README.md").exists());
+    assert!(!ws.join(".pools/app/slot-1").exists());
+    // Found from inside one, idempotent, and agents get each folder.
+    let again = Pool::discover(f.env.clone(), &ws.join("app-pool-2")).unwrap();
+    assert_eq!(again.slot_of(&ws.join("app-pool-2")).unwrap().as_deref(), Some("slot-2"));
+    assert_eq!(again.adopt(&quiet).unwrap(), 0);
+    assert_eq!(again.slot_dirs().len(), 4);
+    // Claiming uses the free one.
+    let claimed = pool.claim(&opts(Some("next")), &quiet).unwrap();
+    assert_eq!(claimed.path, ws.join("app-pool-1"));
+}

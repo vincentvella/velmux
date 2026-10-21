@@ -111,6 +111,14 @@ pub fn slot_number(id: &str) -> u16 {
     id.strip_prefix("slot-").and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
+/// `shop-pool-3` (or `shop-slot-3`, `shop-pool3`) → 3, for repo `shop`.
+fn sibling_number(repo: &str, folder: &str) -> Option<u16> {
+    let rest = folder.strip_prefix(repo)?.strip_prefix('-')?;
+    let rest = rest.strip_prefix("pool").or_else(|| rest.strip_prefix("slot"))?;
+    let n = rest.strip_prefix('-').unwrap_or(rest);
+    n.parse().ok().filter(|&n| n > 0)
+}
+
 fn stash_marker(branch: &str) -> String {
     format!("velmux[{branch}]")
 }
@@ -146,14 +154,86 @@ impl Pool {
         &self.base_ref
     }
 
+    /// This repo's worktrees laid out as a pool beside it, the way some other
+    /// tools do it (`<parent>/<repo>-pool-N`, or `-slot-N`), by number.
+    pub fn siblings(&self) -> Vec<(u16, PathBuf)> {
+        let parent = self.base.parent().unwrap_or(Path::new("/"));
+        let mut found: Vec<(u16, PathBuf)> = git::worktrees(&self.base)
+            .into_iter()
+            .filter(|p| p.parent() == Some(parent))
+            .filter_map(|p| Some((sibling_number(&self.name, &p.file_name()?.to_string_lossy())?, p)))
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Take this repo's [`siblings`](Self::siblings) in as slots, keeping
+    /// their paths: one that's detached and clean is free, any other is in use
+    /// (its branch and changes are left as they are). Returns how many.
+    pub fn adopt(&self, report: &dyn Fn(&str)) -> Result<usize> {
+        let siblings = self.siblings();
+        if siblings.is_empty() {
+            return Ok(0);
+        }
+        self.store.with(&self.base, |st| {
+            let mut adopted = 0;
+            for (n, path) in siblings {
+                let Ok(path) = path.canonicalize() else { continue };
+                if st.slots.iter().any(|s| s.path == path) {
+                    continue;
+                }
+                // Its own number when that's free, else the next one that is.
+                let id = (n..).chain(1..n).map(|n| format!("slot-{n}")).find(|id| st.slot(id).is_none()).unwrap();
+                let branch = git::current_branch(&path);
+                let free = branch.is_none() && !git::is_dirty(&path).unwrap_or(true);
+                report(&format!("{id}: using the existing worktree {}", path.display()));
+                st.slots.push(Slot {
+                    id,
+                    status: if free { Status::Free } else { Status::InUse },
+                    claimed_at: (!free).then(now),
+                    path,
+                    branch,
+                    claimed_by: None,
+                    released_at: None,
+                    deps_hash: None,
+                });
+                adopted += 1;
+            }
+            st.slots.sort_by_key(|s| slot_number(&s.id));
+            Ok(adopted)
+        })
+    }
+
+    /// Where a new slot `n` goes: beside the repo when its pool already lives
+    /// there, else in the pool folder.
+    fn new_slot_path(&self, slots: &[Slot], n: usize) -> PathBuf {
+        let parent = self.base.parent().unwrap_or(Path::new("/"));
+        if slots.iter().any(|s| s.path.parent() == Some(parent)) {
+            parent.join(format!("{}-pool-{n}", self.name))
+        } else {
+            self.dir.join(format!("slot-{n}"))
+        }
+    }
+
+    /// Every folder holding a slot: the pool folder, and each slot that lives
+    /// elsewhere (beside the repo), for giving an agent access to them.
+    pub fn slot_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.dir.clone()];
+        if let Ok(Some(st)) = self.store.snapshot() {
+            dirs.extend(st.slots.into_iter().map(|s| s.path).filter(|p| !p.starts_with(&self.dir)));
+        }
+        dirs
+    }
+
     /// Create missing slots up to the configured count. Idempotent; never shrinks.
     pub fn init(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
         std::fs::create_dir_all(&self.dir)?;
+        self.adopt(report)?;
         let created = self.store.with(&self.base, |st| {
             let mut created = Vec::new();
             for n in 1..=self.cfg.slots {
                 let id = format!("slot-{n}");
-                let path = self.dir.join(&id);
+                let path = st.slot(&id).map(|s| s.path.clone()).unwrap_or_else(|| self.new_slot_path(&st.slots, n));
                 if !path.exists() {
                     report(&format!("{id}: creating worktree at {}", path.display()));
                     let p = path.to_string_lossy();
@@ -588,5 +668,20 @@ impl Pool {
             claude::link(&self.env.claude_dir, &self.base, slot)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_pools_beside_the_repo() {
+        assert_eq!(sibling_number("shopping-x", "shopping-x-pool-1"), Some(1));
+        assert_eq!(sibling_number("shopping-x", "shopping-x-slot-12"), Some(12));
+        assert_eq!(sibling_number("shop", "shop-pool3"), Some(3));
+        assert_eq!(sibling_number("shop", "shopping-x-pool-1"), None);
+        assert_eq!(sibling_number("shop", "shop-pool-0"), None);
+        assert_eq!(sibling_number("shop", "shop-feature"), None);
     }
 }

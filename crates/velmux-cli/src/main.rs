@@ -508,7 +508,12 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
             Ok((pool, slots)) => {
                 let missing: Vec<&str> = slots.iter().filter(|s| !s.path.exists()).map(|s| s.id.as_str()).collect();
                 if missing.is_empty() {
-                    line(Some(true), &format!("{}: {} slots in {}", pool.name, slots.len(), pool.dir.display()), "");
+                    let at = if slots.iter().all(|s| s.path.starts_with(&pool.dir)) {
+                        pool.dir.display().to_string()
+                    } else {
+                        format!("{}-pool-N, beside the repo", pool.base.display())
+                    };
+                    line(Some(true), &format!("{}: {} slots in {at}", pool.name, slots.len()), "");
                 } else {
                     line(Some(false), &format!("{}: missing slots {}", pool.name, missing.join(", ")), "velmux gc");
                 }

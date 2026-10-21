@@ -81,8 +81,8 @@ pub fn parse_ref(session: &str) -> (Agent, &str) {
 #[derive(Default)]
 pub struct Context {
     pub claude_dir: PathBuf,
-    /// The pool's folder (the slots), to put in the agent's reach.
-    pub pool_dir: Option<PathBuf>,
+    /// The folders holding the pool's slots, to put in the agent's reach.
+    pub pool_dirs: Vec<PathBuf>,
     /// velmux's instructions for an agent in the repo's checkout.
     pub prompt: Option<String>,
     /// Claude Code `--settings` (the checkout guard).
@@ -116,15 +116,16 @@ fn toml_string(s: &str) -> String {
 pub fn launch(agent: Agent, base: &str, resume: Option<&str>, ctx: &Context) -> Launch {
     let mut cmd = base.to_string();
     let mut env = Vec::new();
-    let pool = ctx.pool_dir.as_ref().map(|p| quote(&p.display().to_string()));
+    // Each folder behind its own flag (they all take one or repeat).
+    let dirs = |flag: &str| ctx.pool_dirs.iter().map(|p| format!(" {flag} {}", quote(&p.display().to_string()))).collect::<String>();
     let session;
     match agent {
         Agent::Claude => {
             if let Some(s) = &ctx.claude_settings {
                 cmd += &format!(" --settings {}", quote(&s.display().to_string()));
             }
-            if let (Some(pool), Some(prompt)) = (&pool, &ctx.prompt) {
-                cmd += &format!(" --add-dir {pool} --append-system-prompt {}", quote(prompt));
+            if let Some(prompt) = ctx.prompt.as_ref().filter(|_| !ctx.pool_dirs.is_empty()) {
+                cmd += &format!("{} --append-system-prompt {}", dirs("--add-dir"), quote(prompt));
             }
             let id = resume.map(String::from).unwrap_or_else(crate::session::new_session_id);
             cmd += &if resume.is_some() { format!(" --resume {id}") } else { format!(" --session-id {id}") };
@@ -137,9 +138,7 @@ pub fn launch(agent: Agent, base: &str, resume: Option<&str>, ctx: &Context) -> 
                 session = Some(id.to_string());
             }
             None => {
-                if let Some(pool) = &pool {
-                    cmd += &format!(" --add-dir {pool}");
-                }
+                cmd += &dirs("--add-dir");
                 if let Some(prompt) = &ctx.prompt {
                     cmd += &format!(" -c {}", quote(&format!("developer_instructions={}", toml_string(prompt))));
                 }
@@ -148,9 +147,7 @@ pub fn launch(agent: Agent, base: &str, resume: Option<&str>, ctx: &Context) -> 
             }
         },
         Agent::Gemini => {
-            if let Some(pool) = &pool {
-                cmd += &format!(" --include-directories {pool}");
-            }
+            cmd += &dirs("--include-directories");
             if let Some(policy) = &ctx.gemini_policy {
                 cmd += &format!(" --policy {}", quote(&policy.display().to_string()));
             }
@@ -309,7 +306,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Context {
-        Context { pool_dir: Some("/w/.pools/app".into()), prompt: Some("plan here; don't edit".into()), ..Context::default() }
+        Context { pool_dirs: vec!["/w/.pools/app".into()], prompt: Some("plan here; don't edit".into()), ..Context::default() }
     }
 
     #[test]

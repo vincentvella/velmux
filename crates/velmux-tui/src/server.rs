@@ -99,6 +99,8 @@ pub struct Folder {
 
 impl Project {
     fn repo(pool: Pool) -> Project {
+        // Worktrees another tool laid out beside the repo become its slots.
+        let _ = pool.adopt(&|_| {});
         Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), base_changes: 0, base_said: None, folders: Vec::new(), removed: false }
     }
 
@@ -3350,7 +3352,7 @@ impl App {
                     std::fs::create_dir_all(f.parent().unwrap()).is_ok() && std::fs::write(f, &prompt).is_ok()
                 });
             }
-            ctx.pool_dir = Some(pool.dir.clone());
+            ctx.pool_dirs = pool.slot_dirs();
             ctx.prompt = Some(prompt);
         }
         if project.cfg.guard {
