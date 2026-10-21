@@ -30,11 +30,26 @@ pub struct Slot {
     pub deps_hash: Option<String>,
 }
 
+/// A branch handed back to the pool with work on it (stashed changes, or
+/// commits not on the base), until it's claimed again or discarded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Parked {
+    pub branch: String,
+    /// The slot it was released from.
+    pub slot: String,
+    pub parked_at: u64,
+    /// Claude sessions that were working on it, most relevant first.
+    #[serde(default)]
+    pub sessions: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
     pub base: PathBuf,
     pub slots: Vec<Slot>,
+    #[serde(default)]
+    pub parked: Vec<Parked>,
 }
 
 impl State {
@@ -71,6 +86,7 @@ impl Store {
             version: 1,
             base: base.to_path_buf(),
             slots: Vec::new(),
+            parked: Vec::new(),
         });
         let out = f(&mut state)?;
         self.write(&state)?;

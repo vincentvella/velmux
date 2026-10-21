@@ -97,6 +97,47 @@ fn release_parks_work_and_reclaim_restores_it() {
 }
 
 #[test]
+fn released_work_is_listed_as_parked_until_resumed_or_discarded() {
+    let f = fixture("slots = 2\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+
+    // Dirty work: parked with its stash and the sessions that worked on it.
+    let s = pool.claim(&opts(Some("feat/a")), &quiet).unwrap();
+    std::fs::write(s.path.join("README.md"), "edited\n").unwrap();
+    std::fs::write(s.path.join("new.txt"), "untracked\n").unwrap();
+    pool.release_with(&s.id, false, &["sess-1".into()]).unwrap();
+    // Committed-only work: parked by its commits.
+    let t = pool.claim(&opts(Some("feat/b")), &quiet).unwrap();
+    sh(&t.path, "echo b > b && git add b && git commit -qm b");
+    pool.release(&t.id, false).unwrap();
+    // Nothing done: not parked.
+    let u = pool.claim(&opts(Some("feat/c")), &quiet).unwrap();
+    pool.release(&u.id, false).unwrap();
+
+    let parked = pool.parked().unwrap();
+    let names: Vec<&str> = parked.iter().map(|p| p.branch.as_str()).collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    let a = parked.iter().find(|p| p.branch == "feat/a").unwrap();
+    assert_eq!((a.files, a.ahead, a.sessions.clone()), (2, 0, vec!["sess-1".to_string()]));
+    let b = parked.iter().find(|p| p.branch == "feat/b").unwrap();
+    assert_eq!((b.files, b.ahead), (0, 1));
+
+    // Resuming (claiming the branch) restores it and takes it off the list.
+    let again = pool.claim(&opts(Some("feat/a")), &quiet).unwrap();
+    assert!(again.path.join("new.txt").exists());
+    assert!(pool.parked().unwrap().iter().all(|p| p.branch != "feat/a"));
+
+    // Discarding drops the stash; the branch stays.
+    pool.release(&again.id, false).unwrap();
+    assert!(pool.parked().unwrap().iter().any(|p| p.branch == "feat/a"));
+    assert_eq!(pool.discard("feat/a").unwrap(), 1);
+    assert_eq!(sh(&f.base, "git stash list"), "");
+    assert!(pool.parked().unwrap().iter().all(|p| p.branch != "feat/a"));
+    assert_eq!(sh(&f.base, "git branch --list feat/a"), "feat/a");
+}
+
+#[test]
 fn detached_commits_are_rescued_on_release() {
     let f = fixture("slots = 1\n");
     let pool = Pool::discover(f.env.clone(), &f.base).unwrap();

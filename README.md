@@ -192,14 +192,21 @@ velmux init                     # create slots (idempotent, grows to config)
 cd "$(velmux claim feat/login)" # claim LRU free slot, check out branch
 velmux status [--json]
 velmux release [slot]           # stash if dirty → detach to base ref → clean, deps kept
+velmux parked [--json]          # branches released with work on them
+velmux discard <branch>         # drop a parked branch's stash (branch kept)
 velmux open [slot]              # editor from config / $VISUAL / $EDITOR
 velmux gc                       # prune dead worktrees, recreate missing slots
 velmux restart                  # live-restart the TUI server (panes keep running)
 ```
 
-Reclaiming a branch restores the work parked when it was released, in
-whichever slot it lands. Detached commits are kept on a `velmux/rescue/*`
-branch.
+Releasing a branch with work on it (uncommitted changes, or commits past the
+base) **parks** it. Parked branches are listed under their repo in the sidebar
+(`◌ feat/login  2 files · 3h`); click one to resume it in a free slot, or
+discard its changes. Resuming (or `velmux claim <branch>`) restores the stash in
+whichever slot it lands, and brings back the Claude that was working on it: the
+conversation itself if it's still open in the base, else resumed from its
+transcript. Detached commits are kept on a `velmux/rescue/*` branch, parked
+like any other.
 
 ## How it stays small
 

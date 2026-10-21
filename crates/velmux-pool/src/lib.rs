@@ -9,5 +9,5 @@ mod pool;
 pub mod state;
 
 pub use config::{tui_settings, Config, Env, NotifySettings, TuiSettings};
-pub use pool::{ClaimOpts, Pool, Released, SlotView};
+pub use pool::{ClaimOpts, ParkedView, Pool, Released, SlotView};
 pub use state::Status;

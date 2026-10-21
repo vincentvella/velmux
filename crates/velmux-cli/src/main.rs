@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
-use velmux_pool::{ClaimOpts, Env, Pool, SlotView, Status};
+use velmux_pool::{ClaimOpts, Env, ParkedView, Pool, SlotView, Status};
 
 /// Worktree pools: a fixed set of warm slots per repo, claimed and released.
 #[derive(Parser)]
@@ -48,6 +48,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// List branches with parked work (released with changes or commits);
+    /// `velmux claim <branch>` resumes one.
+    Parked {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Throw a parked branch's stashed changes away (the branch is kept).
+    Discard { branch: String },
     /// Print a slot's path.
     Path { slot: String },
     /// Open a slot in your editor (`editor` in config, else $VISUAL / $EDITOR).
@@ -159,7 +167,25 @@ fn run() -> Result<()> {
                 eprintln!("no pool for {} yet; run `velmux init`", pool.name);
             } else {
                 print_table(&pool, &slots);
+                print_parked(&pool.parked()?);
             }
+        }
+        Cmd::Parked { json } => {
+            let parked = pool.parked()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&parked)?);
+            } else if parked.is_empty() {
+                eprintln!("nothing parked in {}", pool.name);
+            } else {
+                print_parked(&parked);
+            }
+        }
+        Cmd::Discard { branch } => {
+            if !pool.parked()?.iter().any(|p| p.branch == branch) {
+                bail!("{branch} isn't parked (see `velmux parked`)");
+            }
+            let n = pool.discard(&branch)?;
+            println!("discarded {n} stash(es) for {branch}; the branch itself is kept");
         }
         Cmd::Path { slot } => println!("{}", pool.view(&slot)?.path.display()),
         Cmd::Open { slot } => {
@@ -198,6 +224,21 @@ fn resolve_slot(pool: &Pool, slot: Option<String>, cwd: &std::path::Path) -> Res
         None => pool
             .slot_of(cwd)?
             .ok_or_else(|| anyhow!("not inside a slot; pass a slot id (see `velmux status`)")),
+    }
+}
+
+fn print_parked(parked: &[ParkedView]) {
+    if parked.is_empty() {
+        return;
+    }
+    println!("parked (resume with `velmux claim <branch>`)");
+    let now = velmux_pool::state::now();
+    for p in parked {
+        let age = match p.age(now).as_str() {
+            "now" => "just now".to_string(),
+            a => format!("{a} ago"),
+        };
+        println!("  {:<28} {:<20} {age}, from {}", p.branch, p.what(), p.slot);
     }
 }
 

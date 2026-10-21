@@ -76,6 +76,30 @@ pub fn remote_branch_exists(dir: &Path, branch: &str) -> bool {
     git_ok(dir, &["show-ref", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")])
 }
 
+/// Every stash whose message contains `marker`, newest first: (`stash@{n}`, unix time).
+pub fn stashes_with(dir: &Path, marker: &str) -> Vec<(String, u64)> {
+    let Ok(list) = git(dir, &["stash", "list", "--format=%gd%x00%ct%x00%s"]) else { return Vec::new() };
+    list.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\0');
+            let (refname, time, subject) = (parts.next()?, parts.next()?, parts.next()?);
+            subject.contains(marker).then(|| (refname.to_string(), time.parse().unwrap_or(0)))
+        })
+        .collect()
+}
+
+/// How many files a stash touches, untracked ones included.
+pub fn stash_files(dir: &Path, stash: &str) -> usize {
+    let tracked = git(dir, &["stash", "show", "--name-only", stash]).unwrap_or_default();
+    let untracked = git(dir, &["show", "--name-only", "--format=", &format!("{stash}^3")]).unwrap_or_default();
+    tracked.lines().chain(untracked.lines()).filter(|l| !l.is_empty()).count()
+}
+
+/// Commits on `branch` that aren't on `base`.
+pub fn ahead(dir: &Path, base: &str, branch: &str) -> usize {
+    git(dir, &["rev-list", "--count", &format!("{base}..{branch}")]).ok().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 /// Index (`stash@{n}`) of the newest stash whose message contains `marker`.
 pub fn find_stash(dir: &Path, marker: &str) -> Option<String> {
     let list = git(dir, &["stash", "list", "--format=%gd%x00%s"]).ok()?;

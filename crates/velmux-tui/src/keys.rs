@@ -23,6 +23,9 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Resume / discard the parked branch a right-click menu was opened on.
+    ResumeParked,
+    DiscardParked,
     /// Copy the current place's folder path.
     CopyPath,
     NewShell,
@@ -137,6 +140,8 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("resume_parked", Action::ResumeParked),
+    ("discard_parked", Action::DiscardParked),
 ];
 
 fn indexed(a: Action) -> Option<fn(u8) -> Action> {

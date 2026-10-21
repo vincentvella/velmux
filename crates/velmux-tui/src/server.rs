@@ -38,7 +38,8 @@ pub enum Event {
     PtyExit(u64),
     /// `for_pane`: claimed by `velmux claim` inside that pane, which moves to
     /// the slot; the stream gets the slot's path.
-    Claimed { project: usize, result: Result<SlotView, String>, for_pane: Option<(u64, UnixStream)> },
+    /// `resume`: Claude sessions that worked on a parked branch, to bring back in the slot.
+    Claimed { project: usize, result: Result<SlotView, String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String> },
     Released { project: usize, slot: String, result: Result<String, String> },
 }
 
@@ -49,6 +50,8 @@ pub struct Project {
     /// The repo's config, or global defaults for unclassified folders.
     pub cfg: Config,
     pub slots: Vec<SlotView>,
+    /// Branches released with work on them, waiting to be resumed.
+    pub parked: Vec<velmux_pool::ParkedView>,
     /// Unclassified only: its folders, addressed by id in `Loc::slot`.
     pub folders: Vec<Folder>,
     /// Removed from the sidebar. Kept in place (locations refer to projects by
@@ -63,7 +66,7 @@ pub struct Folder {
 
 impl Project {
     fn repo(pool: Pool) -> Project {
-        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), folders: Vec::new(), removed: false }
+        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), folders: Vec::new(), removed: false }
     }
 
     pub fn name(&self) -> &str {
@@ -99,6 +102,8 @@ pub enum Mode {
 #[derive(Debug, Clone)]
 pub struct MenuContext {
     pub target: Loc,
+    /// The parked branch it's for, when opened on one.
+    pub parked: Option<String>,
     pub title: String,
     pub items: Vec<(&'static str, Action)>,
     /// Where it was opened (the click).
@@ -188,6 +193,7 @@ pub enum PromptFor {
 
 pub enum Confirm {
     Release(Loc),
+    DiscardParked { project: usize, branch: String },
     RemoveFolder(Loc),
     RemoveRepo(usize),
     Quit,
@@ -549,7 +555,7 @@ impl App {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         // Global settings (agent, editor) apply; a broken config falls back to defaults.
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
-        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), folders: Vec::new(), removed: false });
+        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), folders: Vec::new(), removed: false });
         self.projects.len() - 1
     }
 
@@ -659,10 +665,16 @@ impl App {
                     self.reload_config();
                 }
             }
-            Event::Claimed { project, result, for_pane } => {
+            Event::Claimed { project, result, for_pane, resume } => {
                 self.jobs.retain(|j| j != "claiming");
                 self.refresh_slots();
                 match (result, for_pane) {
+                    (Ok(slot), None) if !resume.is_empty() => {
+                        let loc = Loc { project, slot: Some(slot.id.clone()) };
+                        let branch = slot.branch.clone().unwrap_or_default();
+                        self.say(format!("resumed {branch} in {}", slot.id));
+                        self.resume_sessions(loc, &resume);
+                    }
                     (Ok(slot), None) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.say(format!("claimed {}", slot.id));
@@ -1094,6 +1106,9 @@ impl App {
         for project in &mut self.projects {
             if let Some(Ok(slots)) = project.pool.as_ref().map(|p| p.status()) {
                 project.slots = slots;
+            }
+            if let Some(Ok(parked)) = project.pool.as_ref().map(|p| p.parked()) {
+                project.parked = parked;
             }
         }
         self.dirty = true;
@@ -1535,6 +1550,8 @@ impl App {
             ui::Row::TopBar => {
                 return self.run(if x < side / 2 { Action::ClaimSlot } else { Action::Menu });
             }
+            // A click on parked work offers resume / discard.
+            ui::Row::Parked(..) => return self.open_context_menu(x, y),
             ui::Row::ViewTabs => {
                 self.sidebar_view = if x <= ui::VIEW_SPLIT_X { ui::SidebarView::Spaces } else { ui::SidebarView::Agents };
                 self.full_redraw = true;
@@ -1562,7 +1579,7 @@ impl App {
                 return;
             }
             ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
-            ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } => unreachable!("handled above"),
+            ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } | ui::Row::Parked(..) => unreachable!("handled above"),
             ui::Row::Location(loc) => loc,
             ui::Row::Project(p) => {
                 // Open the project at its first location with panes, else its root.
@@ -1584,6 +1601,13 @@ impl App {
     /// Right-click on a sidebar row: the menu of things to do in that place.
     fn open_context_menu(&mut self, x: u16, y: u16) {
         let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else { return };
+        if let ui::Row::Parked(p, i) = row {
+            let Some(branch) = self.projects[p].parked.get(i).map(|v| v.branch.clone()) else { return };
+            let items = vec![("resume in a slot", Action::ResumeParked), ("discard changes…", Action::DiscardParked)];
+            let context = MenuContext { target: Loc { project: p, slot: None }, parked: Some(branch.clone()), title: format!("parked · {branch}"), items, at: (x, y) };
+            self.mode = Mode::Menu { selected: 0, context: Some(context) };
+            return;
+        }
         let target = match row {
             ui::Row::Location(loc) => loc,
             ui::Row::Project(p) if !self.projects[p].is_unclassified() => Loc { project: p, slot: None },
@@ -1623,7 +1647,7 @@ impl App {
             ],
         };
         let title = self.loc_name(&target);
-        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { target, title, items, at: (x, y) }) };
+        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { target, parked: None, title, items, at: (x, y) }) };
     }
 
     /// Run menu row `i`: the global menu's action here, or a context menu's
@@ -1632,6 +1656,18 @@ impl App {
         match context {
             Some(c) => {
                 let Some(&(_, action)) = c.items.get(i) else { return };
+                if let Some(branch) = c.parked {
+                    let project = c.target.project;
+                    return match action {
+                        Action::ResumeParked => self.claim_in(project, Some(branch), None),
+                        _ => {
+                            self.mode = Mode::Confirm {
+                                label: format!("discard the parked changes on {branch}? commits on the branch are kept"),
+                                action: Confirm::DiscardParked { project, branch },
+                            }
+                        }
+                    };
+                }
                 if self.current_loc().as_ref() != Some(&c.target) {
                     if self.copy.is_some() {
                         self.exit_copy();
@@ -1985,6 +2021,7 @@ impl App {
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
+            Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
             Action::CopyPath => match self.current_loc().and_then(|l| self.loc_cwd(&l)) {
                 Some(path) => {
                     self.set_clipboard(&path.to_string_lossy());
@@ -2354,7 +2391,15 @@ impl App {
     fn confirm(&mut self, action: Confirm) {
         match action {
             Confirm::Quit => self.quit = true,
-            Confirm::Release(loc) => self.release_location(loc),
+            Confirm::Release(loc) => self.release_location(loc, None),
+            Confirm::DiscardParked { project, branch } => {
+                let Some(pool) = self.projects[project].pool.clone() else { return };
+                match pool.discard(&branch) {
+                    Ok(_) => self.say(format!("discarded the parked changes on {branch} (the branch is kept)")),
+                    Err(e) => self.say(format!("discard failed: {e:#}")),
+                }
+                self.refresh_slots();
+            }
             Confirm::RemoveFolder(loc) => {
                 self.close_panes_where(|p| p.loc == loc);
                 if let (Some(id), Some(project)) = (&loc.slot, self.projects.get_mut(loc.project)) {
@@ -2403,8 +2448,9 @@ impl App {
         let Some(slot) = loc.slot.clone().filter(|_| !self.projects[loc.project].is_unclassified()) else {
             return "error: this pane isn't in a slot (nothing to release)".into();
         };
+        let session = self.pane(pane).and_then(|p| p.session.clone());
         self.move_pane(pane, Loc { project: loc.project, slot: None });
-        self.release_location(loc);
+        self.release_location(loc, session);
         format!("releasing {slot}; this conversation is back in the base checkout")
     }
 
@@ -2440,10 +2486,17 @@ impl App {
     }
 
     /// Release a slot: close its panes, then stash / reset it in the background.
-    fn release_location(&mut self, loc: Loc) {
+    /// The Claude sessions that worked there (`first`, the one that claimed it
+    /// and is heading back to the base, then any closed here) are kept with
+    /// the parked branch for resuming.
+    fn release_location(&mut self, loc: Loc, first: Option<String>) {
         let Some(slot) = loc.slot.clone() else { return };
         let Some(pool) = self.projects[loc.project].pool.clone() else { return };
+        let mut sessions: Vec<String> = first.into_iter().collect();
         for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
+            if let Some(s) = pane.session.clone().filter(|s| !sessions.contains(s)) {
+                sessions.push(s);
+            }
             pane.kill();
         }
         let tx = self.events.clone();
@@ -2453,12 +2506,13 @@ impl App {
             // Give killed processes a moment to exit before git touches the tree.
             std::thread::sleep(Duration::from_millis(300));
             let result = pool
-                .release(&slot, false)
+                .release_with(&slot, false, &sessions)
                 .map(|r| {
                     let mut msg = format!("released {}", r.id);
-                    if let Some(s) = r.stashed {
-                        msg.push_str(&format!(" · stashed: {s}"));
+                    if let Some(b) = r.branch.as_ref().filter(|_| r.stashed.is_some()) {
+                        msg = format!("parked {b}");
                     }
+
                     if let Some(b) = r.rescued {
                         msg.push_str(&format!(" · kept commits on {b}"));
                     }
@@ -2483,6 +2537,11 @@ impl App {
             }
             return self.say("unclassified folders aren't git repos, so they have no slots");
         };
+        // Claiming a parked branch yourself resumes it: its Claude comes back too.
+        let resume = match (&branch, &for_pane) {
+            (Some(b), None) => self.projects[project].parked.iter().find(|p| &p.branch == b).map(|p| p.sessions.clone()).unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let tx = self.events.clone();
         self.jobs.push("claiming".into());
         std::thread::spawn(move || {
@@ -2495,8 +2554,34 @@ impl App {
                 pool.claim(&opts, &quiet)
             })()
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Claimed { project, result, for_pane });
+            let _ = tx.send(Event::Claimed { project, result, for_pane, resume });
         });
+    }
+
+    /// A resumed branch's Claude, in its new slot: the conversation itself if
+    /// it's still open (back in the base after `velmux release`), moved over;
+    /// else the session resumed from its transcript; else a fresh Claude.
+    fn resume_sessions(&mut self, loc: Loc, sessions: &[String]) {
+        for id in sessions {
+            if let Some(pane) = self.panes.iter().find(|p| p.session.as_ref() == Some(id) && p.loc.project == loc.project).map(|p| p.id) {
+                self.move_pane(pane, loc.clone());
+                self.focus = Some(pane);
+                self.current = Some(loc);
+                self.full_redraw = true;
+                return;
+            }
+        }
+        let resumable = sessions.iter().find(|id| claude::session_exists(&self.claude_dir, id)).cloned();
+        let Some(id) = resumable else { return self.spawn(loc, Kind::Agent, None) };
+        match self.launch(&loc, Kind::Agent, LaunchOpts { resume: Some(id), cwd: None, command: None }) {
+            Ok(pane) => {
+                self.insert_into_view(&loc, pane, None);
+                self.focus = Some(pane);
+                self.current = Some(loc);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
     }
 
     fn spawn_here(&mut self, kind: Kind, dir: Option<Dir>) {

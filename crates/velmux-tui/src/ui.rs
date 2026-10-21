@@ -37,6 +37,8 @@ pub fn content_rect(outer: Rect, titled: bool) -> Rect {
 /// One row of [`rows`] (navigation order) or of the sidebar.
 pub enum Row {
     Project(usize),
+    /// A parked branch: (project, index into its `parked`).
+    Parked(usize, usize),
     Location(Loc),
     Pane(usize),
     /// Sidebar only: a section heading.
@@ -154,6 +156,7 @@ pub fn display_rows(app: &App) -> Vec<Row> {
                 out.push(Row::Location(loc));
             }
         }
+        out.extend((0..app.projects[p].parked.len()).map(|i| Row::Parked(p, i)));
     }
     let folders: Vec<Loc> = app
         .projects
@@ -277,6 +280,31 @@ fn rollup_of<'a>(t: &Theme, panes: impl Iterator<Item = &'a Pane>) -> Vec<(&'sta
 
 /// One location row: glyph, label (name, branch or folder), a dim slot number,
 /// and its agents' states on the right. The current one gets a highlight bar.
+/// `◌ feat/login   2 files · 3h`: work waiting on a branch, dimmed.
+fn draw_parked_row(app: &App, parked: &velmux_pool::ParkedView, y: u16, side: u16, buf: &mut Buffer) {
+    let t = &app.theme;
+    let dim = Style::new().fg(t.dim);
+    let now = velmux_pool::state::now();
+    let right_edge = side.saturating_sub(1);
+    let full = format!("{} · {}", parked.what(), parked.age(now));
+    let x = 3;
+    buf.set_string(x, y, "◌", dim);
+    let label_x = x + 2;
+    // Room permitting, what's waiting and how long; else just the age.
+    let room = right_edge.saturating_sub(label_x) as usize;
+    let branch_w = parked.branch.chars().count();
+    let right = if branch_w + 2 + full.chars().count() <= room { full } else { parked.age(now) };
+    let right_w = right.chars().count();
+    let room_for_label = room.saturating_sub(right_w + 1);
+    let shown: String = if branch_w > room_for_label {
+        parked.branch.chars().take(room_for_label.saturating_sub(1)).chain(std::iter::once('…')).collect()
+    } else {
+        parked.branch.clone()
+    };
+    buf.set_string(label_x, y, &shown, Style::new().fg(t.text2).add_modifier(Modifier::ITALIC));
+    buf.set_string(right_edge.saturating_sub(right_w as u16), y, &right, dim);
+}
+
 fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
     let t = &app.theme;
     let base = if selected { Style::new().bg(t.selected_bg) } else { Style::new() };
@@ -412,6 +440,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
             }
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
+            Row::Parked(p, i) => draw_parked_row(app, &app.projects[p].parked[i], y, side, buf),
             Row::Pane(_) | Row::Blank => {}
             Row::TopBar => {
                 let gray = Style::new().fg(t.text2);
