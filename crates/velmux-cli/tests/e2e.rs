@@ -481,6 +481,25 @@ fn a_slots_conversations_are_named_after_it_unless_you_named_them() {
 }
 
 #[test]
+fn a_new_claude_from_a_slot_starts_in_the_checkout() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    assert!(env.velmux(&repo, &["claim", "feat/x", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&repo);
+    ui.click_on("feat/x", false);
+    ui.wait_for("app › slot-1");
+    // From the slot's empty screen, and with the prefix key alike.
+    ui.send(b"a");
+    ui.wait_for("FAKE-CLAUDE id=");
+    ui.wait_for("app › base");
+    ui.click_on("feat/x", false);
+    ui.wait_for("app › slot-1");
+    ui.prefix("a");
+    ui.wait_for("app › base");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

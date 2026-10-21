@@ -947,9 +947,11 @@ impl App {
                         self.resume_sessions(loc, &resume);
                     }
                     (Ok(slot), None) => {
+                        // Claimed by hand: a shell to work in (new Claudes start
+                        // in the checkout and claim their own slot).
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.say(format!("claimed {}", slot.id));
-                        self.spawn(loc, Kind::Agent, None);
+                        self.spawn(loc, Kind::Shell, None);
                     }
                     (Ok(slot), Some((pane, mut stream))) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
@@ -2564,6 +2566,16 @@ impl App {
         self.go_to(loc);
     }
 
+    /// Where a new agent starts for `loc`: a repo's checkout, even from one of
+    /// its slots (it plans there and claims a slot of its own); a folder, there.
+    fn agent_loc(&self, loc: Loc) -> Loc {
+        if self.projects[loc.project].is_unclassified() {
+            loc
+        } else {
+            Loc { slot: None, ..loc }
+        }
+    }
+
     /// Show a place: its active tab, focused where you left it.
     fn go_to(&mut self, loc: Loc) {
         self.focus = self.views.get(&loc).and_then(|v| v.layout.leaves().first().copied());
@@ -2622,10 +2634,6 @@ impl App {
                 let mut items = Vec::new();
                 if pr.is_some_and(|p| p.state == PrState::Merged) {
                     items.push(("release (PR merged)", Action::RemovePlace));
-                }
-                items.push(("claude in this slot", Action::AgentHere));
-                if crate::agents::ALL.iter().filter(|a| a.installed()).count() > 1 {
-                    items.push(("agent in this slot…", Action::AgentPicker));
                 }
                 items.push(("sync with base", Action::SyncSlot));
                 match pr {
@@ -3131,8 +3139,7 @@ impl App {
             }
             Action::AgentBase => {
                 if let Some(loc) = self.current_loc() {
-                    // Claude in the base checkout; unclassified folders have no base.
-                    let loc = if self.projects[loc.project].is_unclassified() { loc } else { Loc { slot: None, ..loc } };
+                    let loc = self.agent_loc(loc);
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
@@ -3156,13 +3163,13 @@ impl App {
             Action::AgentWith(n) => {
                 let Some(agent) = crate::agents::ALL.get(n as usize).copied() else { return };
                 if let Some(loc) = self.current_loc() {
-                    // In a slot, there; else (a repo) its checkout, like a new conversation.
-                    let loc = if loc.slot.is_some() || self.projects[loc.project].is_unclassified() { loc } else { Loc { slot: None, ..loc } };
+                    let loc = self.agent_loc(loc);
                     self.spawn_with(loc, Kind::Agent, None, LaunchOpts { agent: Some(agent), ..LaunchOpts::default() });
                 }
             }
             Action::AgentHere => {
                 if let Some(loc) = self.current_loc() {
+                    let loc = self.agent_loc(loc);
                     self.spawn(loc, Kind::Agent, None);
                 }
             }
@@ -4065,7 +4072,7 @@ impl App {
 
     /// A resumed branch's Claude, in its new slot: the conversation itself if
     /// it's still open (back in the base after `velmux release`), moved over;
-    /// else the session resumed from its transcript; else a fresh Claude.
+    /// else the session resumed from its transcript; else a shell there.
     fn resume_sessions(&mut self, loc: Loc, sessions: &[String]) {
         for id in sessions {
             if let Some(pane) = self.live_session_pane(id, Some(loc.project)) {
@@ -4077,7 +4084,7 @@ impl App {
             }
         }
         let resumable = sessions.iter().find(|id| crate::agents::exists(id, &self.claude_dir)).cloned();
-        let Some(id) = resumable else { return self.spawn(loc, Kind::Agent, None) };
+        let Some(id) = resumable else { return self.spawn(loc, Kind::Shell, None) };
         match self.launch(&loc, Kind::Agent, LaunchOpts { resume: Some(id), ..LaunchOpts::default() }) {
             Ok(pane) => {
                 self.insert_into_view(&loc, pane, None);

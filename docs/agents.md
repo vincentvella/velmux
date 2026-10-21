@@ -6,8 +6,9 @@ conversations back, and gives them velmux's instructions.
 
 `agent` in the [config](configuration.md) is the one a new conversation starts
 (`claude` by default). To start another, right-click a repo for **new
-conversation with…** (or a slot for **agent in this slot…**): it lists the ones
-installed.
+conversation with…**: it lists the ones installed. New conversations in a repo
+always start in its checkout, even from one of its slots: they plan there and
+claim a slot of their own when it's time to change code.
 
 | | Claude Code | Codex | Gemini CLI | opencode |
 |---|---|---|---|---|

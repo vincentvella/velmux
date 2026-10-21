@@ -1078,7 +1078,7 @@ pub fn empty_screen(app: &App, loc: Option<&Loc>) -> (String, Vec<&'static str>,
             app.loc_name(l),
             vec!["a claimed slot"],
             vec![
-                item('a', "Claude in this slot", A::AgentHere),
+                item('a', "new Claude conversation (starts in the checkout)", A::AgentBase),
                 item('c', "shell here", A::NewShell),
                 item('w', "go somewhere else", A::LocationPicker),
                 item('x', "release this slot", A::RemovePlace),
