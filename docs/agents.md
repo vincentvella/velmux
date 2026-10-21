@@ -11,7 +11,7 @@ installed.
 
 | | Claude Code | Codex | Gemini CLI | opencode |
 |---|---|---|---|---|
-| Working / blocked / idle | ✓ | ✓ (it reports its own state) | ✓ (from its window title) | ✓ |
+| Working / blocked / idle | ✓ | ✓ (it reports its own state; start-up dialogs and questions too) | ✓ (window title and confirmations) | ✓ (permission prompts, progress) |
 | Resumes after a restart | ✓ | ✓ | ✓ | ✓ |
 | Found by conversation search | ✓ | ✓ | ✓ | |
 | velmux's instructions in a repo's checkout | ✓ | ✓ | via `GEMINI.md` | ✓ |

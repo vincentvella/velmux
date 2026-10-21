@@ -212,43 +212,192 @@ fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
 /// `status`), its window title, or its screen (`lines`, top to bottom). Agents
 /// without rules count as working while their output is flowing (`busy`).
 pub fn classify(agent: &str, title: &str, lines: &[String], status: Option<&str>, busy: bool) -> AgentState {
-    let recent: Vec<String> = lines.iter().rev().filter(|l| !l.trim().is_empty()).take(12).map(|l| l.to_lowercase()).collect();
-    let any = |pat: &str| recent.iter().any(|l| l.contains(pat));
-    let title_l = title.trim().to_lowercase();
-    let spinner = |t: &str| t.chars().next().is_some_and(|c| ('\u{2800}'..='\u{28FF}').contains(&c));
+    if agent == "claude" {
+        return classify_claude(title, lines);
+    }
+    let lines: Vec<&str> = lines.iter().map(|l| l.trim_end()).collect();
     match agent {
-        "claude" => classify_claude(title, lines),
-        "codex" => match status {
-            Some("working") => AgentState::Working,
-            Some("blocked") => AgentState::Blocked,
-            Some(_) => AgentState::Idle,
-            None if any("press enter to confirm or esc to cancel") || title_l.contains("action required") => AgentState::Blocked,
-            None if any("would you like to") && recent.iter().any(|l| l.trim_start().trim_start_matches('›').trim_start().starts_with("1. yes")) => {
-                AgentState::Blocked
-            }
-            None if any("to interrupt)") || spinner(title) => AgentState::Working,
-            None => AgentState::Idle,
-        },
-        "gemini" => {
-            if title_l.starts_with('✋') || title_l.contains("action required") || any("waiting for user confirmation") {
-                AgentState::Blocked
-            } else if title_l.starts_with('✦') || title_l.starts_with('⏲') || any("(esc to cancel") {
-                AgentState::Working
-            } else {
-                AgentState::Idle
-            }
-        }
-        "opencode" => {
-            if any("permission required") {
-                AgentState::Blocked
-            } else if any("esc interrupt") || any("esc again to interrupt") {
-                AgentState::Working
-            } else {
-                AgentState::Idle
-            }
-        }
+        "codex" => classify_codex(title, &lines, status),
+        "gemini" => classify_gemini(title, &lines),
+        "opencode" => classify_opencode(&lines),
         _ if busy => AgentState::Working,
         _ => AgentState::Idle,
+    }
+}
+
+// The Codex, Gemini CLI and opencode rules below are adapted from herdr's
+// agent-detection manifests (distribution/agent-detection/*.toml, Apache-2.0;
+// see NOTICE). Its text matches are case-insensitive, its regexes aren't.
+
+/// `text` contains every one of `pats` (lowercase), ignoring case.
+fn has(text: &str, pats: &[&str]) -> bool {
+    pats.iter().all(|p| text.contains(p))
+}
+
+/// Whitespace runs as single spaces (herdr's `\s+`).
+fn squash(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn non_empty<'a, 'b>(lines: &'b [&'a str]) -> impl DoubleEndedIterator<Item = &'a str> + 'b {
+    lines.iter().copied().filter(|l| !l.trim().is_empty())
+}
+
+/// A braille spinner frame as a word of its own in a window title.
+fn spinner_word(title: &str) -> bool {
+    title.split(' ').any(|w| w.chars().count() == 1 && w.chars().all(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(c)))
+}
+
+fn codex_prompt(line: &str) -> bool {
+    line == "›" || line.starts_with("› ")
+}
+
+/// A line that starts a new block of Codex output (a response, an error…).
+fn codex_block(line: &str) -> bool {
+    line.starts_with(['•', '■', '✗', '✓'])
+}
+
+/// Codex's input prompt, when nothing has been printed after it.
+fn codex_current_prompt(lines: &[&str]) -> Option<usize> {
+    let i = lines.iter().rposition(|l| codex_prompt(l))?;
+    (!lines[i + 1..].iter().any(|l| codex_block(l))).then_some(i)
+}
+
+/// `1h 2m 3s`, `12s`: Codex's elapsed timer.
+fn codex_timer(s: &str) -> bool {
+    let words: Vec<&str> = s.split(' ').collect();
+    let unit = |w: &str, units: &str| w.len() > 1 && w[..w.len() - 1].bytes().all(|b| b.is_ascii_digit()) && units.contains(&w[w.len() - 1..]);
+    words.split_last().is_some_and(|(last, rest)| unit(last, "s") && rest.iter().all(|w| unit(w, "hm")))
+}
+
+/// Codex's live status line: `Working (12s • esc to interrupt)`, with an
+/// optional `• ` bullet and `· …` after it.
+fn codex_status_line(line: &str) -> bool {
+    let line = line.strip_prefix(['•', '◦']).filter(|r| r.starts_with([' ', '\t'])).map_or(line, |r| r.trim_start_matches([' ', '\t']));
+    if line.starts_with(|c: char| c.is_whitespace() || "›•◦■✗✓─".contains(c)) || line.starts_with("Reconnect failed — check the endpoint, then relaunch (") {
+        return false;
+    }
+    line.match_indices(" (").any(|(i, _)| {
+        let rest = &line[i + 2..];
+        rest.match_indices(')').any(|(j, _)| {
+            let (inner, after) = (&rest[..j], &rest[j + 1..]);
+            let tail_ok = after.is_empty() || after.starts_with(" · ");
+            let inner_ok = codex_timer(inner)
+                || inner.split_once(" • ").is_some_and(|(t, hint)| codex_timer(t) && hint.strip_suffix(" to interrupt").is_some_and(|h| !h.is_empty()));
+            tail_ok && inner_ok
+        })
+    })
+}
+
+/// Lines Codex leaves under its status line while working: plain text, queued
+/// messages, a prompt with an animated sparkle.
+fn codex_trailer(line: &str) -> bool {
+    let sparkle = |l: &str| l.strip_prefix('›').and_then(|r| r.chars().next()).is_some_and(|c| "⠁⠂⠄⠈⠐⠠⡀⢀".contains(c));
+    let queued = ["Queued follow-up inputs", "Messages to be submitted after next tool call", "Messages to be submitted at end of turn"];
+    !line.starts_with(['•', '◦', '›', '■', '✗', '✓', '─'])
+        || sparkle(line)
+        || line.strip_prefix('•').is_some_and(|r| queued.iter().any(|q| squash(r).starts_with(q)))
+}
+
+/// Codex: the state it reports (OSC 7501) and its title, with herdr's screen
+/// rules for what those miss (its start-up dialogs, approvals and questions).
+pub fn classify_codex(title: &str, lines: &[&str], status: Option<&str>) -> AgentState {
+    if title.to_lowercase().contains("action required") {
+        return AgentState::Blocked;
+    }
+    // Start-up dialogs: trusting the folder, updating.
+    let top: Vec<&str> = non_empty(lines).take(20).collect();
+    let top_l = top.join("\n").to_lowercase();
+    let trust_where = top.first().is_some_and(|l| l.starts_with("> You are in ")) || top_l.contains("folder access");
+    let trust_ask = squash(&top.join("\n")).contains("Do you trust the contents of this directory?")
+        || has(&top_l, &["trust this folder?", "codex can read, edit, and run files here"]) && (top_l.contains("trust and continue") || top_l.contains("enter continue"));
+    let mut bottom: Vec<&str> = non_empty(lines).rev().take(20).collect();
+    bottom.reverse();
+    let bottom_s = squash(&bottom.join("\n"));
+    let bottom_l = bottom_s.to_lowercase();
+    let update = has(&bottom_l, &["update available!", "update now"]) && (bottom_s.contains("Skip until next version") || bottom_s.ends_with("Press enter to continue"))
+        || bottom.iter().any(|l| squash(l).starts_with("Update available ·")) && bottom_s.ends_with("enter continue · esc skip");
+    if trust_where && trust_ask || update {
+        return AgentState::Blocked;
+    }
+    match status {
+        Some("working") => return AgentState::Working,
+        Some("blocked") => return AgentState::Blocked,
+        Some(_) => return AgentState::Idle,
+        None => {}
+    }
+    if spinner_word(title) {
+        return AgentState::Working;
+    }
+    // A live approval or question below the last prompt.
+    let after = lines.iter().rposition(|l| codex_prompt(l)).map_or(lines, |i| &lines[i + 1..]).join("\n").to_lowercase();
+    let strong = ["press enter to confirm or esc to cancel", "enter to submit answer", "enter to submit all", "allow command?"].iter().any(|p| after.contains(p))
+        || has(&after, &["all results", "filesystem only", "plugins"]);
+    if strong {
+        return AgentState::Blocked;
+    }
+    let current = codex_current_prompt(lines);
+    if current.is_none() {
+        let sparkling = lines.iter().rposition(|l| l.starts_with('›')).is_some_and(|i| codex_trailer(lines[i]) && lines[i..].iter().all(|l| codex_trailer(l) || l.is_empty()));
+        let all = lines.join("\n").to_lowercase();
+        let asks = all.contains("[y/n]")
+            || all.contains("yes (y)")
+            || (all.contains("do you want to") || all.contains("would you like to")) && (all.contains("yes") || all.contains('❯'));
+        if asks && !sparkling {
+            return AgentState::Blocked;
+        }
+    }
+    // The status line, with nothing but its trailers after it.
+    let before = current.map_or(lines, |i| &lines[..i]);
+    for line in before.iter().rev().filter(|l| !l.is_empty()) {
+        if codex_status_line(line) {
+            return AgentState::Working;
+        }
+        if !codex_trailer(line) {
+            break;
+        }
+    }
+    AgentState::Idle
+}
+
+/// Gemini CLI: its window title, else its confirmation dialogs and the cancel hint.
+pub fn classify_gemini(title: &str, lines: &[&str]) -> AgentState {
+    let title_l = title.trim().to_lowercase();
+    let all = lines.join("\n").to_lowercase();
+    let confirm = all.contains("│ apply this change")
+        || all.contains("│ allow execution")
+        || all.contains("yes") && ["waiting for user confirmation", "│ do you want to proceed", "do you want to proceed?"].iter().any(|p| all.contains(p))
+        || lines.iter().any(|l| l.trim_start().strip_prefix('❯').is_some_and(|r| r.to_lowercase().contains("yes") || r.to_lowercase().contains("allow")));
+    if title_l.starts_with('✋') || title_l.contains("action required") || all.contains("waiting for user confirmation") || confirm {
+        AgentState::Blocked
+    } else if title_l.starts_with('✦') || title_l.starts_with('⏲') || all.contains("esc to cancel") {
+        AgentState::Working
+    } else {
+        AgentState::Idle
+    }
+}
+
+/// opencode: its permission prompt, else its interrupt hint or progress bar.
+pub fn classify_opencode(lines: &[&str]) -> AgentState {
+    let all = lines.join("\n").to_lowercase();
+    let picker = all.contains("esc dismiss")
+        && ["enter confirm", "enter submit", "enter toggle"].iter().any(|p| all.contains(p))
+        && (all.contains("↑↓ select") || all.contains("⇆ tab"));
+    if all.contains("△ permission required") || all.contains("permission required") || picker {
+        return AgentState::Blocked;
+    }
+    let interrupt = ["esc to interrupt", "ctrl+c to interrupt", "press esc to interrupt", "esc interrupt", "esc again to interrupt"].iter().any(|p| all.contains(p));
+    let progress = lines.iter().any(|l| {
+        let mut run = 0;
+        l.chars().any(|c| {
+            run = if c == '■' || c == '⬝' { run + 1 } else { 0 };
+            run >= 4
+        })
+    });
+    if interrupt || progress {
+        AgentState::Working
+    } else {
+        AgentState::Idle
     }
 }
 
@@ -336,6 +485,50 @@ mod tests {
         assert_eq!(classify("codex", "", &approval, None, false), AgentState::Blocked);
         assert_eq!(classify("codex", "[ ! ] Action Required", &lines("› "), None, false), AgentState::Blocked);
         assert_eq!(classify("codex", "", &lines("› "), None, true), AgentState::Idle, "output alone isn't work");
+    }
+
+    #[test]
+    fn codex_screens() {
+        let codex = |title: &str, screen: &str| classify("codex", title, &lines(screen), None, false);
+        // Start-up dialogs block even when it reports idle.
+        let trust = "> You are in /w/app\n\n  Do you trust the contents of this\n  directory? Working with untrusted contents\n› 1. Yes, continue\n  2. No, quit";
+        assert_eq!(classify("codex", "", &lines(trust), Some("idle"), false), AgentState::Blocked);
+        let folder = "  Folder access\n  Trust this folder?\n  Codex can read, edit, and run files here.\n  enter continue · esc quit";
+        assert_eq!(codex("", folder), AgentState::Blocked);
+        let update = "  ✨ Update available! 0.150.0 -> 0.160.0\n› 1. Update now\n  2. Skip\n  3. Skip until next version\n  Press enter to continue";
+        assert_eq!(codex("", update), AgentState::Blocked);
+        let picker = "  Update available · 0.170.0\n  Release notes\n  enter continue · esc skip";
+        assert_eq!(codex("", picker), AgentState::Blocked);
+        // Questions and approvals after the prompt.
+        assert_eq!(codex("", "› fix it\n\n  Which database?\n  1. sqlite\n  enter to submit answer"), AgentState::Blocked);
+        assert_eq!(codex("", "› ship it\n  allow command?\n  $ git push"), AgentState::Blocked);
+        // A yes/no question with no prompt under it.
+        assert_eq!(codex("", "• Ran tests\n  Do you want to commit? [y/n]"), AgentState::Blocked);
+        // The title spinner.
+        assert_eq!(codex("⠹ app", "› "), AgentState::Working);
+        assert_eq!(codex("app ⠹⠹", "› "), AgentState::Idle, "a lone frame only");
+        // The live status line, also with queued input and a sparkle prompt under it.
+        assert_eq!(codex("", "• Working (1m 05s • esc to interrupt)\n› "), AgentState::Working);
+        assert_eq!(codex("", "• Exploring (8s)\n• Queued follow-up inputs\n  also fix the tests\n›⠂ "), AgentState::Working);
+        assert_eq!(codex("", "◦ Thinking (2h 1m 3s • ctrl+c to interrupt) · 3 background tasks\n\n› "), AgentState::Working);
+        // A response after it, or a failed reconnect: done.
+        assert_eq!(codex("", "• Working (12s • esc to interrupt)\n• Done, edited 2 files\n› "), AgentState::Idle);
+        assert_eq!(codex("", "• Reconnect failed — check the endpoint, then relaunch (30s)\n› "), AgentState::Idle);
+        assert_eq!(codex("", "• Explained the code (see notes)\n› "), AgentState::Idle, "parentheses aren't a timer");
+    }
+
+    #[test]
+    fn gemini_and_opencode_screens() {
+        let gemini = |screen: &str| classify("gemini", "Gemini CLI (app)", &lines(screen), None, false);
+        assert_eq!(gemini("╭──\n│ Apply this change?\n│ ● 1. Yes, allow once"), AgentState::Blocked);
+        assert_eq!(gemini("│ Allow execution of: 'rm -rf dist'?"), AgentState::Blocked);
+        assert_eq!(gemini("  ❯ 1. Allow once\n    2. No"), AgentState::Blocked);
+        assert_eq!(gemini("> Type your message"), AgentState::Idle);
+        let opencode = |screen: &str| classify("opencode", "OC | fix", &lines(screen), None, false);
+        assert_eq!(opencode("  Allow edit to src/a.ts?\n  ↑↓ select  enter confirm  esc dismiss"), AgentState::Blocked);
+        assert_eq!(opencode("  ■■■■⬝⬝⬝⬝  Build"), AgentState::Working);
+        assert_eq!(opencode("  ctrl+c to interrupt"), AgentState::Working);
+        assert_eq!(opencode("  ■■ two"), AgentState::Idle);
     }
 
     #[test]
