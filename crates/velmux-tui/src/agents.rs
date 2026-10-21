@@ -34,9 +34,13 @@ pub enum Agent {
     Letta,
     Mastracode,
     Antigravity,
+    Kilo,
+    Pi,
+    Omp,
+    Hermes,
 }
 
-pub const ALL: [Agent; 15] = [
+pub const ALL: [Agent; 19] = [
     Agent::Claude,
     Agent::Codex,
     Agent::Gemini,
@@ -52,6 +56,10 @@ pub const ALL: [Agent; 15] = [
     Agent::Letta,
     Agent::Mastracode,
     Agent::Antigravity,
+    Agent::Kilo,
+    Agent::Pi,
+    Agent::Omp,
+    Agent::Hermes,
 ];
 
 impl Agent {
@@ -72,6 +80,10 @@ impl Agent {
             Agent::Letta => "letta",
             Agent::Mastracode => "mastracode",
             Agent::Antigravity => "agy",
+            Agent::Kilo => "kilo",
+            Agent::Pi => "pi",
+            Agent::Omp => "omp",
+            Agent::Hermes => "hermes",
         }
     }
 
@@ -92,6 +104,10 @@ impl Agent {
             Agent::Letta => "Letta Code",
             Agent::Mastracode => "Mastra Code",
             Agent::Antigravity => "Antigravity CLI",
+            Agent::Kilo => "Kilo Code",
+            Agent::Pi => "pi",
+            Agent::Omp => "oh-my-pi",
+            Agent::Hermes => "Hermes Agent",
         }
     }
 
@@ -105,7 +121,9 @@ impl Agent {
         let id_q = quote(id);
         match self {
             Agent::Copilot => quote(&format!("--resume={id}")),
-            Agent::Kimi => format!("--session {id_q}"),
+            // pi's ref is its session file (or an id); omp takes either too.
+            Agent::Kimi | Agent::Kilo | Agent::Pi => format!("--session {id_q}"),
+            Agent::Omp => quote(&format!("--resume={id}")),
             Agent::Mastracode => format!("--thread {id_q}"),
             Agent::Antigravity => format!("--conversation {id_q}"),
             // Letta's default conversation belongs to an agent.
@@ -377,6 +395,8 @@ pub fn session_exists(agent: Agent, id: &str, claude_dir: &Path) -> bool {
         }
         // Without sqlite3 to look, try resuming: opencode says if it's gone.
         Agent::Opencode => sqlite(&opencode_db(), &format!("select count(*) from session where id = {}", sql_text(id))).is_none_or(|n| n != "0"),
+        // pi and omp resume from a session file.
+        Agent::Pi | Agent::Omp if id.starts_with('/') => Path::new(id).is_file(),
         // No record velmux can read: resuming says if it's gone.
         _ => true,
     }
@@ -430,6 +450,9 @@ mod tests {
         assert_eq!(launch(Agent::Cursor, "cursor-agent", Some("c1"), &ctx()).command, "cursor-agent --resume 'c1'");
         assert_eq!(launch(Agent::Droid, "droid", None, &ctx()), Launch { command: "droid".into(), session: None, env: vec![] });
         assert_eq!(parse_ref("agy:conv-1"), (Agent::Antigravity, "conv-1"));
+        assert_eq!(parse_ref("pi:/home/me/.pi/agent/sessions/a.jsonl"), (Agent::Pi, "/home/me/.pi/agent/sessions/a.jsonl"));
+        assert_eq!(launch(Agent::Omp, "omp", Some("/s/a.jsonl"), &ctx()).command, "omp '--resume=/s/a.jsonl'");
+        assert_eq!(launch(Agent::Hermes, "hermes", Some("h1"), &ctx()).command, "hermes --resume 'h1'");
 
         let claude = launch(Agent::Claude, "claude", Some("id1"), &ctx());
         assert_eq!(claude.command, "claude --add-dir '/w/.pools/app' --append-system-prompt 'plan here; don'\\''t edit' --resume id1");

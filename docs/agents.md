@@ -20,14 +20,17 @@ installed.
 ## More agents, resumed through their hooks
 
 velmux also resumes GitHub Copilot CLI, Cursor Agent, Droid, Devin CLI, Qwen
-Code, Grok CLI, Qoder CLI, Kimi Code, Letta Code, Mastra Code and Antigravity
-CLI. They choose their own session ids, so `velmux skill install` gives each
+Code, Grok CLI, Qoder CLI, Kimi Code, Letta Code, Mastra Code, Antigravity
+CLI, Kilo Code, pi, oh-my-pi and Hermes Agent. They choose their own session ids, so `velmux skill install` gives each
 one that's set up on your machine a session-start hook (`velmux agent-hook`)
 that tells velmux which session the pane is in; after a restart it's brought
 back with that agent's resume command (`--resume <id>`, `--session <id>`…).
 The hook is added beside your own hooks in the agent's settings
 (`~/.factory/settings.json`, `~/.copilot/settings.json`, `~/.cursor/hooks.json`,
-`~/.kimi-code/config.toml`…), does nothing outside velmux, and
+`~/.kimi-code/config.toml`…); Kilo, pi, oh-my-pi and Hermes, which take
+plugins instead, get a small one of velmux's own (`~/.config/kilo/plugin/`,
+`~/.pi/agent/extensions/`, `~/.omp/agent/extensions/`, `~/.hermes/plugins/`,
+enabled in Hermes's `config.yaml`). Either way it does nothing outside velmux, and
 `velmux skill uninstall` takes it out. Start them from **new conversation
 with…** or by hand in a pane; `velmux doctor` lists any that are set up but
 not hooked yet.

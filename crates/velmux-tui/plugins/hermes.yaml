@@ -1,0 +1,3 @@
+name: velmux-session
+version: "1"
+description: Tell velmux which session this is, so it's resumed after a restart

@@ -1,6 +1,8 @@
 //! Session-start hooks for the agents velmux can't otherwise follow: each
 //! runs `velmux agent-hook <agent>` when a session starts, which tells the
 //! server which session the pane's agent is in, so restore can resume it.
+//! Agents with plugins instead of hooks (Kilo, pi, omp, Hermes) get a small
+//! plugin of velmux's own (`plugins/`) that does the same.
 //!
 //! Where each agent keeps its hooks, and their shapes, are adapted from
 //! herdr's integrations (src/integration, Apache-2.0; see NOTICE). velmux's
@@ -27,7 +29,8 @@ pub fn session_id(agent: Agent, input: &str) -> Option<String> {
     if agent == Agent::Letta && id == "default" {
         return v["agent_id"].as_str().filter(|a| !a.is_empty()).map(|a| format!("default:{a}"));
     }
-    (id.len() <= 512 && !id.chars().any(char::is_control)).then(|| id.to_string())
+    // pi and omp report their session file's path.
+    (id.len() <= 4096 && !id.chars().any(char::is_control)).then(|| id.to_string())
 }
 
 /// What a hook must print, for agents that read its output: Antigravity
@@ -84,22 +87,149 @@ fn target(agent: Agent) -> Option<(PathBuf, PathBuf, Shape)> {
         Agent::Mastracode => (home().join(".mastracode"), "hooks.json", Shape::Flat),
         Agent::Antigravity => (env_dir("ANTIGRAVITY_CLI_CONFIG_DIR", ".gemini/config"), "hooks.json", Shape::Block),
         Agent::Kimi => (env_dir("KIMI_CODE_HOME", ".kimi-code"), "config.toml", Shape::Toml),
-        Agent::Claude | Agent::Codex | Agent::Gemini | Agent::Opencode => return None,
+        _ => return None,
     };
     let file = dir.join(file);
     Some((dir, file, shape))
 }
 
-/// The hook's command line: velmux by the path you run it as (on `PATH`, so a
-/// Homebrew upgrade doesn't strand it), else this binary.
-pub fn command(agent: Agent) -> String {
+/// velmux by the path you run it as (on `PATH`, so a Homebrew upgrade
+/// doesn't strand a hook), else this binary.
+fn exe() -> PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let exe = std::env::split_paths(&path)
+    std::env::split_paths(&path)
         .map(|d| d.join("velmux"))
         .find(|p| p.is_file())
         .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| "velmux".into());
-    format!("{} agent-hook {}", crate::agents::quote(&exe.display().to_string()), agent.name())
+        .unwrap_or_else(|| "velmux".into())
+}
+
+/// The hook's command line.
+pub fn command(agent: Agent) -> String {
+    format!("{} agent-hook {}", crate::agents::quote(&exe().display().to_string()), agent.name())
+}
+
+const KILO_PLUGIN: &str = include_str!("../plugins/kilo.js");
+const PI_EXTENSION: &str = include_str!("../plugins/pi.ts");
+const HERMES_PLUGIN: &str = include_str!("../plugins/hermes.py");
+const HERMES_MANIFEST: &str = include_str!("../plugins/hermes.yaml");
+const HERMES_NAME: &str = "velmux-session";
+
+/// pi's agent folder (`PI_CODING_AGENT_DIR`, else `~/.pi/agent`) and omp's
+/// (the same variable, else `~/<PI_CONFIG_DIR or .omp>/agent`).
+fn pi_dir(agent: Agent) -> PathBuf {
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    match agent {
+        Agent::Omp => home().join(std::env::var_os("PI_CONFIG_DIR").filter(|v| !v.is_empty()).unwrap_or_else(|| ".omp".into())).join("agent"),
+        _ => home().join(".pi/agent"),
+    }
+}
+
+/// For an agent that takes a plugin: its folder (it's set up when that
+/// exists), and velmux's plugin files with their contents.
+fn plugin(agent: Agent) -> Option<(PathBuf, Vec<(PathBuf, String)>)> {
+    let fill = |template: &str| template.replace("__VELMUX__", &serde_json::to_string(&exe().display().to_string()).unwrap()).replace("__AGENT__", agent.name());
+    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| home().join(".config"));
+    match agent {
+        Agent::Kilo => {
+            let dir = config.join("kilo");
+            Some((dir.clone(), vec![(dir.join("plugin/velmux-session.js"), fill(KILO_PLUGIN))]))
+        }
+        Agent::Pi | Agent::Omp => {
+            let dir = pi_dir(agent);
+            // One folder for both (PI_CODING_AGENT_DIR): it's pi's.
+            if agent == Agent::Omp && dir == pi_dir(Agent::Pi) {
+                return None;
+            }
+            Some((dir.clone(), vec![(dir.join("extensions/velmux-session.ts"), fill(PI_EXTENSION))]))
+        }
+        Agent::Hermes => {
+            let dir = env_dir("HERMES_HOME", ".hermes");
+            let plugin = dir.join("plugins").join(HERMES_NAME);
+            Some((dir, vec![(plugin.join("__init__.py"), fill(HERMES_PLUGIN)), (plugin.join("plugin.yaml"), HERMES_MANIFEST.to_string())]))
+        }
+        _ => None,
+    }
+}
+
+/// Hermes's `config.yaml` with velmux's plugin enabled (in `plugins.enabled`,
+/// or a flat `plugins` list), or taken out; `None` when its `plugins` setting
+/// is laid out some other way (it's left alone).
+fn hermes_config(text: &str, install: bool) -> Option<String> {
+    let item = |indent: usize| format!("{}- {HERMES_NAME}", " ".repeat(indent));
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let listed = lines.iter().position(|l| l.trim() == format!("- {HERMES_NAME}"));
+    if !install {
+        let Some(i) = listed else { return Some(text.to_string()) };
+        lines.remove(i);
+        let mut out = lines.join("\n") + "\n";
+        // The block velmux added, now empty.
+        if let Some(rest) = out.strip_suffix("plugins:\n  enabled:\n") {
+            out = rest.to_string();
+        }
+        return Some(if out.trim().is_empty() { String::new() } else { out });
+    }
+    if listed.is_some() {
+        return Some(text.to_string());
+    }
+    match lines.iter().position(|l| l.trim_end() == "plugins:") {
+        None if lines.iter().any(|l| l.starts_with("plugins:")) => None,
+        None => {
+            let mut out = text.to_string();
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            Some(out + &format!("plugins:\n  enabled:\n{}\n", item(4)))
+        }
+        Some(p) => {
+            let child = lines.get(p + 1).filter(|l| l.starts_with(' '))?.clone();
+            let indent = child.len() - child.trim_start().len();
+            if child.trim_start().starts_with("- ") {
+                lines.insert(p + 1, item(indent));
+            } else {
+                let e = (p + 1..lines.len()).take_while(|&i| lines[i].starts_with(' ') || lines[i].trim().is_empty()).find(|&i| lines[i].trim_end() == format!("{}enabled:", " ".repeat(indent)))?;
+                let next = lines.get(e + 1).filter(|l| l.trim_start().starts_with("- "));
+                let at = next.map_or(indent + 2, |l| l.len() - l.trim_start().len());
+                lines.insert(e + 1, item(at));
+            }
+            Some(lines.join("\n") + "\n")
+        }
+    }
+}
+
+/// Put in (or take out) velmux's plugin for `agent`; whether anything changed.
+fn sync_plugin(agent: Agent, dir: &Path, files: &[(PathBuf, String)], install: bool) -> Result<bool> {
+    let mut changed = false;
+    for (file, contents) in files {
+        if install {
+            if std::fs::read_to_string(file).ok().as_deref() != Some(contents) {
+                std::fs::create_dir_all(file.parent().unwrap())?;
+                std::fs::write(file, contents).with_context(|| format!("writing {}", file.display()))?;
+                changed = true;
+            }
+        } else if file.exists() {
+            std::fs::remove_file(file).with_context(|| format!("removing {}", file.display()))?;
+            changed = true;
+        }
+    }
+    if agent == Agent::Hermes {
+        if !install {
+            let _ = std::fs::remove_dir(dir.join("plugins").join(HERMES_NAME));
+        }
+        let config = dir.join("config.yaml");
+        let text = std::fs::read_to_string(&config).unwrap_or_default();
+        match hermes_config(&text, install) {
+            Some(new) if new != text => {
+                std::fs::write(&config, new).with_context(|| format!("writing {}", config.display()))?;
+                changed = true;
+            }
+            Some(_) => {}
+            None => anyhow::bail!("couldn't enable the plugin in {}: add `{HERMES_NAME}` to plugins.enabled by hand", config.display()),
+        }
+    }
+    Ok(changed)
 }
 
 fn ours(entry: &Value) -> bool {
@@ -189,6 +319,16 @@ fn edit_toml(text: &str, command: &str, install: bool) -> String {
 pub fn sync(install: bool) -> (Vec<(&'static str, PathBuf)>, Vec<String>) {
     let (mut changed, mut problems) = (Vec::new(), Vec::new());
     for agent in crate::agents::ALL.into_iter().filter(|a| a.hooked()) {
+        if let Some((dir, files)) = plugin(agent) {
+            if dir.is_dir() {
+                match sync_plugin(agent, &dir, &files, install) {
+                    Ok(true) => changed.push((agent.label(), files[0].0.clone())),
+                    Ok(false) => {}
+                    Err(e) => problems.push(format!("{}: {e:#}", agent.label())),
+                }
+            }
+            continue;
+        }
         let Some((dir, file, shape)) = target(agent) else { continue };
         if !dir.is_dir() {
             continue;
@@ -241,6 +381,9 @@ pub fn missing() -> Vec<&'static str> {
         .into_iter()
         .filter(|a| a.hooked())
         .filter_map(|a| {
+            if let Some((dir, files)) = plugin(a) {
+                return (dir.is_dir() && !files[0].0.exists()).then_some(a.label());
+            }
             let (dir, file, _) = target(a)?;
             let has = std::fs::read_to_string(&file).is_ok_and(|t| t.contains(" agent-hook "));
             (dir.is_dir() && !has).then_some(a.label())
@@ -293,6 +436,31 @@ mod tests {
         let block = edit_json(&edit_json("{}", Shape::Block, CMD, true).unwrap(), Shape::Block, CMD, false).unwrap();
         assert_eq!(block.trim(), "{}");
         assert_eq!(edit_json("// mine\n{}", Shape::Direct, CMD, true), None);
+    }
+
+    #[test]
+    fn enables_its_hermes_plugin_beside_yours() {
+        assert_eq!(hermes_config("", true).unwrap(), "plugins:\n  enabled:\n    - velmux-session\n");
+        assert_eq!(hermes_config("model: x\n", true).unwrap(), "model: x\nplugins:\n  enabled:\n    - velmux-session\n");
+        let mine = "plugins:\n  enabled:\n    - other\nmodel: x\n";
+        let added = hermes_config(mine, true).unwrap();
+        assert_eq!(added, "plugins:\n  enabled:\n    - velmux-session\n    - other\nmodel: x\n");
+        assert_eq!(hermes_config(&added, true).unwrap(), added);
+        assert_eq!(hermes_config(&added, false).unwrap(), mine);
+        assert_eq!(hermes_config("plugins:\n  - other\n", true).unwrap(), "plugins:\n  - velmux-session\n  - other\n");
+        assert_eq!(hermes_config("plugins: [other]\n", true), None, "a flow list: by hand");
+        assert_eq!(hermes_config(&hermes_config("model: x\n", true).unwrap(), false).unwrap(), "model: x\n");
+    }
+
+    #[test]
+    fn fills_in_its_plugins() {
+        let (_, files) = plugin(Agent::Omp).unwrap_or_default();
+        if let Some((path, text)) = files.first() {
+            assert!(path.ends_with("extensions/velmux-session.ts"));
+            assert!(text.contains("const AGENT = \"omp\";") && !text.contains("__VELMUX__"));
+        }
+        let (_, files) = plugin(Agent::Hermes).unwrap();
+        assert!(files[0].1.contains("_VELMUX = \"") && files[1].0.ends_with("velmux-session/plugin.yaml"));
     }
 
     #[test]

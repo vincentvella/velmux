@@ -15,7 +15,7 @@ pub enum AgentState {
 
 const AGENTS: &[&str] = &[
     "claude", "codex", "opencode", "gemini", "cursor-agent", "aider", "copilot", "droid", "devin", "qwen", "grok", "qodercli", "kimi", "letta",
-    "mastracode", "agy",
+    "mastracode", "agy", "kilo", "pi", "omp", "hermes",
 ];
 
 /// The known agent running in the pty's foreground process group, if any.
@@ -47,6 +47,11 @@ fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
         let args = process_args(pid)?;
         return args.iter().skip(1).take(3).find_map(|a| script_agent(&a.to_lowercase()));
     }
+    // Hermes runs as a Python script (`python …/bin/hermes`).
+    if runtime.starts_with("python") {
+        let args = process_args(pid)?;
+        return args.iter().skip(1).take(3).any(|a| a.ends_with("/hermes")).then_some("hermes");
+    }
     None
 }
 
@@ -57,6 +62,8 @@ const SCRIPTS: &[(&str, &str)] = &[
     ("@moonshot-ai/kimi-code", "kimi"),
     ("@letta-ai/letta-code", "letta"),
     ("/mastracode/dist/", "mastracode"),
+    ("@oh-my-pi/pi-coding-agent", "omp"),
+    ("/pi-coding-agent/", "pi"),
 ];
 
 /// The agent a Node script path belongs to.
