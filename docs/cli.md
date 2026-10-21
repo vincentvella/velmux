@@ -27,8 +27,10 @@ velmux restart                   # restart in place: panes keep running
 velmux stop                      # stop it: everything comes back next time
 
 # Setup
+velmux doctor                    # check git, your agent, the skill, gh, your terminal, this repo's pool
 velmux skill install [--project] # the Claude Code skill (rerun to update; skill uninstall)
-velmux keys [--ghostty | --test] # key bindings / Ghostty config / what your terminal sends
+velmux keys [--ghostty | --test] # key bindings / Ghostty config lines / what your terminal sends
+velmux keys --ghostty --install  # write the Ghostty lines into its config
 velmux import-herdr              # bring over a herdr session
 ```
 

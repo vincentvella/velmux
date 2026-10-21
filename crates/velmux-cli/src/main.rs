@@ -109,7 +109,14 @@ enum Cmd {
         /// Show what each key press sends and which binding it hits.
         #[arg(long, conflicts_with = "ghostty")]
         test: bool,
+        /// Write the Ghostty keybinds into Ghostty's config (replacing velmux's
+        /// block if it's there).
+        #[arg(long, conflicts_with = "test")]
+        install: bool,
     },
+    /// Check velmux's setup (git, your agent, the Claude skill, gh, your
+    /// terminal, this repo's pool) and say how to fix what isn't right.
+    Doctor,
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
     Server,
@@ -136,7 +143,8 @@ fn run() -> Result<()> {
         Some(Cmd::Stop) => return velmux_tui::stop_server(),
         Some(Cmd::Debug) => return velmux_tui::debug_server(),
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
-        Some(Cmd::Keys { ghostty, .. }) => return velmux_tui::print_keys(ghostty),
+        Some(Cmd::Keys { ghostty, install, .. }) => return velmux_tui::print_keys(ghostty, install),
+        Some(Cmd::Doctor) => return doctor(&cwd),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
@@ -252,7 +260,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor => unreachable!(),
     }
     Ok(())
 }
@@ -283,31 +291,21 @@ enum SkillCmd {
     Show,
 }
 
-const SKILL: &str = include_str!("skill.md");
+use velmux_tui::skill as skills;
 
 fn skill_path(claude_dir: &std::path::Path) -> std::path::PathBuf {
-    claude_dir.join("skills/velmux/SKILL.md")
+    skills::user_path(claude_dir)
 }
 
 fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
     let target = |project: bool| -> Result<std::path::PathBuf> {
-        Ok(if project {
-            velmux_pool::git::base_of(cwd)?.join(".claude/skills/velmux/SKILL.md")
-        } else {
-            skill_path(&Env::from_process()?.claude_dir)
-        })
+        Ok(if project { skills::project_path(&velmux_pool::git::base_of(cwd)?) } else { skill_path(&Env::from_process()?.claude_dir) })
     };
     match action {
-        SkillCmd::Show => print!("{SKILL}"),
+        SkillCmd::Show => print!("{}", skills::SKILL),
         SkillCmd::Install { project } => {
             let path = target(project)?;
-            let verb = match std::fs::read_to_string(&path) {
-                Ok(old) if old == SKILL => "already up to date:",
-                Ok(_) => "updated",
-                Err(_) => "installed",
-            };
-            std::fs::create_dir_all(path.parent().unwrap()).with_context(|| format!("creating {}", path.display()))?;
-            std::fs::write(&path, SKILL).with_context(|| format!("writing {}", path.display()))?;
+            let verb = skills::install(&path)?;
             println!("{verb} {}", path.display());
             println!("new Claude sessions pick it up; it's used whenever Claude runs in velmux");
         }
@@ -322,6 +320,81 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
                 Err(e) => return Err(e.into()),
             }
         }
+    }
+    Ok(())
+}
+
+/// `velmux doctor`: each check as `✓` / `✗` (with how to fix it) / `·` (optional).
+fn doctor(cwd: &std::path::Path) -> Result<()> {
+    let mut failed = 0;
+    let mut line = |ok: Option<bool>, what: &str, fix: &str| {
+        let mark = match ok {
+            Some(true) => "✓",
+            Some(false) => {
+                failed += 1;
+                "✗"
+            }
+            None => "·",
+        };
+        println!("{mark} {what}");
+        if !fix.is_empty() && ok != Some(true) {
+            println!("    {fix}");
+        }
+    };
+    let run = |cmd: &str, args: &[&str]| Command::new(cmd).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let on_path = |prog: &str| prog.contains('/') && std::path::Path::new(prog).exists() || std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).any(|d| d.join(prog).is_file());
+
+    let env = Env::from_process()?;
+    let base = velmux_pool::git::base_of(cwd).ok();
+    match velmux_pool::Config::load(&env, base.as_deref().unwrap_or(cwd)) {
+        Ok(cfg) => {
+            line(Some(true), &format!("config ({})", env.global_config.display()), "");
+            match run("git", &["--version"]) {
+                Some(v) => line(Some(true), &v, ""),
+                None => line(Some(false), "git not found", "install git"),
+            }
+            let agent = cfg.agent.split_whitespace().next().unwrap_or("claude").to_string();
+            if on_path(&agent) {
+                line(Some(true), &format!("agent `{agent}` is on PATH"), "");
+            } else {
+                line(Some(false), &format!("agent `{agent}` isn't on PATH"), "install Claude Code (https://claude.com/claude-code), or set `agent` in the config");
+            }
+        }
+        Err(e) => line(Some(false), &format!("config doesn't parse: {e:#}"), "fix it, or run `velmux` and press <prefix> s to edit it"),
+    }
+    if skills::installed(&env.claude_dir, base.as_deref()) {
+        line(Some(true), "Claude skill installed", "");
+    } else {
+        line(Some(false), "Claude skill not installed", "velmux skill install (teaches Claude to claim and release slots)");
+    }
+    if !velmux_pool::gh::available() {
+        line(None, "gh not installed (optional: pull request status)", "brew install gh && gh auth login");
+    } else if run("gh", &["auth", "status"]).is_some() {
+        line(Some(true), "gh signed in", "");
+    } else {
+        line(None, "gh isn't signed in (optional: pull request status)", "gh auth login");
+    }
+    match velmux_tui::terminal_check() {
+        (true, true) => line(Some(true), "Ghostty sends velmux's ⌘ shortcuts", ""),
+        (true, false) => line(None, "Ghostty isn't set up for the ⌘ shortcuts (optional)", "velmux keys --ghostty --install"),
+        (false, _) => line(None, "not in Ghostty: ⌘ shortcuts need your terminal to send them (optional)", "velmux keys --test shows what it sends; the prefix keys always work"),
+    }
+    if let Some(base) = &base {
+        match Pool::discover(env.clone(), base).and_then(|p| p.status().map(|s| (p, s))) {
+            Ok((pool, slots)) if slots.is_empty() => line(None, &format!("{}: no slots yet (made on the first claim)", pool.name), "velmux init"),
+            Ok((pool, slots)) => {
+                let missing: Vec<&str> = slots.iter().filter(|s| !s.path.exists()).map(|s| s.id.as_str()).collect();
+                if missing.is_empty() {
+                    line(Some(true), &format!("{}: {} slots in {}", pool.name, slots.len(), pool.dir.display()), "");
+                } else {
+                    line(Some(false), &format!("{}: missing slots {}", pool.name, missing.join(", ")), "velmux gc");
+                }
+            }
+            Err(e) => line(Some(false), &format!("this repo's pool: {e:#}"), ""),
+        }
+    }
+    if failed > 0 {
+        std::process::exit(1);
     }
     Ok(())
 }

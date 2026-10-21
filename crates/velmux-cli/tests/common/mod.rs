@@ -241,6 +241,14 @@ impl Ui {
     }
 
 
+    pub fn wait_gone_text(&self, needle: &str) {
+        let start = Instant::now();
+        while self.screen().contains(needle) {
+            assert!(start.elapsed() < WAIT, "{needle:?} never went away; screen:\n{}", self.screen());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Screen position (0-based col, row) of the first `needle`.
     pub fn find(&self, needle: &str) -> Option<(u16, u16)> {
         let p = self.parser.lock().unwrap();

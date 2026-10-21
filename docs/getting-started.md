@@ -44,7 +44,9 @@ velmux
 ```
 
 This opens velmux (starting its background server) with your repo in the
-sidebar. Its pool of slots is created the first time one is claimed (or run
+sidebar. (Run it anywhere else and you get a welcome screen that adds one.)
+Until you're set up, the empty screens list what's left (installing the Claude
+skill, Ghostty's ⌘ keys), a key each, and `velmux doctor` checks everything. Its pool of slots is created the first time one is claimed (or run
 `velmux init`).
 
 The prefix key is `ctrl+b` (set `prefix = "C-a"` or anything else in the
@@ -77,10 +79,10 @@ to any place, `⌘1`–`9` places, `⌃1`–`9` tabs, `⌘⇧F` find a conversat
 more. Your terminal has to be told to send them:
 
 ```sh
-velmux keys --ghostty >> ~/.config/ghostty/config
+velmux keys --ghostty --install
 ```
 
-Then reload Ghostty. `velmux keys` lists every binding;
+(or press `g` on velmux's welcome screen), then reload Ghostty's config (`⌘⇧,`). `velmux keys` lists every binding;
 [Using velmux](using-velmux.md#keys) has the full table.
 
 ## Next

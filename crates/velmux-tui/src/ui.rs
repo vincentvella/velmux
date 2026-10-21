@@ -75,6 +75,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         ("find conversation…", FindSession),
         ("rename tab", RenameTab),
         ("theme…", ThemePicker),
+        ("check setup (doctor)", Doctor),
         ("settings", Settings),
         ("restart server", RestartServer),
         ("detach", Detach),
@@ -900,38 +901,147 @@ fn draw_header(app: &App, body: Rect, buf: &mut Buffer) {
     }
 }
 
-/// A place with no panes: what it is, and the keys to start something or remove it.
-fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
-    let t = &app.theme;
-    let key = |a: crate::keys::Action| app.keymap.hint(a, &app.prefix.short).unwrap_or_default();
+/// One thing to do from an empty screen: press its key (no prefix needed,
+/// there's no pane to take it) or click it.
+pub struct EmptyItem {
+    pub key: char,
+    pub label: String,
+    /// Its usual shortcut, shown dimmed.
+    pub hint: String,
+    pub action: crate::keys::Action,
+}
+
+/// What an empty screen says and offers: (title, lines about it, actions,
+/// setup steps still to do).
+pub fn empty_screen(app: &App, loc: Option<&Loc>) -> (String, Vec<&'static str>, Vec<EmptyItem>, Vec<EmptyItem>) {
     use crate::keys::Action as A;
-    let (title, what) = match loc {
-        Some(l) if app.projects[l.project].is_unclassified() => (app.loc_name(l), "a scratch session"),
-        Some(l) if l.slot.is_some() => (app.loc_name(l), "a claimed slot"),
-        Some(l) => (app.loc_name(l), "the repo's base checkout"),
-        None => ("velmux".to_string(), "run velmux inside a git repo to add it"),
+    let item = |key: char, label: &str, action: A| EmptyItem {
+        key,
+        label: label.to_string(),
+        hint: app.keymap.hint(action, &app.prefix.short).unwrap_or_default(),
+        action,
     };
-    let mut lines: Vec<(String, String)> = Vec::new();
-    if loc.is_some() {
-        lines.push((key(A::AgentBase), "new Claude conversation".into()));
-        lines.push((key(A::NewShell), "shell here".into()));
-        lines.push((key(A::LocationPicker), "go somewhere else".into()));
-        let remove = match loc {
-            Some(l) if l.slot.is_some() && !app.projects[l.project].is_unclassified() => "release this slot",
-            _ => "remove this place",
-        };
-        lines.push((key(A::RemovePlace), remove.into()));
+    let (title, about, items) = match loc {
+        None => (
+            "Welcome to velmux".to_string(),
+            vec![
+                "Run many coding agents at once, each on its own warm git worktree.",
+                "Add a repo: agents plan in its checkout, then claim a slot (a",
+                "worktree with its dependencies already installed) to work in.",
+            ],
+            vec![item('n', "add a repo", A::NewSpace), item('s', "start a scratch session", A::NewSession), item('?', "every key", A::Help)],
+        ),
+        Some(l) if app.projects[l.project].is_unclassified() => (
+            app.loc_name(l),
+            vec!["a scratch session"],
+            vec![
+                item('a', "Claude here", A::AgentHere),
+                item('c', "shell here", A::NewShell),
+                item('w', "go somewhere else", A::LocationPicker),
+                item('x', "remove this session", A::RemovePlace),
+            ],
+        ),
+        Some(l) if l.slot.is_some() => (
+            app.loc_name(l),
+            vec!["a claimed slot"],
+            vec![
+                item('a', "Claude in this slot", A::AgentHere),
+                item('c', "shell here", A::NewShell),
+                item('w', "go somewhere else", A::LocationPicker),
+                item('x', "release this slot", A::RemovePlace),
+            ],
+        ),
+        Some(l) => (
+            app.loc_name(l),
+            vec!["the repo's checkout: agents plan here, then claim a slot to work in"],
+            vec![
+                item('a', "new Claude conversation", A::AgentBase),
+                item('n', "claim a slot yourself", A::ClaimSlot),
+                item('c', "shell here", A::NewShell),
+                item('w', "go somewhere else", A::LocationPicker),
+                item('x', "remove this repo from velmux", A::RemovePlace),
+            ],
+        ),
+    };
+    let base = loc.and_then(|l| app.projects[l.project].base());
+    let mut setup = Vec::new();
+    if !crate::skill::installed(&app.claude_dir, base) {
+        setup.push(item('k', "teach Claude to work in velmux (installs a skill)", A::InstallSkill));
     }
-    let height = 3 + lines.len() as u16;
-    let width = 44.min(body.width.saturating_sub(4));
+    if crate::ghostty::detected() && !crate::ghostty::configured() {
+        setup.push(item('g', "set up the ⌘ shortcuts in Ghostty", A::SetupGhostty));
+    }
+    if !setup.is_empty() || loc.is_none() {
+        setup.push(item('d', "check your setup", A::Doctor));
+    }
+    (title, about, items, setup)
+}
+
+/// Where an empty screen's parts go.
+struct EmptyLayout {
+    area: Rect,
+    /// Each item with its row.
+    rows: Vec<(u16, EmptyItem)>,
+    title: String,
+    about: Vec<&'static str>,
+    /// The "get set up" heading's row, when there's setup left.
+    setup_title: Option<u16>,
+}
+
+/// The empty screen's layout: where each part goes, and each item's row.
+fn empty_layout(app: &App, loc: Option<&Loc>, body: Rect) -> EmptyLayout {
+    let (title, about, items, setup) = empty_screen(app, loc);
+    let setup_rows = if setup.is_empty() { 0 } else { setup.len() as u16 + 2 };
+    let height = 2 + about.len() as u16 + 1 + items.len() as u16 + setup_rows;
+    let width = 72.min(body.width.saturating_sub(4));
     let x = body.x + body.width.saturating_sub(width) / 2;
     let y = body.y + body.height.saturating_sub(height) / 3;
+    let area = Rect::new(x, y, width, height);
+    let mut rows = Vec::new();
+    let mut ry = y + 2 + about.len() as u16;
+    for it in items {
+        rows.push((ry, it));
+        ry += 1;
+    }
+    let setup_title = (!setup.is_empty()).then_some(ry + 1);
+    ry += 2;
+    for it in setup {
+        rows.push((ry, it));
+        ry += 1;
+    }
+    EmptyLayout { area, rows, title, about, setup_title }
+}
+
+/// The action under a click on the empty screen.
+pub fn empty_hit(app: &App, body: Rect, x: u16, y: u16) -> Option<crate::keys::Action> {
+    let EmptyLayout { area, rows, .. } = empty_layout(app, app.current_loc().as_ref(), body);
+    if x < area.x || x >= area.right() {
+        return None;
+    }
+    rows.into_iter().find(|(ry, _)| *ry == y).map(|(_, it)| it.action)
+}
+
+/// A place with no panes (or nothing added yet: the welcome): what it is, and
+/// what you can do, a key each.
+fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
+    let t = &app.theme;
+    let EmptyLayout { area, rows, title, about, setup_title } = empty_layout(app, loc, body);
+    let (x, y, width) = (area.x, area.y, area.width);
     buf.set_stringn(x, y, &title, width as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
-    buf.set_stringn(x, y + 1, what, width as usize, Style::new().fg(t.dim));
-    for (i, (k, label)) in lines.iter().enumerate() {
-        let ly = y + 3 + i as u16;
-        buf.set_stringn(x, ly, k, 10, Style::new().fg(t.accent));
-        buf.set_stringn(x + 11, ly, label, width.saturating_sub(11) as usize, Style::new().fg(t.text2));
+    for (i, line) in about.iter().enumerate() {
+        buf.set_stringn(x, y + 1 + i as u16, line, width as usize, Style::new().fg(t.dim));
+    }
+    if let Some(sy) = setup_title {
+        buf.set_stringn(x, sy, "get set up", width as usize, Style::new().fg(t.dim).add_modifier(Modifier::BOLD));
+    }
+    for (ry, it) in rows {
+        buf.set_string(x, ry, it.key.to_string(), Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
+        let hint_w = it.hint.chars().count() as u16;
+        let room = width.saturating_sub(4 + hint_w + 2) as usize;
+        buf.set_stringn(x + 3, ry, &it.label, room, Style::new().fg(t.text2));
+        if hint_w > 0 && hint_w + 8 < width {
+            buf.set_string(x + width - hint_w, ry, &it.hint, Style::new().fg(t.dim));
+        }
     }
 }
 

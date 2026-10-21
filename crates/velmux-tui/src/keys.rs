@@ -23,6 +23,12 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Install the Claude Code skill for every repo.
+    InstallSkill,
+    /// Write velmux's keybinds into Ghostty's config (asks first).
+    SetupGhostty,
+    /// Run `velmux doctor` in a new tab.
+    Doctor,
     /// Repaint the whole screen.
     Redraw,
     /// Add a repo (from the scratch dir, or a path) as a space.
@@ -160,6 +166,9 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("install_skill", Action::InstallSkill),
+    ("setup_ghostty", Action::SetupGhostty),
+    ("doctor", Action::Doctor),
     ("redraw", Action::Redraw),
     ("new_space", Action::NewSpace),
     ("new_session", Action::NewSession),

@@ -17,6 +17,8 @@ mod pty_raw;
 mod server;
 mod search;
 mod session;
+pub mod skill;
+pub mod ghostty;
 mod theme;
 mod ui;
 
@@ -135,15 +137,15 @@ pub fn key_test() -> anyhow::Result<()> {
 
 /// `velmux keys`: the effective bindings, or `--ghostty` for the terminal config
 /// that makes Cmd chords reach velmux's root (prefix-less) bindings.
-pub fn print_keys(ghostty: bool) -> anyhow::Result<()> {
-    let settings = velmux_pool::tui_settings(&velmux_pool::Env::from_process()?)?;
-    let prefix = match settings.prefix.as_deref() {
-        Some(spec) => prefix::Prefix::parse(spec)?,
-        None => prefix::Prefix::default(),
-    };
-    let (map, warnings) = keys::Keymap::build(prefix.byte, &settings.keys);
+pub fn print_keys(ghostty: bool, install: bool) -> anyhow::Result<()> {
+    let (map, prefix, warnings) = keymap()?;
     for w in &warnings {
         eprintln!("warning: {w}");
+    }
+    if install {
+        let path = ghostty::install(&ghostty_lines(&map))?;
+        println!("wrote velmux's keybinds into {}; reload Ghostty's config (⌘⇧, on macOS)", path.display());
+        return Ok(());
     }
     if ghostty {
         print!("{}", keys::ghostty_config(&map));
@@ -154,6 +156,27 @@ pub fn print_keys(ghostty: bool) -> anyhow::Result<()> {
         println!("  {:<18} {}", keys::name_of(*action), specs.join("  "));
     }
     Ok(())
+}
+
+/// The effective keymap from the global config.
+fn keymap() -> anyhow::Result<(keys::Keymap, prefix::Prefix, Vec<String>)> {
+    let settings = velmux_pool::tui_settings(&velmux_pool::Env::from_process()?)?;
+    let prefix = match settings.prefix.as_deref() {
+        Some(spec) => prefix::Prefix::parse(spec)?,
+        None => prefix::Prefix::default(),
+    };
+    let (map, warnings) = keys::Keymap::build(prefix.byte, &settings.keys);
+    Ok((map, prefix, warnings))
+}
+
+/// The Ghostty keybind lines for `map` (without the header comment).
+pub(crate) fn ghostty_lines(map: &keys::Keymap) -> String {
+    keys::ghostty_config(map).lines().skip(1).collect::<Vec<_>>().join("\n")
+}
+
+/// `velmux doctor`'s view of the terminal: Ghostty, and whether it sends the keys.
+pub fn terminal_check() -> (bool, bool) {
+    (ghostty::detected(), ghostty::configured())
 }
 
 /// `velmux import-herdr`: plan from herdr's session file, then hand it to the

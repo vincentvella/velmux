@@ -221,3 +221,28 @@ fn new_space_and_new_session_buttons() {
     plus();
     ui.wait_for("scratch-2");
 }
+
+#[test]
+fn the_welcome_screen_sets_you_up() {
+    let env = Env::new();
+    env.repo("app");
+    let home = env.root.join("home");
+    // Nothing added yet: the welcome, with setup still to do.
+    let ui = env.attach(&home);
+    ui.wait_for("Welcome to velmux");
+    ui.wait_for("get set up");
+    ui.wait_for("teach Claude to work in velmux");
+    // Single keys work: there's no pane to take them.
+    ui.send(b"k");
+    ui.wait_for("Claude skill installed");
+    assert!(env.claude_dir.join("skills/velmux/SKILL.md").exists());
+    ui.wait_gone_text("teach Claude to work in velmux");
+    ui.send(b"n");
+    ui.wait_for(" new space ");
+    ui.send(b"app\r");
+    ui.wait_for("app › base");
+    // An empty repo checkout offers its own keys.
+    ui.wait_for("claim a slot yourself");
+    ui.send(b"a");
+    ui.claude_id();
+}

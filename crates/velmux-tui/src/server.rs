@@ -217,6 +217,7 @@ pub enum PromptFor {
 
 pub enum Confirm {
     Release(Loc),
+    GhosttyKeys,
     DiscardParked { project: usize, branch: String },
     RemoveFolder(Loc),
     RemoveRepo(usize),
@@ -373,7 +374,7 @@ pub struct App {
     /// A newer binary seen once; restart when it's unchanged on the next look.
     exe_pending: Option<SystemTime>,
     /// Claude Code's config dir, for its per-process session records.
-    claude_dir: PathBuf,
+    pub claude_dir: PathBuf,
     /// The editor pane opened by `settings`; config reloads when it closes.
     settings_pane: Option<u64>,
     /// Unfinished mouse sequence from the previous read.
@@ -1917,6 +1918,18 @@ impl App {
             }
             return;
         }
+        // An empty screen: its actions are clickable.
+        if self.focused().is_none() && ev.is_press() && ev.is_left() {
+            let body = ui::pane_area(cols, rows, self.sidebar_hidden);
+            if let Some(action) = ui::empty_hit(self, body, ev.x, ev.y) {
+                if action == Action::Help {
+                    self.mode = Mode::Prefix;
+                } else {
+                    self.run(action);
+                }
+            }
+            return;
+        }
         if self.sidebar_hidden && ev.y + 1 >= rows && (self.status_text().is_some() || !self.jobs.is_empty()) {
             return; // the status strip
         }
@@ -2480,6 +2493,21 @@ impl App {
         if bytes.is_empty() {
             return;
         }
+        // No pane to take them: an empty screen's single-key actions.
+        if self.focused().is_none() {
+            let loc = self.current_loc();
+            let (_, _, items, setup) = ui::empty_screen(self, loc.as_ref());
+            let chosen = bytes.iter().find_map(|b| items.iter().chain(&setup).find(|it| it.key as u32 == *b as u32).map(|it| it.action));
+            if let Some(action) = chosen {
+                if action == Action::Help {
+                    self.mode = Mode::Prefix;
+                } else {
+                    self.run(action);
+                }
+                self.dirty = true;
+            }
+            return;
+        }
         if let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
             pane.write_input(bytes);
         }
@@ -2711,6 +2739,21 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::InstallSkill => match crate::skill::install(&crate::skill::user_path(&self.claude_dir)) {
+                Ok(_) => self.toast("Claude skill installed: new Claude sessions know velmux"),
+                Err(e) => self.say(format!("skill: {e:#}")),
+            },
+            Action::SetupGhostty => match crate::ghostty::config_path() {
+                Some(path) => {
+                    let label = format!(
+                        "add velmux's keybinds (the ⌘ shortcuts) to {}? its own settings are kept; reload Ghostty after (⌘⇧,)",
+                        path.display()
+                    );
+                    self.mode = Mode::Confirm { label, action: Confirm::GhosttyKeys };
+                }
+                None => self.say("can't find Ghostty's config (HOME isn't set)"),
+            },
+            Action::Doctor => self.open_doctor(),
             Action::Redraw => self.redraw(),
             Action::NewSpace => {
                 let repos = self.space_candidates();
@@ -2962,6 +3005,41 @@ impl App {
         }
     }
 
+    /// `velmux doctor` in a new tab here (or in a new scratch session).
+    fn open_doctor(&mut self) {
+        let loc = match self.current_loc() {
+            Some(loc) => loc,
+            None => {
+                self.new_session();
+                match self.current_loc() {
+                    Some(loc) => loc,
+                    None => return,
+                }
+            }
+        };
+        let exe = self.exe.as_ref().map(|(p, _)| p.display().to_string()).unwrap_or_else(|| "velmux".into());
+        let opts = LaunchOpts { command: Some(format!("{} doctor", shell_quote(&exe))), ..LaunchOpts::default() };
+        match self.launch(&loc, Kind::Shell, opts) {
+            Ok(id) => {
+                let mut tab = Tab::new(Layout::Leaf(id), None);
+                tab.name = Some("doctor".into());
+                match self.views.get_mut(&loc) {
+                    Some(view) => {
+                        view.tabs.push(tab);
+                        view.set_active(view.tabs.len() - 1);
+                    }
+                    None => {
+                        self.views.insert(loc.clone(), View::single(tab));
+                    }
+                }
+                self.focus = Some(id);
+                self.current = Some(loc);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
     fn open_settings(&mut self) {
         let Some(loc) = self.current_loc() else {
             return self.say("run velmux from inside a repo to open settings");
@@ -3194,6 +3272,14 @@ impl App {
         match action {
             Confirm::Quit => self.quit = true,
             Confirm::Release(loc) => self.release_location(loc, None),
+            Confirm::GhosttyKeys => match crate::ghostty::install(&crate::ghostty_lines(&self.keymap)) {
+                Ok(path) => {
+                    let msg = format!("added velmux's keybinds to {} — reload Ghostty's config (⌘⇧,)", path.display());
+                    self.toast(&msg);
+                    self.say(msg);
+                }
+                Err(e) => self.say(format!("ghostty: {e:#}")),
+            },
             Confirm::DiscardParked { project, branch } => {
                 let Some(pool) = self.projects[project].pool.clone() else { return };
                 match pool.discard(&branch) {
