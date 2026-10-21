@@ -60,6 +60,10 @@ pub enum Event {
     Synced { job: String, result: Result<String, String> },
     /// The conversation index, rebuilt in the background.
     Indexed(Vec<crate::search::Doc>),
+    /// An update check came back (`asked`: you asked, so say "up to date" too).
+    UpdateChecked { result: Result<crate::update::Latest, String>, asked: bool },
+    /// Swapping in a downloaded update finished.
+    Updated { job: String, result: Result<String, String> },
     /// Pull requests per project, from a background `gh` call.
     Prs(Vec<(usize, HashMap<String, velmux_pool::gh::Pr>)>),
     /// A PR was opened (or failed to): refresh PRs soon.
@@ -354,6 +358,10 @@ pub struct App {
     pub indexing: bool,
     /// Where new scratch sessions start; `new space` lists the repos in it.
     pub scratch_dir: PathBuf,
+    /// Check for a newer velmux; the newest one found, if it's newer.
+    update_check: bool,
+    pub update: Option<crate::update::Latest>,
+    update_checked: Option<Instant>,
     /// A background PR check is running; when the last one started.
     checking_prs: bool,
     prs_checked: Option<Instant>,
@@ -446,6 +454,7 @@ pub fn serve() -> Result<()> {
                 theme: None,
                 theme_colors: Default::default(),
                 scratch_dir: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+                update_check: true,
             },
             Some(format!("config: {e:#}")),
         ),
@@ -474,6 +483,7 @@ pub fn serve() -> Result<()> {
     app.auto_restart = settings.auto_restart;
     app.notify = settings.notify.clone();
     app.scratch_dir = settings.scratch_dir.clone();
+    app.update_check = settings.update_check;
     let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
     app.theme = theme;
     app.theme_colors = settings.theme_colors.clone();
@@ -510,6 +520,7 @@ pub fn serve() -> Result<()> {
         if last_slots.elapsed() >= Duration::from_secs(2) {
             app.refresh_slots_bg();
             app.refresh_prs_bg();
+            app.check_update_bg();
             app.check_binary();
             last_slots = Instant::now();
         }
@@ -564,6 +575,9 @@ impl App {
             sessions: Vec::new(),
             indexing: false,
             scratch_dir: PathBuf::new(),
+            update_check: true,
+            update: None,
+            update_checked: None,
             checking_prs: false,
             prs_checked: None,
             status: None,
@@ -963,6 +977,38 @@ impl App {
                     Err(e) => self.say(e),
                 }
                 self.prs_checked = None;
+            }
+            Event::UpdateChecked { result, asked } => match result {
+                Ok(latest) if crate::update::newer(&latest.version, crate::update::CURRENT) => {
+                    let fresh = crate::update::announced().as_deref() != Some(latest.version.as_str());
+                    if fresh || asked {
+                        let msg = format!("velmux {} is out (you have {}): menu › update velmux", latest.version, crate::update::CURRENT);
+                        self.toast(&msg);
+                        self.say(msg.clone());
+                        if fresh && !asked {
+                            self.notify_text(&msg, true);
+                        }
+                        crate::update::mark_announced(&latest.version);
+                    }
+                    self.update = Some(latest);
+                    self.dirty = true;
+                }
+                Ok(_) => {
+                    self.update = None;
+                    if asked {
+                        self.toast(&format!("velmux {} is the newest", crate::update::CURRENT));
+                    }
+                }
+                Err(e) if asked => self.say(format!("couldn't check for updates: {e}")),
+                Err(_) => {}
+            },
+            Event::Updated { job, result } => {
+                self.jobs.retain(|(k, _)| k != &job);
+                match result {
+                    Ok(version) if self.auto_restart => self.toast(&format!("updated to {version}: restarting into it")),
+                    Ok(version) => self.say(format!("updated to {version}: restart velmux (<prefix> ctrl+r) to use it")),
+                    Err(e) => self.say(format!("update failed: {e}")),
+                }
             }
             Event::Indexed(docs) => {
                 self.sessions = docs;
@@ -2916,6 +2962,7 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::Update => self.update_velmux(),
             Action::SyncAll => self.sync_all(),
             Action::MoveToSlot => match self.current_loc() {
                 Some(loc) if self.projects[loc.project].pool.is_some() => {
@@ -3223,7 +3270,62 @@ impl App {
     }
 
     /// `velmux doctor` in a new tab here (or in a new scratch session).
+    /// At startup, then twice a day: is there a newer velmux? (Not for builds
+    /// from source, which update with git.)
+    fn check_update_bg(&mut self) {
+        if !self.update_check || self.update_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(12 * 3600)) {
+            return;
+        }
+        self.update_checked = Some(Instant::now());
+        if crate::update::Install::detect() == crate::update::Install::Dev {
+            return;
+        }
+        self.check_update(false);
+    }
+
+    fn check_update(&mut self, asked: bool) {
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let result = crate::update::fetch().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::UpdateChecked { result, asked });
+        });
+    }
+
+    /// "update velmux": check if nothing's known yet; else update the way it
+    /// was installed.
+    fn update_velmux(&mut self) {
+        use crate::update::Install;
+        let Some(latest) = self.update.clone() else {
+            self.toast("checking for updates…");
+            return self.check_update(true);
+        };
+        match Install::detect() {
+            Install::Dev => self.say("this velmux is built from source: update it with git pull and cargo build --release"),
+            Install::Binary(path) => {
+                self.job_seq += 1;
+                let job = format!("update {}", self.job_seq);
+                self.jobs.push((job.clone(), format!("updating to {}", latest.version)));
+                let tx = self.events.clone();
+                std::thread::spawn(move || {
+                    let result = crate::update::apply(&latest, &path).map(|_| latest.version.clone()).map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(Event::Updated { job, result });
+                });
+            }
+            install => {
+                if let Some(cmd) = install.command() {
+                    self.open_command_tab("update", cmd);
+                }
+            }
+        }
+    }
+
     fn open_doctor(&mut self) {
+        let exe = self.exe.as_ref().map(|(p, _)| p.display().to_string()).unwrap_or_else(|| "velmux".into());
+        self.open_command_tab("doctor", &format!("{} doctor", shell_quote(&exe)));
+    }
+
+    /// `command` in a new tab named `name`, here (or in a new scratch session).
+    fn open_command_tab(&mut self, name: &str, command: &str) {
         let loc = match self.current_loc() {
             Some(loc) => loc,
             None => {
@@ -3234,12 +3336,11 @@ impl App {
                 }
             }
         };
-        let exe = self.exe.as_ref().map(|(p, _)| p.display().to_string()).unwrap_or_else(|| "velmux".into());
-        let opts = LaunchOpts { command: Some(format!("{} doctor", shell_quote(&exe))), ..LaunchOpts::default() };
+        let opts = LaunchOpts { command: Some(command.to_string()), ..LaunchOpts::default() };
         match self.launch(&loc, Kind::Shell, opts) {
             Ok(id) => {
                 let mut tab = Tab::new(Layout::Leaf(id), None);
-                tab.name = Some("doctor".into());
+                tab.name = Some(name.into());
                 match self.views.get_mut(&loc) {
                     Some(view) => {
                         view.tabs.push(tab);
@@ -3329,6 +3430,7 @@ impl App {
         warnings.extend(key_warnings);
         self.notify = settings.notify.clone();
         self.scratch_dir = settings.scratch_dir.clone();
+        self.update_check = settings.update_check;
         let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
         self.theme = theme;
         self.theme_colors = settings.theme_colors.clone();

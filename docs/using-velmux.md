@@ -192,3 +192,15 @@ binary changes, so upgrading is just installing.
 
 If the screen ever looks wrong, `<prefix> ctrl+l` redraws it (and nudges every
 pane to re-read its size).
+
+## Updates
+
+velmux checks velmux.com for a newer version when it starts and twice a day
+(a plain request for the latest version: nothing about you or your repos is
+sent). When there's one you're told once, and `≡ menu` shows `↑`. **Update
+velmux…** in the menu (or `velmux update`) updates it the way you installed it:
+Homebrew runs `brew upgrade` in a new tab; a downloaded binary (the install
+script, a release archive) is downloaded, checked against its checksum and
+swapped in place, and the running velmux restarts into it. `velmux update
+--check` only says whether there's a newer one. Turn checks off with
+`update_check = false`.

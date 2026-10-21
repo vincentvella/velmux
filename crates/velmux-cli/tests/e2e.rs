@@ -3,7 +3,7 @@
 mod common;
 
 use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use common::*;
@@ -297,4 +297,44 @@ fn changes_in_the_checkout_are_flagged_and_move_to_a_slot() {
     assert!(path.join("notes.txt").exists());
     assert_eq!(env.run_in(&repo, "git status --porcelain"), "", "the checkout is clean");
     ui.wait_gone_text("✎2");
+}
+
+#[test]
+fn update_swaps_in_a_downloaded_binary() {
+    let env = Env::new();
+    let root = &env.root;
+    // A "downloaded" install (outside target/, so not a dev build).
+    let bin = root.join("opt/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(VELMUX, bin.join("velmux")).unwrap();
+    // The new release: an archive holding a stand-in binary, its checksum, and
+    // the API's answer, all as local files.
+    let release = root.join("release/velmux-v99.0.0-test");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::write(release.join("velmux"), "#!/bin/sh\necho 'velmux 99.0.0'\n").unwrap();
+    sh(&root.join("release"), "tar -czf new.tar.gz velmux-v99.0.0-test && shasum -a 256 new.tar.gz > new.tar.gz.sha256");
+    let archive = format!("file://{}", root.join("release/new.tar.gz").display());
+    let targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
+    let downloads: serde_json::Map<String, serde_json::Value> = targets.iter().map(|t| (t.to_string(), archive.clone().into())).collect();
+    let api = root.join("latest.json");
+    std::fs::write(&api, serde_json::json!({"version": "99.0.0", "url": "https://example.com/r", "downloads": downloads}).to_string()).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new(bin.join("velmux")).args(args).envs(env.vars()).env("VELMUX_UPDATE_URL", format!("file://{}", api.display())).output().unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
+    };
+    let (ok, said) = run(&["update", "--check"]);
+    assert!(ok && said.contains("velmux 99.0.0 is out"), "{said}");
+    let (ok, said) = run(&["update"]);
+    assert!(ok, "{said}");
+    let (_, now) = run(&["--version"]);
+    assert_eq!(now.trim(), "velmux 99.0.0", "the binary was swapped");
+
+    // A tampered download is refused and changes nothing.
+    std::fs::copy(VELMUX, bin.join("velmux")).unwrap();
+    std::fs::write(root.join("release/new.tar.gz.sha256"), "0000  new.tar.gz\n").unwrap();
+    let (ok, said) = run(&["update"]);
+    assert!(!ok && said.contains("checksum"), "{said}");
+    let (_, now) = run(&["--version"]);
+    assert!(now.contains(env!("CARGO_PKG_VERSION")), "left as it was: {now}");
 }

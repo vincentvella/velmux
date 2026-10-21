@@ -25,6 +25,7 @@ velmux discard <branch>          # drop a parked branch's stashed changes (the b
 # The server
 velmux restart                   # restart in place: panes keep running
 velmux stop                      # stop it: everything comes back next time
+velmux update [--check]          # update velmux the way it was installed (or just check)
 
 # Setup
 velmux doctor                    # check git, your agent, the skill, gh, your terminal, this repo's pool

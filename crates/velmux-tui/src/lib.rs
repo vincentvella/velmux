@@ -20,6 +20,7 @@ mod session;
 pub mod skill;
 pub mod ghostty;
 pub mod guard;
+pub mod update;
 mod theme;
 mod ui;
 

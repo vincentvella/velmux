@@ -117,6 +117,12 @@ enum Cmd {
     /// Check velmux's setup (git, your agent, the Claude skill, gh, your
     /// terminal, this repo's pool) and say how to fix what isn't right.
     Doctor,
+    /// Update velmux the way it was installed (Homebrew, a downloaded binary,
+    /// cargo); `--check` only says whether there's a newer one.
+    Update {
+        #[arg(long)]
+        check: bool,
+    },
     /// A Claude Code PreToolUse hook: refuses file edits inside a repo's
     /// checkout (`$VELMUX_BASE`) so agents work in slots. Reads the hook's
     /// JSON on stdin; exit 2 blocks the edit and tells Claude why.
@@ -150,6 +156,7 @@ fn run() -> Result<()> {
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, install, .. }) => return velmux_tui::print_keys(ghostty, install),
         Some(Cmd::Doctor) => return doctor(&cwd),
+        Some(Cmd::Update { check }) => return update(check),
         Some(Cmd::Guard) => guard(),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
@@ -266,7 +273,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::Update { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -324,6 +331,36 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("not installed at {}", path.display()),
                 Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `velmux update`.
+fn update(check: bool) -> Result<()> {
+    use velmux_tui::update::{self, Install};
+    let latest = update::fetch()?;
+    if !update::newer(&latest.version, update::CURRENT) {
+        println!("velmux {} is the newest", update::CURRENT);
+        return Ok(());
+    }
+    println!("velmux {} is out (you have {}): {}", latest.version, update::CURRENT, latest.url);
+    if check {
+        return Ok(());
+    }
+    match Install::detect() {
+        Install::Dev => println!("this velmux is built from source: update it with git pull and cargo build --release"),
+        Install::Binary(path) => {
+            update::apply(&latest, &path)?;
+            println!("updated {} to {}; a running velmux restarts into it by itself", path.display(), latest.version);
+        }
+        install => {
+            let cmd = install.command().unwrap_or_default();
+            println!("running: {cmd}");
+            let ok = Command::new("sh").arg("-c").arg(cmd).status()?.success();
+            if !ok {
+                bail!("`{cmd}` failed");
             }
         }
     }
@@ -410,6 +447,13 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
         line(Some(true), "Claude skill installed", "");
     } else {
         line(Some(false), "Claude skill not installed", "velmux skill install (teaches Claude to claim and release slots)");
+    }
+    match velmux_tui::update::fetch() {
+        Ok(l) if velmux_tui::update::newer(&l.version, velmux_tui::update::CURRENT) => {
+            line(None, &format!("velmux {} (version {} is out)", velmux_tui::update::CURRENT, l.version), "velmux update")
+        }
+        Ok(_) => line(Some(true), &format!("velmux {} is the newest", velmux_tui::update::CURRENT), ""),
+        Err(_) => line(None, &format!("velmux {} (couldn't check for updates)", velmux_tui::update::CURRENT), ""),
     }
     // Keeping velmux-started Claudes out of the checkout: a hook, and a deny rule.
     let guard_on = velmux_pool::Config::load(&env, base.as_deref().unwrap_or(cwd)).map(|c| c.guard).unwrap_or(true);

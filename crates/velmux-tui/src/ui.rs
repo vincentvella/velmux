@@ -76,6 +76,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         ("rename tab", RenameTab),
         ("theme…", ThemePicker),
         ("check setup (doctor)", Doctor),
+        ("update velmux…", Update),
         ("sounds…", SoundPicker),
         ("settings", Settings),
         ("restart server", RestartServer),
@@ -497,6 +498,10 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 let x = side.saturating_sub(label.chars().count() as u16 + 3);
                 buf.set_string(x, y, "≡", Style::new().fg(if menu_open { t.accent } else { t.menu_border }));
                 buf.set_string(x + 2, y, label, if menu_open { gray.add_modifier(Modifier::BOLD) } else { gray });
+                // A newer velmux is out: the menu has "update velmux…".
+                if app.update.is_some() {
+                    buf.set_string(x + 2 + label.chars().count() as u16, y, "↑", Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
+                }
             }
             Row::ViewTabs => {
                 let on = Style::new().fg(t.text).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);

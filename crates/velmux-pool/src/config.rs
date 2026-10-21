@@ -70,6 +70,8 @@ struct GlobalFile {
     ports: Option<PortsFile>,
     /// Where new scratch sessions start, and where `new space` looks for repos.
     scratch_dir: Option<PathBuf>,
+    /// Check velmux.com for a newer velmux now and then.
+    update_check: Option<bool>,
 }
 
 /// `[ports]`: each slot gets its own block, so dev servers in different slots
@@ -149,6 +151,8 @@ pub struct TuiSettings {
     /// Where new scratch sessions start and `new space` looks for repos:
     /// `scratch_dir`, else `~/Workspace` if it exists, else `~`.
     pub scratch_dir: PathBuf,
+    /// Check velmux.com for a newer velmux (at startup, then twice a day).
+    pub update_check: bool,
 }
 
 /// When an agent finishes unseen or gets blocked on you.
@@ -192,6 +196,7 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
         notify,
         theme: global.theme,
         theme_colors: global.theme_colors.unwrap_or_default(),
+        update_check: global.update_check.unwrap_or(true),
         scratch_dir: {
             let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
             match global.scratch_dir {

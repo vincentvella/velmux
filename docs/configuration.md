@@ -21,6 +21,7 @@ claude_history = true                    # group each slot's Claude transcripts 
 fetch_every = 15                         # minutes between background fetches (0 = off)
 fast_forward = true                      # fast-forward each checkout to its upstream after a fetch
 guard = true                             # keep Claudes velmux starts from editing a checkout
+update_check = true                      # look for a newer velmux at startup and twice a day
 sync = "rebase"                          # or "merge": how sync with base catches up
 theme = "rose-pine"
 ```
