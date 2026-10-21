@@ -107,6 +107,8 @@ pub enum Mode {
     Picker(Picker),
     /// Searching Claude conversations (the index is `App::sessions`).
     Sessions { query: String, selected: usize },
+    /// Picking a repo to add as a space: the git repos in the scratch dir.
+    NewSpace { query: String, selected: usize, repos: Vec<PathBuf> },
     /// The short menu, with the highlighted row; `context` when it was opened
     /// by right-clicking a place in the sidebar.
     Menu { selected: usize, context: Option<MenuContext> },
@@ -332,6 +334,8 @@ pub struct App {
     pub sessions: Vec<crate::search::Doc>,
     /// The index is being rebuilt.
     pub indexing: bool,
+    /// Where new scratch sessions start; `new space` lists the repos in it.
+    pub scratch_dir: PathBuf,
     /// A background PR check is running; when the last one started.
     checking_prs: bool,
     prs_checked: Option<Instant>,
@@ -411,6 +415,7 @@ pub fn serve() -> Result<()> {
                 notify: Default::default(),
                 theme: None,
                 theme_colors: Default::default(),
+                scratch_dir: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
             },
             Some(format!("config: {e:#}")),
         ),
@@ -438,6 +443,7 @@ pub fn serve() -> Result<()> {
     let mut app = App::new(tx, prefix, keymap, settings.mouse, warning);
     app.auto_restart = settings.auto_restart;
     app.notify = settings.notify.clone();
+    app.scratch_dir = settings.scratch_dir.clone();
     let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
     app.theme = theme;
     app.theme_colors = settings.theme_colors.clone();
@@ -526,6 +532,7 @@ impl App {
             job_seq: 0,
             sessions: Vec::new(),
             indexing: false,
+            scratch_dir: PathBuf::new(),
             checking_prs: false,
             prs_checked: None,
             status: None,
@@ -614,6 +621,113 @@ impl App {
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
         self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), folders: Vec::new(), removed: false });
         self.projects.len() - 1
+    }
+
+    /// A new scratch session: a shell in the scratch dir, as its own place
+    /// below the divider (`scratch`, `scratch-2`, …).
+    fn new_session(&mut self) {
+        let dir = self.scratch_dir.clone();
+        if !dir.is_dir() {
+            return self.say(format!("{} isn't a folder (set scratch_dir in the config)", dir.display()));
+        }
+        let project = self.unclassified();
+        self.projects[project].removed = false;
+        let folders = &mut self.projects[project].folders;
+        let mut id = "scratch".to_string();
+        let mut n = 2;
+        while folders.iter().any(|f| f.id == id) {
+            id = format!("scratch-{n}");
+            n += 1;
+        }
+        folders.push(Folder { id: id.clone(), path: dir });
+        self.spawn(Loc { project, slot: Some(id) }, Kind::Shell, None);
+        self.save();
+    }
+
+    /// Git repos directly in the scratch dir that aren't spaces yet, newest first.
+    fn space_candidates(&self) -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(&self.scratch_dir) else { return Vec::new() };
+        let open: Vec<&Path> = self.projects.iter().filter(|p| !p.removed).filter_map(|p| p.base()).collect();
+        let mut repos: Vec<(SystemTime, PathBuf)> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join(".git").exists() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|p| !open.iter().any(|o| o == p))
+            .map(|p| (std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH), p))
+            .collect();
+        repos.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        repos.into_iter().map(|(_, p)| p).collect()
+    }
+
+    /// The chooser's rows for `query`: matching repos, or a typed path.
+    pub fn space_matches(repos: &[PathBuf], query: &str) -> Vec<PathBuf> {
+        let q = query.trim();
+        if q.starts_with('/') || q.starts_with('~') {
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            let path = match q.strip_prefix('~') {
+                Some(rest) => home.join(rest.trim_start_matches('/')),
+                None => PathBuf::from(q),
+            };
+            return vec![path];
+        }
+        let mut hits: Vec<(i32, usize, &PathBuf)> = repos
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| picker::score(q, &p.file_name()?.to_string_lossy()).map(|s| (s, i, p)))
+            .collect();
+        hits.sort_by_key(|(s, i, _)| (std::cmp::Reverse(*s), *i));
+        hits.into_iter().map(|(_, _, p)| p.clone()).collect()
+    }
+
+    fn new_space_input(&mut self, bytes: &[u8]) -> usize {
+        let Mode::NewSpace { query, selected, repos } = &mut self.mode else { return bytes.len() };
+        let count = App::space_matches(repos, query).len();
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, Some(0x10)),
+            [0x1b, b'[', b'B', ..] => (3, Some(0x0e)),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, None)
+            }
+            [0x1b] => (1, Some(0x1b)),
+            [b, ..] if b.is_ascii_control() || *b == 0x7f => (1, Some(*b)),
+            _ => {
+                let end = bytes.iter().position(|b| b.is_ascii_control()).unwrap_or(bytes.len());
+                query.push_str(&String::from_utf8_lossy(&bytes[..end]));
+                *selected = 0;
+                return end;
+            }
+        };
+        match key {
+            Some(0x10) => *selected = selected.checked_sub(1).unwrap_or(count.saturating_sub(1)),
+            Some(0x0e) => *selected = if count == 0 { 0 } else { (*selected + 1) % count },
+            Some(0x7f | 0x08) => {
+                query.pop();
+                *selected = 0;
+            }
+            Some(0x1b | 0x03) => self.mode = Mode::Normal,
+            Some(b'\r' | b'\n') => {
+                let chosen = App::space_matches(repos, query).get(*selected).cloned();
+                self.mode = Mode::Normal;
+                if let Some(path) = chosen {
+                    self.add_space(&path);
+                }
+            }
+            _ => {}
+        }
+        used
+    }
+
+    /// Add the repo at `path` as a space and go to its base.
+    fn add_space(&mut self, path: &Path) {
+        match Env::from_process().and_then(|env| Pool::discover(env, path)) {
+            Ok(_) => {
+                self.open_cwd(path);
+                self.full_redraw = true;
+                self.toast(&format!("added {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+            }
+            Err(_) => self.say(format!("{} isn't a git repo", path.display())),
+        }
     }
 
     /// Add (or find) folder `path` in the unclassified group; returns its location.
@@ -2002,7 +2116,7 @@ impl App {
         let side = ui::sidebar_width(self.size.0, self.sidebar_hidden);
         match row {
             ui::Row::TopBar => {
-                return self.run(if x < side / 2 { Action::ClaimSlot } else { Action::Menu });
+                return self.run(if x < side / 2 { Action::NewSpace } else { Action::Menu });
             }
             // A click on parked work offers resume / discard.
             ui::Row::Parked(..) => return self.open_context_menu(x, y),
@@ -2030,6 +2144,13 @@ impl App {
                 self.focus = Some(self.panes[i].id);
                 self.current = Some(self.panes[i].loc.clone());
                 self.full_redraw = true;
+                return;
+            }
+            // The `+` at the right of the sessions divider.
+            ui::Row::SessionsDivider => {
+                if x + 4 >= side {
+                    self.new_session();
+                }
                 return;
             }
             ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
@@ -2121,8 +2242,8 @@ impl App {
                 ("new tab", Action::NewTab),
                 ("open in editor", Action::NewEditor),
                 ("copy path", Action::CopyPath),
-                ("rename folder", Action::RenameLocation),
-                ("remove folder", Action::RemovePlace),
+                ("rename session", Action::RenameLocation),
+                ("remove session", Action::RemovePlace),
             ],
         };
         let title = self.loc_name(&target);
@@ -2248,6 +2369,7 @@ impl App {
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Picker(_) => self.picker_input(bytes),
                 Mode::Sessions { .. } => self.sessions_input(bytes),
+                Mode::NewSpace { .. } => self.new_space_input(bytes),
                 Mode::Menu { .. } => self.menu_input(bytes),
                 Mode::ThemePicker { .. } => self.theme_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
@@ -2502,6 +2624,11 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::NewSpace => {
+                let repos = self.space_candidates();
+                self.mode = Mode::NewSpace { query: String::new(), selected: 0, repos };
+            }
+            Action::NewSession => self.new_session(),
             Action::FindSession => {
                 self.mode = Mode::Sessions { query: String::new(), selected: 0 };
                 self.reindex_sessions();
@@ -2549,7 +2676,7 @@ impl App {
                     self.mode = Mode::Confirm { label, action: Confirm::Release(loc) };
                 }
                 Some(loc) if self.projects[loc.project].is_unclassified() => {
-                    self.say("unclassified folders have no slots to release")
+                    self.say("scratch sessions have no slots to release")
                 }
                 _ => self.say("focus a slot to release it (the base checkout is never released)"),
             },
@@ -2564,7 +2691,7 @@ impl App {
                 Some(loc) if !self.projects[loc.project].is_unclassified() => {
                     self.show_location(Loc { project: loc.project, slot: None })
                 }
-                Some(_) => self.say("unclassified folders have no base — ⌥1–9 picks a folder"),
+                Some(_) => self.say("scratch sessions have no base — ⌥1–9 picks a session"),
                 None => {}
             },
             Action::Location(n) => self.goto_location(n as usize - 1),
@@ -2818,6 +2945,7 @@ impl App {
         self.keymap = keymap;
         warnings.extend(key_warnings);
         self.notify = settings.notify.clone();
+        self.scratch_dir = settings.scratch_dir.clone();
         let (theme, theme_warnings) = crate::theme::resolve(settings.theme.as_deref(), &settings.theme_colors);
         self.theme = theme;
         self.theme_colors = settings.theme_colors.clone();
@@ -3138,7 +3266,7 @@ impl App {
             if let Some((_, mut stream)) = for_pane {
                 let _ = ServerMsg::Reply("error: this folder isn't a git repo, so it has no slots".into()).write(&mut stream);
             }
-            return self.say("unclassified folders aren't git repos, so they have no slots");
+            return self.say("scratch sessions aren't git repos, so they have no slots");
         };
         let tx = self.events.clone();
         self.job_seq += 1;

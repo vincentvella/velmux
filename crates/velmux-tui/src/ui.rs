@@ -37,6 +37,8 @@ pub fn content_rect(outer: Rect, titled: bool) -> Rect {
 /// One row of [`rows`] (navigation order) or of the sidebar.
 pub enum Row {
     Project(usize),
+    /// The rule above the scratch sessions, with a `+` for a new one.
+    SessionsDivider,
     /// A parked branch: (project, index into its `parked`).
     Parked(usize, usize),
     Location(Loc),
@@ -67,6 +69,8 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
     &[
         // Things for one place (create, rename, remove) live in the sidebar's
         // right-click menus.
+        ("new space…", NewSpace),
+        ("new session", NewSession),
         ("go to…", LocationPicker),
         ("find conversation…", FindSession),
         ("rename tab", RenameTab),
@@ -166,10 +170,9 @@ pub fn display_rows(app: &App) -> Vec<Row> {
         .filter(|(_, p)| p.is_unclassified())
         .flat_map(|(i, p)| p.folders.iter().map(move |f| Loc { project: i, slot: Some(f.id.clone()) }))
         .collect();
-    if !folders.is_empty() {
-        out.push(Row::Divider);
-        out.extend(folders.into_iter().map(Row::Location));
-    }
+    // Always there: its `+` starts a scratch session.
+    out.push(Row::SessionsDivider);
+    out.extend(folders.into_iter().map(Row::Location));
     out
 }
 
@@ -458,6 +461,10 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             Row::Divider => {
                 buf.set_string(1, y, "─".repeat(side.saturating_sub(2) as usize), dim);
             }
+            Row::SessionsDivider => {
+                buf.set_string(1, y, "─".repeat(side.saturating_sub(5) as usize), dim);
+                buf.set_string(side.saturating_sub(3), y, "+", Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
+            }
             Row::Project(p) => {
                 let here = current.as_ref().is_some_and(|c| c.project == p);
                 let style = Style::new().add_modifier(Modifier::BOLD).fg(if here { t.text } else { t.text2 });
@@ -476,7 +483,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             Row::TopBar => {
                 let gray = Style::new().fg(t.text2);
                 buf.set_string(1, y, "⊕", Style::new().fg(t.accent));
-                buf.set_string(3, y, "new", gray);
+                buf.set_string(3, y, "new space", gray);
                 let menu_open = matches!(app.mode, Mode::Menu { context: None, .. });
                 let label = "menu";
                 let x = side.saturating_sub(label.chars().count() as u16 + 3);
@@ -585,6 +592,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
         Mode::Prefix => (format!("{} …", app.prefix.label), bar.fg(t.accent).add_modifier(Modifier::BOLD)),
         Mode::Picker(_) => ("enter go · esc cancel".into(), bar.fg(t.dim)),
         Mode::Sessions { .. } => ("enter open · esc cancel".into(), bar.fg(t.dim)),
+        Mode::NewSpace { .. } => ("enter add · esc cancel".into(), bar.fg(t.dim)),
         Mode::Menu { .. } | Mode::ThemePicker { .. } => ("enter pick · esc close".into(), bar.fg(t.dim)),
         Mode::Prompt { .. } => ("enter save · esc cancel".into(), bar.fg(t.dim)),
         Mode::Confirm { .. } => ("y yes · n no".into(), bar.fg(t.dim)),
@@ -640,6 +648,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     }
     if let Mode::ThemePicker { selected, .. } = &app.mode {
         draw_theme_picker(app, *selected, buf);
+    }
+    if let Mode::NewSpace { query, selected, repos } = &app.mode {
+        cursor = draw_new_space(app, query, *selected, repos, body, buf);
     }
     if let Mode::Sessions { query, selected } = &app.mode {
         cursor = draw_sessions(app, query, *selected, body, buf);
@@ -893,7 +904,7 @@ fn draw_empty(app: &App, loc: Option<&Loc>, body: Rect, buf: &mut Buffer) {
     let key = |a: crate::keys::Action| app.keymap.hint(a, &app.prefix.short).unwrap_or_default();
     use crate::keys::Action as A;
     let (title, what) = match loc {
-        Some(l) if app.projects[l.project].is_unclassified() => (app.loc_name(l), "a folder outside any repo"),
+        Some(l) if app.projects[l.project].is_unclassified() => (app.loc_name(l), "a scratch session"),
         Some(l) if l.slot.is_some() => (app.loc_name(l), "a claimed slot"),
         Some(l) => (app.loc_name(l), "the repo's base checkout"),
         None => ("velmux".to_string(), "run velmux inside a git repo to add it"),
@@ -1068,6 +1079,57 @@ fn draw_sessions(app: &App, query: &str, selected: usize, body: Rect, buf: &mut 
         buf.set_stringn(inner.x + live_w, y + 1, &hit.snippet, inner.width.saturating_sub(live_w) as usize, base.fg(t.text2));
     }
     Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
+}
+
+/// The `new space` chooser: repos in the scratch dir, or a typed path.
+fn draw_new_space(app: &App, query: &str, selected: usize, repos: &[std::path::PathBuf], body: Rect, buf: &mut Buffer) -> Option<Position> {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let t = &app.theme;
+    let hits = App::space_matches(repos, query);
+    let width = 64.min(body.width.saturating_sub(2)).max(24);
+    let rows = (hits.len() as u16).clamp(1, body.height.saturating_sub(6).max(1));
+    let height = (rows + 4).min(body.height);
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.y + 1, width, height);
+    Clear.render(area, buf);
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.picker_border))
+        .title(" new space ")
+        .title_bottom(ratatui::text::Span::styled(format!(" repos in {} · or type a path ", short_home(&app.scratch_dir)), Style::new().fg(t.dim)))
+        .render(area, buf);
+    let inner = Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), area.height.saturating_sub(2));
+    let prompt = format!("› {query}");
+    buf.set_stringn(inner.x, inner.y, &prompt, inner.width as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+    let visible = inner.height.saturating_sub(2) as usize;
+    let first = selected.saturating_sub(visible.saturating_sub(1));
+    if hits.is_empty() {
+        let msg = if repos.is_empty() { "no other repos here — type a path" } else { "no matches" };
+        buf.set_stringn(inner.x, inner.y + 2, msg, inner.width as usize, Style::new().fg(t.dim));
+    }
+    let typed_path = query.trim_start().starts_with(['/', '~']);
+    for (row, path) in hits.iter().enumerate().skip(first).take(visible) {
+        let y = inner.y + 2 + (row - first) as u16;
+        let on = row == selected;
+        let base = if on { Style::new().bg(t.selected_bg) } else { Style::new() };
+        buf.set_style(Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), base);
+        if on {
+            buf.set_string(inner.x.saturating_sub(1), y, "▌", base.fg(t.accent));
+        }
+        let name = if typed_path { format!("open {}", short_home(path)) } else { path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() };
+        let style = if on { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
+        buf.set_stringn(inner.x + 1, y, &name, inner.width.saturating_sub(1) as usize, style);
+    }
+    Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
+}
+
+/// `~/Workspace` for `$HOME/Workspace`.
+fn short_home(path: &std::path::Path) -> String {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    match path.strip_prefix(&home) {
+        Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()).trim_end_matches('/').to_string(),
+        _ => path.display().to_string(),
+    }
 }
 
 /// `now`, `5m`, `3h`, `2d`.

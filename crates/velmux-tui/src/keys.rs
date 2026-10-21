@@ -23,6 +23,10 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Add a repo (from the scratch dir, or a path) as a space.
+    NewSpace,
+    /// A new scratch session: a shell in the scratch dir.
+    NewSession,
     /// The slot's pull request: open it (or push and start one), its checks,
     /// its link, or hand failing checks to the slot's Claude.
     OpenPr,
@@ -154,6 +158,8 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("new_space", Action::NewSpace),
+    ("new_session", Action::NewSession),
     ("open_pr", Action::OpenPr),
     ("open_checks", Action::OpenChecks),
     ("copy_pr_link", Action::CopyPrLink),
@@ -219,6 +225,8 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (Tab(0), &["ctrl+1..9"]),
         (ToggleSidebar, &["prefix+b", "super+b"]),
         (LocationPicker, &["prefix+w", "super+p"]),
+        (NewSpace, &["prefix+N"]),
+        (NewSession, &["prefix+S"]),
         (FindSession, &["prefix+/", "super+shift+f"]),
         (RenameTab, &["prefix+T", "super+r"]),
         (RenameLocation, &["prefix+W", "super+shift+r"]),
@@ -531,6 +539,8 @@ impl Keymap {
                     (one(OpenPr), "open PR"),
                     (one(Slot(0)), "slot n"),
                     (one(Base), "base"),
+                    (one(NewSpace), "new space…"),
+                    (one(NewSession), "new session"),
                     (one(LocationPicker), "go to…"),
                     (one(FindSession), "find conversation…"),
                     (one(RenameLocation), "rename place"),

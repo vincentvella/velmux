@@ -29,8 +29,8 @@ slot, started by hand). Rerun it after upgrading velmux to update the skill.
 
 ## TUI
 
-**New work starts as a conversation in the base checkout** (`⌘N`, `⊕ new`, or
-`<prefix> a`). Claude is told to plan there and, when it's ready to change code,
+**New work starts as a conversation in the base checkout** (`⌘N`, the space's
+right-click menu, or `<prefix> a`). Claude is told to plan there and, when it's ready to change code,
 run `velmux claim <branch>` itself: that claims a free slot on a branch it
 names, moves its pane under that slot in the sidebar, and prints the path it
 then works in. `velmux release` (Claude, or you) hands the slot back and the
@@ -47,13 +47,15 @@ header, named after what they run (or what you rename them to) with the state
 of their agents, so a background tab still tells you when it's done or blocked;
 click one to switch, or `+` for a new one. The sidebar lists
 each repo with its base and claimed slots (branch first, slot number dimmed;
-free slots are a count on the repo's line), then the folders outside any repo
-below a divider. Nothing collapses, so the layout never shifts as you move. At the
-top: `⊕ new` (claim a slot), `≡ menu` (a short menu of common actions with
+free slots are a count on the repo's line), then scratch sessions below a
+divider: shells (or anything) outside any repo. The divider's `+` (or
+`<prefix> S`) starts a new one in `scratch_dir` (default `~/Workspace`). Nothing collapses, so the layout never shifts as you move. At the
+top: `⊕ new space` (pick a repo in `scratch_dir` that isn't a space yet, or type
+a path; `<prefix> N`), `≡ menu` (a short menu of common actions with
 their shortcuts; also `<prefix> m`), and a `spaces · agents` switch
 (`<prefix> g`). The agents view lists every agent with its location and current
 task, the ones blocked on you or finished unseen first; click one to jump to it. Drag a repo's
-name, or a folder, to reorder them: a line shows where it will land, and the
+name, or a session, to reorder them: a line shows where it will land, and the
 order is saved. Panes are labelled by what's running and where
 (`shell · packages/web`, `bun`, `nvim`).
 
@@ -73,12 +75,12 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `;` | flip back to the last tab (also `ctrl+0`, or scroll over the header) |
 | `T` | rename the tab (empty clears; names show in the tab bar) |
 | `w` | location picker: type to fuzzy-filter, ↑↓ / `^p ^n`, enter to go |
-| `W` | name this location (base, slot or folder); empty clears |
+| `W` | name this location (base, slot or session); empty clears |
 | `s` / `R` | settings: edit the config in a tab, applied when you quit the editor / reload config now |
 | `ctrl+r` | live restart: new binary, every pane keeps running |
-| `X` | remove this place: a folder, or a repo from the sidebar (its slots stay on disk); in a slot, release it |
+| `X` | remove this place: a session, or a repo from the sidebar (its slots stay on disk); in a slot, release it |
 | `alt+1`–`9`, `,` / `.` | go to location N (those with panes), previous / next |
-| `1`–`9`, `0` | slot N of this repo (folder N when unclassified), its base |
+| `1`–`9`, `0` | slot N of this repo (session N among scratch sessions), its base |
 | `o` | jump to the next agent that's blocked or finished unseen |
 | `b` | hide / show the sidebar |
 | `[` / `PgUp` | copy mode |
@@ -92,7 +94,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 
 Any action can also be bound with no prefix. Two levels of jumping: `super+1..9`
 goes to location N across every space, and `alt+1..9` / `alt+0` swap between
-the current space's pool slots and its base (folders, when unclassified). The
+the current space's pool slots and its base (sessions, below the divider). The
 other defaults mirror a Cmd-driven (herdr / cmux style) layout: `ctrl+1..9` tabs, `ctrl+0` last tab, `super+t`
 new tab, `super+shift+[` / `]` tabs, `super+ctrl+[` / `]` locations, `super+n` /
 `super+shift+w` claim / release, `super+d` / `super+shift+d` split, `super+w`
@@ -168,7 +170,7 @@ Roles: `text` `text2` `dim` `accent` `selected_bg` `base_glyph` `slot_glyph`
 ### Finding a conversation
 
 `⌘⇧F` (or `<prefix> /`, or the menu) searches every Claude conversation in
-velmux's repos (base and slots) and folders: titles, your prompts and Claude's
+velmux's repos (base and slots) and scratch sessions: titles, your prompts and Claude's
 replies (not tool output), every word must match, title matches first, then
 newest. Each hit shows where it ran, its branch, how long ago, the text around
 the match, and `●` if it's open in a pane. Enter goes to that pane, or resumes
@@ -288,6 +290,7 @@ auto_restart = true                      # live-restart when the velmux binary c
 claude_history = true
 fetch_every = 15                         # minutes between background fetches (0 = off)
 sync = "rebase"                          # or "merge": how "sync with base" catches up
+scratch_dir = "~/Workspace"              # new sessions start here; new space lists its repos
 ```
 
 `<repo>/.velmux.toml`:

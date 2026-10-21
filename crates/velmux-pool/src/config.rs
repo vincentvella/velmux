@@ -63,6 +63,8 @@ struct GlobalFile {
     /// Minutes between background `git fetch`es of each repo (0 turns it off).
     fetch_every: Option<u64>,
     ports: Option<PortsFile>,
+    /// Where new scratch sessions start, and where `new space` looks for repos.
+    scratch_dir: Option<PathBuf>,
 }
 
 /// `[ports]`: each slot gets its own block, so dev servers in different slots
@@ -139,6 +141,9 @@ pub struct TuiSettings {
     pub notify: NotifySettings,
     pub theme: Option<String>,
     pub theme_colors: std::collections::BTreeMap<String, String>,
+    /// Where new scratch sessions start and `new space` looks for repos:
+    /// `scratch_dir`, else `~/Workspace` if it exists, else `~`.
+    pub scratch_dir: PathBuf,
 }
 
 /// When an agent finishes unseen or gets blocked on you.
@@ -182,6 +187,17 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
         notify,
         theme: global.theme,
         theme_colors: global.theme_colors.unwrap_or_default(),
+        scratch_dir: {
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            match global.scratch_dir {
+                Some(p) => match p.strip_prefix("~") {
+                    Ok(rest) => home.join(rest),
+                    Err(_) => p,
+                },
+                None if home.join("Workspace").is_dir() => home.join("Workspace"),
+                None => home,
+            }
+        },
     })
 }
 

@@ -66,8 +66,9 @@ impl Env {
         std::fs::write(
             root.join("config.toml"),
             format!(
-                "prefix = \"C-a\"\nauto_restart = false\nslots = 2\nfetch_every = 0\npool_root = \"{}\"\n[notify]\ndesktop = false\nsound = false\n",
-                root.join("pools").display()
+                "prefix = \"C-a\"\nauto_restart = false\nslots = 2\nfetch_every = 0\npool_root = \"{}\"\nscratch_dir = \"{}\"\n[notify]\ndesktop = false\nsound = false\n",
+                root.join("pools").display(),
+                root.join("ws").display()
             ),
         )
         .unwrap();
@@ -460,4 +461,33 @@ fn the_claude_skill_installs_updates_and_uninstalls() {
     assert!(repo.join(".claude/skills/velmux/SKILL.md").exists());
     assert!(text(env.velmux(&repo, &["skill", "uninstall"])).contains("removed"));
     assert!(!user.exists());
+}
+
+#[test]
+fn new_space_and_new_session_buttons() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    env.repo("other");
+    let ui = env.attach(&repo);
+
+    // ⊕ new space: repos in the scratch dir that aren't spaces yet.
+    ui.click_on("new space", false);
+    ui.wait_for(" new space ");
+    let screen = ui.wait_for("other");
+    assert!(!screen.contains("│ app"), "app is already a space:\n{screen}");
+    ui.send(b"oth\r");
+    ui.wait_for("added other");
+    ui.wait_for("other › base");
+
+    // The divider's +: a shell in the scratch dir, as its own session.
+    let plus = || {
+        let y = ui.find("──── +").map(|(_, y)| y).expect("sessions divider");
+        ui.send(format!("\x1b[<0;30;{}M\x1b[<0;30;{}m", y + 1, y + 1).as_bytes());
+    };
+    plus();
+    ui.wait_for("scratch ·");
+    ui.line("pwd");
+    ui.wait_for(&env.root.join("ws").display().to_string());
+    plus();
+    ui.wait_for("scratch-2");
 }
