@@ -94,7 +94,9 @@ pub fn menu_items(app: &App) -> &[(&'static str, crate::keys::Action)] {
 /// the clicked row, kept on screen).
 pub fn menu_area(app: &App, cols: u16, rows: u16) -> Rect {
     if let Mode::Menu { context: Some(c), .. } = &app.mode {
-        let width = 26.min(cols.saturating_sub(2));
+        // Wide enough for the longest item (and the title), at least 26.
+        let longest = c.items.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0).max(c.title.chars().count().saturating_sub(2));
+        let width = (longest as u16 + 5).max(26).min(cols.saturating_sub(2));
         let height = (c.items.len() as u16 + 2).min(rows.saturating_sub(1));
         let x = c.at.0.min(cols.saturating_sub(width));
         let below = c.at.1 + 1;

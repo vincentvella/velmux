@@ -45,9 +45,9 @@ pub fn available() -> bool {
     })
 }
 
-/// The repo's `origin` is on GitHub.
+/// The repo's `origin` is on GitHub (as configured, before any `insteadOf`).
 pub fn on_github(dir: &Path) -> bool {
-    git::git(dir, &["remote", "get-url", "origin"]).is_ok_and(|url| url.contains("github.com"))
+    git::git(dir, &["config", "--get", "remote.origin.url"]).is_ok_and(|url| url.contains("github.com"))
 }
 
 /// The newest PR for each head branch (open, merged or closed).

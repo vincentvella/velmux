@@ -3,9 +3,11 @@
 //! session the way Claude does (`<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` and a
 //! transcript under `projects/`), then reads commands, one per line:
 //!
-//! - `say <text>`: a prompt and a reply in the transcript
+//! - `say <prompt>` (or `say <prompt> | <reply>`): a turn in the transcript
 //! - `claim <branch>` / `release`: run `velmux claim` / `velmux release`
 //! - `sh <command>`: run a shell command in the current folder
+//! - `show <file>`: clear the screen and draw the file (a mock screen, for
+//!   screenshots); `title <text>`: set the window title
 //! - `exit`
 
 use std::io::{BufRead, Write};
@@ -32,14 +34,18 @@ fn main() {
         dir.join(format!("{id}.jsonl"))
     });
     if !resumed {
-        record(&transcript, "user", "fake start", &cwd);
+        // The transcript exists from the start (velmux only resumes ones that do).
+        std::fs::OpenOptions::new().create(true).append(true).open(&transcript).unwrap();
     }
     let velmux = std::env::var("VELMUX_BIN").unwrap_or_else(|_| "velmux".into());
     let mut here = cwd.clone();
     println!("FAKE-CLAUDE id={id} mode={}", if resumed { "resume" } else { "new" });
     let stdin = std::io::stdin();
+    let mut prompt = true;
     loop {
-        print!("> ");
+        if std::mem::replace(&mut prompt, true) {
+            print!("> ");
+        }
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
@@ -49,9 +55,11 @@ fn main() {
         let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
         match cmd {
             "say" => {
-                record(&transcript, "user", rest, &here);
-                record(&transcript, "assistant", &format!("reply to {rest}"), &here);
-                println!("said {rest}");
+                // `say <prompt>` or `say <prompt> | <reply>`.
+                let (prompt, reply) = rest.split_once(" | ").map_or((rest.to_string(), format!("reply to {rest}")), |(p, r)| (p.to_string(), r.to_string()));
+                record(&transcript, "user", &prompt, &here);
+                record(&transcript, "assistant", &reply, &here);
+                println!("said {prompt}");
             }
             "claim" | "release" => {
                 let mut c = Command::new(&velmux);
@@ -63,6 +71,7 @@ fn main() {
                 let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if cmd == "claim" && out.status.success() {
                     here = PathBuf::from(text.lines().last().unwrap_or_default());
+                    let _ = std::env::set_current_dir(&here);
                     println!("claimed {}", here.display());
                 } else {
                     println!("{cmd}: {text} {}", String::from_utf8_lossy(&out.stderr).trim());
@@ -74,6 +83,18 @@ fn main() {
             "sh" => {
                 let ok = Command::new("sh").arg("-c").arg(rest).current_dir(&here).status().is_ok_and(|s| s.success());
                 println!("ran {ok}");
+            }
+            "show" => {
+                print!("\x1b[H\x1b[2J\x1b[3J{}", std::fs::read_to_string(rest).unwrap_or_default().replace('\n', "\r\n"));
+                prompt = false;
+            }
+            "title" => {
+                print!("\x1b]2;{rest}\x07");
+                // Claude also records its title for the conversation.
+                let line = serde_json::json!({"type": "ai-title", "aiTitle": rest.trim_start_matches(|c: char| !c.is_alphanumeric()), "sessionId": id});
+                let mut f = std::fs::OpenOptions::new().append(true).open(&transcript).unwrap();
+                writeln!(f, "{line}").unwrap();
+                prompt = false;
             }
             "exit" => {
                 println!("FAKE-CLAUDE bye");

@@ -10,6 +10,13 @@ release, so a claim is sub-second instead of a cold install.
 ~/Workspace/.pools/app/slot-1…5 ← pooled worktrees
 ```
 
+![velmux: two repos with claimed slots (a Claude working, one blocked on a permission prompt, one idle), PR status, parked work and a scratch session](docs/screenshots/overview.svg)
+
+| | |
+|---|---|
+| ![the prefix popup](docs/screenshots/prefix.svg) | ![a slot's right-click menu](docs/screenshots/slot-menu.svg) |
+| ![finding a conversation](docs/screenshots/find.svg) | ![the theme picker](docs/screenshots/theme.svg) |
+
 ## Setup
 
 ```sh
@@ -352,6 +359,11 @@ pseudo-terminal, driven with keys and mouse clicks, against a fake Claude
 claiming from the base and releasing back, parked work resuming with its
 Claude (live or from its transcript), restore after a stop (Claude and
 scrollback), live restart, finding a conversation, and merged PRs.
+
+The screenshots above are generated, not taken: `cargo test -p velmux-cli
+--test screenshots -- --ignored` builds a demo scene with the same harness
+(fake Claudes drawing mock screens, a fake `gh` for PR status) and writes each
+view as SVG to `docs/screenshots/`.
 
 ## License
 
