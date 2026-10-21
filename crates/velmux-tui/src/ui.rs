@@ -389,37 +389,44 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     }
 }
 
-/// A slot's second line, dim under its branch: `slot 2 · ↓3 ↑1 · #142✓`,
-/// plus `⋯` while it's being prepared and `! rebase` when one stopped.
-fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
+/// One piece of a slot's second line, where it's drawn, and where it links.
+pub struct Piece {
+    pub x: u16,
+    pub text: String,
+    pub style: Style,
+    pub url: Option<String>,
+}
+
+/// A slot's second line, dim under its branch: `@2 · ↓3 ↑1 · #142✓`, plus
+/// `⋯ preparing` and `! rebase` when they apply (and the branch when the
+/// slot's renamed), laid out under the branch as far as there's room. Its PR
+/// number links to the PR.
+pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Piece> {
     let t = &app.theme;
     let base = if selected { Style::new().bg(t.selected_bg) } else { Style::new() };
-    if selected {
-        buf.set_style(Rect::new(0, y, side, 1), base);
-        buf.set_string(0, y, "▌", base.fg(t.accent));
-    }
     let project = &app.projects[loc.project];
-    let Some(id) = &loc.slot else { return };
+    let Some(id) = &loc.slot else { return Vec::new() };
     let slot = project.slots.iter().find(|s| &s.id == id);
     let dim = base.fg(t.dim);
-    let mut parts: Vec<Vec<(String, Style)>> = vec![vec![(format!("slot {}", id.trim_start_matches("slot-")), dim)]];
+    let piece = |text: String, style: Style| (text, style, None::<String>);
+    let mut parts = vec![vec![piece(format!("@{}", id.trim_start_matches("slot-")), dim)]];
     // Renamed, the first line shows the name: the branch goes here.
     if let (Some(_), Some(branch)) = (app.views.get(loc).and_then(|v| v.name.as_ref()), slot.and_then(|s| s.branch.clone())) {
-        parts[0].push((branch, dim));
+        parts[0].push(piece(branch, dim));
     }
     if app.preparing.contains_key(loc) {
-        parts.push(vec![("⋯ preparing".into(), dim)]);
+        parts.push(vec![piece("⋯ preparing".into(), dim)]);
     }
     if let Some(s) = slot {
         if let Some(c) = &s.conflict {
-            parts.push(vec![(format!("! {c}"), base.fg(t.blocked).add_modifier(Modifier::BOLD))]);
+            parts.push(vec![piece(format!("! {c}"), base.fg(t.blocked).add_modifier(Modifier::BOLD))]);
         }
         let mut drift = Vec::new();
         if s.behind > 0 {
-            drift.push((format!("↓{}", s.behind), base.fg(t.alert)));
+            drift.push(piece(format!("↓{}", s.behind), base.fg(t.alert)));
         }
         if s.ahead > 0 {
-            drift.push((format!("↑{}", s.ahead), dim));
+            drift.push(piece(format!("↑{}", s.ahead), dim));
         }
         if !drift.is_empty() {
             parts.push(drift);
@@ -436,29 +443,63 @@ fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool,
                 (_, Checks::None) => ("", t.dim),
             };
             let number = if pr.draft || pr.state == PrState::Closed { t.dim } else { t.text2 };
-            parts.push(vec![(format!("#{}{glyph}", pr.number), base.fg(if glyph.is_empty() { number } else { color }))]);
+            let style = base.fg(if glyph.is_empty() { number } else { color });
+            let url = (!pr.url.is_empty() && !pr.url.chars().any(char::is_control)).then(|| pr.url.clone());
+            parts.push(vec![(format!("#{}{glyph}", pr.number), style, url)]);
         }
     }
-    // Under the branch, as far as there's room.
     let (mut x, end) = (5u16, side.saturating_sub(1));
-    for (i, part) in parts.iter().enumerate() {
+    let mut out = Vec::new();
+    for (i, part) in parts.into_iter().enumerate() {
         if i > 0 {
             if x + 3 > end {
                 break;
             }
-            buf.set_string(x, y, " · ", dim);
+            out.push(Piece { x, text: " · ".into(), style: dim, url: None });
             x += 3;
         }
-        for (j, (text, style)) in part.iter().enumerate() {
+        for (j, (text, style, url)) in part.into_iter().enumerate() {
             let gap = (j > 0) as u16;
             let room = end.saturating_sub(x + gap) as usize;
             if room == 0 {
-                return;
+                return out;
             }
-            buf.set_stringn(x + gap, y, text, room, *style);
-            x += gap + text.chars().count().min(room) as u16;
+            let text: String = text.chars().take(room).collect();
+            let w = text.chars().count() as u16;
+            out.push(Piece { x: x + gap, text, style, url });
+            x += gap + w;
         }
     }
+    out
+}
+
+fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
+    let t = &app.theme;
+    if selected {
+        let base = Style::new().bg(t.selected_bg);
+        buf.set_style(Rect::new(0, y, side, 1), base);
+        buf.set_string(0, y, "▌", base.fg(t.accent));
+    }
+    for p in detail_pieces(app, loc, side, selected) {
+        buf.set_string(p.x, y, &p.text, p.style);
+    }
+}
+
+/// Every link in the sidebar: (row, first column, width, url).
+pub fn sidebar_links(app: &App, cols: u16, rows: u16) -> Vec<(u16, u16, u16, String)> {
+    if app.sidebar_hidden {
+        return Vec::new();
+    }
+    let side = sidebar_width(cols, false, app.sidebar_cols);
+    let current = app.current_loc();
+    sidebar_rows(app, rows)
+        .into_iter()
+        .filter_map(|(y, row)| match row {
+            Row::Detail(loc) => Some((y, detail_pieces(app, &loc, side, current.as_ref() == Some(&loc)))),
+            _ => None,
+        })
+        .flat_map(|(y, pieces)| pieces.into_iter().filter_map(move |p| Some((y, p.x, p.text.chars().count() as u16, p.url?))))
+        .collect()
 }
 
 fn state_glyph(t: &Theme, pane: &Pane) -> (&'static str, Style) {

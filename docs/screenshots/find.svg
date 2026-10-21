@@ -103,8 +103,8 @@
 <text x="1007.2" y="189.5" fill="#005f87" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="58.0" y="207.5" fill="#585b70" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">slot 1 · </text>
-<text x="133.6" y="207.5" fill="#f38ba8" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#143✗</text>
+<text x="58.0" y="207.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">@1 · </text>
+<text x="100.0" y="207.5" fill="#f38ba8" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#143✗</text>
 
 <text x="284.8" y="207.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="207.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
@@ -130,9 +130,9 @@
 
 <rect x="16.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="243.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
 <rect x="24.4" y="230.0" width="33.6" height="18" fill="#303030"/>
-<rect x="58.0" y="230.0" width="75.6" height="18" fill="#303030"/><text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">slot 2 · </text>
-<rect x="133.6" y="230.0" width="42.0" height="18" fill="#303030"/><text x="133.6" y="243.5" fill="#a6e3a1" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#142✓</text>
-<rect x="175.6" y="230.0" width="109.2" height="18" fill="#303030"/>
+<rect x="58.0" y="230.0" width="42.0" height="18" fill="#303030"/><text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">@2 · </text>
+<rect x="100.0" y="230.0" width="42.0" height="18" fill="#303030"/><text x="100.0" y="243.5" fill="#a6e3a1" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#142✓</text>
+<rect x="142.0" y="230.0" width="142.8" height="18" fill="#303030"/>
 <text x="284.8" y="243.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 <text x="301.6" y="243.5" fill="#005f87" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
@@ -188,7 +188,7 @@
 <text x="1007.2" y="315.5" fill="#005f87" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="58.0" y="333.5" fill="#585b70" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">slot 1</text>
+<text x="58.0" y="333.5" fill="#585b70" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">@1</text>
 
 <text x="284.8" y="333.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 

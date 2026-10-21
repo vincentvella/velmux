@@ -71,6 +71,9 @@ impl Env {
         std::fs::create_dir_all(&droid).unwrap();
         std::fs::copy(fake_claude(), droid.join("droid")).unwrap();
         std::os::unix::fs::symlink(droid.join("droid"), bin.join("droid")).unwrap();
+        // A stand-in browser: what velmux opens is written to `opened.txt`.
+        std::fs::write(bin.join("browser"), format!("#!/bin/sh\necho \"$1\" >> '{}'\n", root.join("opened.txt").display())).unwrap();
+        sh(&bin, "chmod +x browser");
         let gh = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'gh version 0 (fake)' ;;\n  pr) cat \"$FAKE_GH_PRS\" 2>/dev/null || echo '[]' ;;\nesac\n";
         std::fs::write(bin.join("gh"), gh).unwrap();
         sh(&bin, "chmod +x gh");
@@ -107,6 +110,7 @@ impl Env {
             ("CODEX_HOME", self.root.join("codex").display().to_string()),
             ("VELMUX_BIN", VELMUX.into()),
             ("FAKE_GH_PRS", self.root.join("prs.json").display().to_string()),
+            ("BROWSER", self.root.join("bin/browser").display().to_string()),
             ("GIT_TERMINAL_PROMPT", "0".into()),
             ("ENV", String::new()),
         ]

@@ -1858,11 +1858,11 @@ impl App {
         }
     }
 
-    /// Open a URL in the default browser.
+    /// Open a URL in the default browser (or `$BROWSER`).
     fn open_url(&mut self, url: &str) {
         let url = url.to_string();
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        match std::process::Command::new(opener).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+        let opener = std::env::var("BROWSER").ok().filter(|b| !b.is_empty()).unwrap_or_else(|| if cfg!(target_os = "macos") { "open" } else { "xdg-open" }.into());
+        match std::process::Command::new(&opener).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             Ok(mut child) => {
                 std::thread::spawn(move || child.wait());
                 self.toast(&format!("opened {url}"));
@@ -2452,6 +2452,10 @@ impl App {
     }
 
     fn sidebar_click(&mut self, x: u16, y: u16) {
+        // A PR number opens the PR.
+        if let Some((.., url)) = ui::sidebar_links(self, self.size.0, self.size.1).into_iter().find(|&(ly, lx, w, _)| ly == y && (lx..lx + w).contains(&x)) {
+            return self.open_url(&url);
+        }
         let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else {
             return;
         };
@@ -4449,6 +4453,14 @@ impl App {
         {
             let mut backend = CrosstermBackend::new(&mut out);
             let _ = backend.draw(self.prev.diff(&buf).into_iter());
+            // Links (OSC 8), redrawn every frame: a terminal ties the link to
+            // the cells printed while it's open, and a diff may reprint them.
+            for (y, x, w, url) in ui::sidebar_links(self, self.size.0, self.size.1) {
+                use std::io::Write;
+                let _ = write!(backend, "\x1b]8;;{url}\x1b\\");
+                let _ = backend.draw((x..x + w).filter_map(|cx| buf.cell((cx, y)).map(|c| (cx, y, c))));
+                let _ = write!(backend, "\x1b]8;;\x1b\\");
+            }
             let _ = match cursor {
                 Some(pos) => backend.set_cursor_position(pos).and_then(|_| backend.show_cursor()),
                 None => backend.hide_cursor(),

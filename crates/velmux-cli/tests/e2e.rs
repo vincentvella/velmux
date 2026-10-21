@@ -18,7 +18,7 @@ fn base_claude_claims_a_slot_and_releases_it() {
     ui.line("claim feat/e2e");
     ui.wait_for("claimed ");
     ui.wait_for("▣ feat/e2e");
-    ui.wait_for("slot 1");
+    ui.wait_for("@1");
     let slot = env.slot(&repo, "slot-1");
     assert_eq!((slot["status"].as_str(), slot["branch"].as_str()), (Some("inuse"), Some("feat/e2e")));
     ui.wait_for("slot-1 · feat/e2e");
@@ -163,8 +163,12 @@ fn a_merged_pr_offers_release_and_isnt_parked() {
         "statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}]"#;
     std::fs::write(env.root.join("prs.json"), prs).unwrap();
 
+    let opened = env.root.join("opened.txt");
     let ui = env.attach(&repo);
     ui.wait_for("#7⇡");
+    // Its number opens the PR.
+    ui.click_on("#7⇡", false);
+    env.until("the PR to open", || std::fs::read_to_string(&opened).is_ok_and(|t| t.trim() == "https://github.com/acme/app/pull/7"));
     ui.click_on("feat/pr", true);
     ui.wait_for("release (PR merged)");
     ui.send(b"\r");

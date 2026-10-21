@@ -68,7 +68,7 @@
 <text x="284.8" y="189.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="58.0" y="207.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">s</text>
+<text x="58.0" y="207.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
 <text x="66.4" y="207.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╭ storefront › slot-1 · fix/search-flicker╮</text>
 <text x="427.6" y="207.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">nts/client.ts)                                                         </text>
 <rect x="16.0" y="212.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="225.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
@@ -85,7 +85,7 @@
 <text x="427.6" y="225.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">es                                                                     </text>
 <rect x="16.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="243.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
 <rect x="24.4" y="230.0" width="33.6" height="18" fill="#303030"/>
-<rect x="58.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">s</text>
+<rect x="58.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
 <text x="66.4" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 <text x="91.6" y="243.5" fill="#bac2de" xml:space="preserve" textLength="159.6" lengthAdjust="spacingAndGlyphs">agent in this slot…</text>
@@ -136,7 +136,7 @@
 <text x="419.2" y="315.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="315.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">src/checkout)                                                          </text>
 
-<text x="58.0" y="333.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">s</text>
+<text x="58.0" y="333.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
 <text x="66.4" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 <text x="91.6" y="333.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">copy PR link</text>

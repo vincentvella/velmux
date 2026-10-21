@@ -124,7 +124,8 @@ Rebind anything in the [config](configuration.md#keys).
 
 ## Mouse
 
-Click a pane to focus it, a sidebar row to go there, a tab to switch. Drag a
+Click a pane to focus it, a sidebar row to go there, a tab to switch, a slot's
+PR number (`#142✓`) to open the PR. Drag a
 divider to resize, or the sidebar's edge to make it wider or narrower (it
 keeps that width). The wheel scrolls a pane's history (and closes it again at
 the bottom), sends arrow keys to full-screen apps like `less`, and passes
