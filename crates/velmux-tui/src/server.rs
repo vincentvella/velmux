@@ -47,7 +47,8 @@ pub enum Event {
     /// A step of a background job (`job` key); a leading `slot-N:` names the slot.
     Progress { project: usize, job: String, text: String },
     /// Fresh slot health and parked work, per project, from a background refresh.
-    Pools(Vec<PoolHealth>),
+    /// `gen`: [`App::slots_gen`] when it started.
+    Pools { gen: u64, fresh: Vec<PoolHealth> },
     Synced { job: String, result: Result<String, String> },
     /// The conversation index, rebuilt in the background.
     Indexed(Vec<crate::search::Doc>),
@@ -320,6 +321,9 @@ pub struct App {
     pub preparing: HashMap<Loc, (String, String)>,
     /// A background slot/parked refresh is running.
     refreshing: bool,
+    /// Bumped by every direct refresh: a background one that started earlier
+    /// is stale and its results are dropped.
+    slots_gen: u64,
     /// When each repo was last fetched in the background.
     fetched: HashMap<usize, Instant>,
     /// For unique job keys.
@@ -517,6 +521,7 @@ impl App {
             jobs: Vec::new(),
             preparing: HashMap::new(),
             refreshing: false,
+            slots_gen: 0,
             fetched: HashMap::new(),
             job_seq: 0,
             sessions: Vec::new(),
@@ -765,8 +770,11 @@ impl App {
                 }
                 self.dirty = true;
             }
-            Event::Pools(fresh) => {
+            Event::Pools { gen, fresh } => {
                 self.refreshing = false;
+                if gen != self.slots_gen {
+                    return; // a claim / release refreshed since this one started
+                }
                 for (p, slots, parked) in fresh {
                     let Some(project) = self.projects.get_mut(p) else { continue };
                     if let Some(slots) = slots {
@@ -1243,7 +1251,7 @@ impl App {
             }
             work.push((i, pool, due));
         }
-        let tx = self.events.clone();
+        let (tx, gen) = (self.events.clone(), self.slots_gen);
         std::thread::spawn(move || {
             let fresh = work
                 .into_iter()
@@ -1254,7 +1262,7 @@ impl App {
                     (i, pool.status().ok(), pool.parked().ok())
                 })
                 .collect();
-            let _ = tx.send(Event::Pools(fresh));
+            let _ = tx.send(Event::Pools { gen, fresh });
         });
     }
 
@@ -1548,6 +1556,7 @@ impl App {
     }
 
     pub fn refresh_slots(&mut self) {
+        self.slots_gen += 1;
         for project in &mut self.projects {
             if let Some(Ok(slots)) = project.pool.as_ref().map(|p| p.status()) {
                 project.slots = slots;

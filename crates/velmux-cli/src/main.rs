@@ -93,6 +93,12 @@ enum Cmd {
     Restart,
     /// Stop the TUI server: everything is saved and restored next time.
     Stop,
+    /// Install the Claude Code skill that teaches Claude to work in velmux
+    /// (claiming, releasing, parked work, sync, ports, PRs).
+    Skill {
+        #[command(subcommand)]
+        action: SkillCmd,
+    },
     /// Show key bindings; `--ghostty` prints the Ghostty keybinds for the root ones.
     Keys {
         #[arg(long)]
@@ -123,6 +129,7 @@ fn run() -> Result<()> {
         None => return velmux_tui::attach(cwd),
         Some(Cmd::Server) => return velmux_tui::serve(),
         Some(Cmd::Restart) => return velmux_tui::restart_server(),
+        Some(Cmd::Skill { action }) => return skill(action, &cwd),
         Some(Cmd::Stop) => return velmux_tui::stop_server(),
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, .. }) => return velmux_tui::print_keys(ghostty),
@@ -138,6 +145,10 @@ fn run() -> Result<()> {
         Cmd::Init => {
             eprintln!("pool {} → {}", pool.name, pool.dir.display());
             print_table(&pool, &pool.init(&report)?);
+            let env = Env::from_process()?;
+            if !skill_path(&env.claude_dir).exists() && !cwd.join(".claude/skills/velmux/SKILL.md").exists() {
+                eprintln!("tip: `velmux skill install` teaches Claude to claim and release slots itself");
+            }
         }
         // Inside a velmux pane: let the server claim, so this pane moves to the slot.
         Cmd::Claim { branch, json: false, .. } if velmux_tui::current_pane().is_some() => {
@@ -237,7 +248,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Skill { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -249,6 +260,66 @@ fn resolve_slot(pool: &Pool, slot: Option<String>, cwd: &std::path::Path) -> Res
             .slot_of(cwd)?
             .ok_or_else(|| anyhow!("not inside a slot; pass a slot id (see `velmux status`)")),
     }
+}
+
+#[derive(clap::Subcommand)]
+enum SkillCmd {
+    /// Write (or update) it: in your Claude config (every repo), or with
+    /// `--project` in this repo's `.claude/skills/` (to commit and share).
+    Install {
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove it.
+    Uninstall {
+        #[arg(long)]
+        project: bool,
+    },
+    /// Print it.
+    Show,
+}
+
+const SKILL: &str = include_str!("skill.md");
+
+fn skill_path(claude_dir: &std::path::Path) -> std::path::PathBuf {
+    claude_dir.join("skills/velmux/SKILL.md")
+}
+
+fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
+    let target = |project: bool| -> Result<std::path::PathBuf> {
+        Ok(if project {
+            velmux_pool::git::base_of(cwd)?.join(".claude/skills/velmux/SKILL.md")
+        } else {
+            skill_path(&Env::from_process()?.claude_dir)
+        })
+    };
+    match action {
+        SkillCmd::Show => print!("{SKILL}"),
+        SkillCmd::Install { project } => {
+            let path = target(project)?;
+            let verb = match std::fs::read_to_string(&path) {
+                Ok(old) if old == SKILL => "already up to date:",
+                Ok(_) => "updated",
+                Err(_) => "installed",
+            };
+            std::fs::create_dir_all(path.parent().unwrap()).with_context(|| format!("creating {}", path.display()))?;
+            std::fs::write(&path, SKILL).with_context(|| format!("writing {}", path.display()))?;
+            println!("{verb} {}", path.display());
+            println!("new Claude sessions pick it up; it's used whenever Claude runs in velmux");
+        }
+        SkillCmd::Uninstall { project } => {
+            let path = target(project)?;
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    let _ = std::fs::remove_dir(path.parent().unwrap());
+                    println!("removed {}", path.display());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("not installed at {}", path.display()),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn shell_quote(s: &str) -> String {

@@ -124,7 +124,7 @@ fn connect_or_spawn() -> Result<UnixStream> {
         .process_group(0)
         .spawn()
         .context("starting velmux server")?;
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if let Ok(s) = UnixStream::connect(&sock) {
             return Ok(s);

@@ -10,6 +10,23 @@ release, so a claim is sub-second instead of a cold install.
 ~/Workspace/.pools/app/slot-1…5 ← pooled worktrees
 ```
 
+## Setup
+
+```sh
+cargo install --path crates/velmux-cli   # or symlink target/release/velmux
+velmux skill install                     # teach Claude to work in velmux
+velmux keys --ghostty                    # Ghostty keybinds for the Cmd chords
+cd ~/Workspace/app && velmux             # attach (starts the server)
+```
+
+`velmux skill install` writes a Claude Code skill to `~/.claude/skills/velmux/`
+(`--project` puts it in the repo's `.claude/skills/` to commit instead): how to
+tell it's in velmux (`$VELMUX_PANE`, `$VELMUX_SLOT`), to plan in the base and
+`velmux claim` a slot before editing, `velmux release` when done, parked work,
+`velmux sync`, per-slot `$PORT`, and PRs. Claudes started by velmux in the base
+also get this as a system prompt; the skill covers every other Claude (in a
+slot, started by hand). Rerun it after upgrading velmux to update the skill.
+
 ## TUI
 
 **New work starts as a conversation in the base checkout** (`⌘N`, `⊕ new`, or
@@ -220,6 +237,7 @@ velmux open [slot]              # editor from config / $VISUAL / $EDITOR
 velmux gc                       # prune dead worktrees, recreate missing slots
 velmux restart                  # live-restart the TUI server (panes keep running)
 velmux stop                     # stop it (everything's restored next time)
+velmux skill install [--project] # the Claude Code skill (update: rerun; uninstall)
 ```
 
 Releasing a branch with work on it (uncommitted changes, or commits past the

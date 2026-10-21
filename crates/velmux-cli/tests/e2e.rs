@@ -71,8 +71,11 @@ impl Env {
             ),
         )
         .unwrap();
-        // Short: macOS caps socket paths at 104 bytes.
-        let socket = PathBuf::from(format!("/tmp/vmx-e2e-{}.sock", std::process::id()));
+        // Short (macOS caps socket paths at 104 bytes) and new per test, so a
+        // test never reaches the previous one's server while it shuts down.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let socket = PathBuf::from(format!("/tmp/vmx-e2e-{}-{n}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let velmux_dir = Path::new(VELMUX).parent().unwrap();
         let path_var = format!("{}:{}:{}", bin.display(), velmux_dir.display(), std::env::var("PATH").unwrap_or_default());
@@ -171,6 +174,10 @@ impl Env {
 impl Drop for Env {
     fn drop(&mut self) {
         let _ = Command::new(VELMUX).arg("stop").envs(self.vars()).output();
+        let start = Instant::now();
+        while std::os::unix::net::UnixStream::connect(&self.socket).is_ok() && start.elapsed() < WAIT {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         let _ = std::fs::remove_file(&self.socket);
     }
 }
@@ -212,11 +219,18 @@ impl Ui {
         self.send(b"\r");
     }
 
+    /// The pane area's rows run together at full width, so text that wrapped
+    /// (a pane started narrower than it is now) still matches.
+    fn pane_text(&self) -> String {
+        let p = self.parser.lock().unwrap();
+        p.screen().rows(33, COLS - 33).collect()
+    }
+
     fn wait_for(&self, needle: &str) -> String {
         let start = Instant::now();
         loop {
             let screen = self.screen();
-            if screen.contains(needle) {
+            if screen.contains(needle) || self.pane_text().contains(needle) {
                 return screen;
             }
             assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}");
@@ -400,7 +414,7 @@ fn find_a_conversation_and_resume_it() {
     ui.send(b"\r");
     // Resumed beside the shell it left behind, so its line wraps in the split.
     let screen = ui.wait_for("mode=resume");
-    assert!(screen.contains(&format!("FAKE-CLAUDE id={}", &id[..20])), "{screen}");
+    assert!(screen.contains(&format!("FAKE-CLAUDE id={}", &id[..10])), "{screen}");
 }
 
 #[test]
@@ -426,4 +440,24 @@ fn a_merged_pr_offers_release_and_isnt_parked() {
     ui.send(b"y");
     env.until("slot-1 to be free", || env.slot(&repo, "slot-1")["status"] == "free");
     assert!(env.json(&repo, &["parked", "--json"]).as_array().unwrap().is_empty(), "merged work isn't parked");
+}
+
+#[test]
+fn the_claude_skill_installs_updates_and_uninstalls() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let text = |out: Output| String::from_utf8_lossy(&out.stdout).into_owned();
+    let user = env.claude_dir.join("skills/velmux/SKILL.md");
+    assert!(text(env.velmux(&repo, &["skill", "install"])).contains("installed"));
+    let skill = std::fs::read_to_string(&user).unwrap();
+    assert!(skill.starts_with("---\nname: velmux\ndescription: "), "frontmatter first");
+    assert!(skill.contains("velmux claim") && skill.contains("velmux release"));
+    assert!(text(env.velmux(&repo, &["skill", "install"])).contains("already up to date"));
+    std::fs::write(&user, "old").unwrap();
+    assert!(text(env.velmux(&repo, &["skill", "install"])).contains("updated"));
+    // Per repo, to commit.
+    env.velmux(&repo, &["skill", "install", "--project"]);
+    assert!(repo.join(".claude/skills/velmux/SKILL.md").exists());
+    assert!(text(env.velmux(&repo, &["skill", "uninstall"])).contains("removed"));
+    assert!(!user.exists());
 }
