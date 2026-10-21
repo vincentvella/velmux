@@ -1,0 +1,7 @@
+# Vercel builds only the site (site/, from docs/): upload nothing else.
+/*
+!/site
+!/docs
+/site/node_modules
+/site/dist
+/site/.astro
