@@ -50,7 +50,7 @@ pub fn score(query: &str, text: &str) -> Option<i32> {
 pub fn filter<'a>(items: &'a [Item], query: &str) -> Vec<&'a Item> {
     let mut hits: Vec<(i32, usize, &Item)> =
         items.iter().enumerate().filter_map(|(i, it)| score(query, &it.label).map(|s| (s, i, it))).collect();
-    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    hits.sort_by_key(|(score, i, _)| (std::cmp::Reverse(*score), *i));
     hits.into_iter().map(|(_, _, it)| it).collect()
 }
 

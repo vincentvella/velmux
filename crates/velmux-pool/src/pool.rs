@@ -403,7 +403,7 @@ impl Pool {
                 Ok(())
             })?;
         }
-        views.sort_by(|a, b| b.parked_at.cmp(&a.parked_at));
+        views.sort_by_key(|v| std::cmp::Reverse(v.parked_at));
         Ok(views)
     }
 

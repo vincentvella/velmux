@@ -53,7 +53,7 @@ pub fn scan(dirs: &[PathBuf], old: Vec<Doc>) -> Vec<Doc> {
             }
         }
     }
-    docs.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    docs.sort_by_key(|d| std::cmp::Reverse(d.mtime));
     docs
 }
 
