@@ -63,10 +63,8 @@ pub enum SidebarView {
 pub const MENU: &[(&str, crate::keys::Action)] = {
     use crate::keys::Action::*;
     &[
-        ("new conversation", AgentBase),
-        ("claim a slot…", ClaimSlot),
+        // Creating things lives in the sidebar's right-click menus.
         ("go to…", LocationPicker),
-        ("new tab", NewTab),
         ("name this place", RenameLocation),
         ("rename tab", RenameTab),
         ("theme…", ThemePicker),
