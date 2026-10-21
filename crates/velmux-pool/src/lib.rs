@@ -10,5 +10,5 @@ mod pool;
 pub mod state;
 
 pub use config::{tui_settings, Config, Env, NotifySettings, Ports, SyncMode, TuiSettings};
-pub use pool::{ClaimOpts, ParkedView, Pool, Released, SlotView};
+pub use pool::{BaseUpdate, ClaimOpts, ParkedView, Pool, Released, SlotView};
 pub use state::Status;

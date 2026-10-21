@@ -23,6 +23,10 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Sync every claimed slot that's behind the base.
+    SyncAll,
+    /// Move the checkout's uncommitted changes into a new slot.
+    MoveToSlot,
     /// Pick the finished / blocked sounds, hearing each.
     SoundPicker,
     /// Play the finished and blocked sounds.
@@ -170,6 +174,8 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("sync_all", Action::SyncAll),
+    ("move_to_slot", Action::MoveToSlot),
     ("sounds", Action::SoundPicker),
     ("test_sounds", Action::TestSounds),
     ("install_skill", Action::InstallSkill),

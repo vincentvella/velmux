@@ -117,6 +117,11 @@ enum Cmd {
     /// Check velmux's setup (git, your agent, the Claude skill, gh, your
     /// terminal, this repo's pool) and say how to fix what isn't right.
     Doctor,
+    /// A Claude Code PreToolUse hook: refuses file edits inside a repo's
+    /// checkout (`$VELMUX_BASE`) so agents work in slots. Reads the hook's
+    /// JSON on stdin; exit 2 blocks the edit and tells Claude why.
+    #[command(hide = true)]
+    Guard,
     /// Run the TUI server in the foreground (normally started by attaching).
     #[command(name = "__server", hide = true)]
     Server,
@@ -145,6 +150,7 @@ fn run() -> Result<()> {
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, install, .. }) => return velmux_tui::print_keys(ghostty, install),
         Some(Cmd::Doctor) => return doctor(&cwd),
+        Some(Cmd::Guard) => guard(),
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
@@ -260,7 +266,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard => unreachable!(),
     }
     Ok(())
 }
@@ -322,6 +328,44 @@ fn skill(action: SkillCmd, cwd: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `velmux guard`: see [`Cmd::Guard`]. It fails open: if
+/// anything is unclear (no checkout set, unreadable input) the edit goes ahead.
+fn guard() -> ! {
+    use std::io::Read;
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let verdict = (|| {
+        let base = std::path::PathBuf::from(std::env::var_os("VELMUX_BASE")?);
+        let hook: serde_json::Value = serde_json::from_str(&input).ok()?;
+        let tool = &hook["tool_input"];
+        let file = tool["file_path"].as_str().or(tool["notebook_path"].as_str())?;
+        let cwd = hook["cwd"].as_str().map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let path = cwd.join(file);
+        // Compare real paths (the file may not exist yet: resolve its folder).
+        let real = |p: &std::path::Path| -> std::path::PathBuf {
+            p.canonicalize().ok().or_else(|| Some(p.parent()?.canonicalize().ok()?.join(p.file_name()?))).unwrap_or_else(|| p.to_path_buf())
+        };
+        let (path, base) = (real(&path), real(&base));
+        let pool = std::env::var_os("VELMUX_POOL_DIR").map(|p| real(std::path::Path::new(&p)));
+        let inside = path.starts_with(&base) && !pool.is_some_and(|p| path.starts_with(p));
+        inside.then_some((path, base))
+    })();
+    match verdict {
+        Some((path, base)) => {
+            let repo = base.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            eprintln!(
+                "velmux: {} is in {repo}'s checkout ({}), which stays clean: changes happen in slots. \
+                 Run `velmux claim <short-branch-name>`, then make this edit under the path it prints \
+                 (the same file, relative to the slot).",
+                path.display(),
+                base.display()
+            );
+            std::process::exit(2)
+        }
+        None => std::process::exit(0),
+    }
 }
 
 /// `velmux doctor`: each check as `✓` / `✗` (with how to fix it) / `·` (optional).

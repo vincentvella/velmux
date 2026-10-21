@@ -194,6 +194,61 @@ fn each_slot_gets_its_own_ports() {
     assert_eq!(Pool::discover(plain.env.clone(), &plain.base).unwrap().slot_port("slot-3"), Some(3030));
 }
 
+/// The fixture's repo pushed to a bare "origin" (tracked by main), and a
+/// second clone to push new commits from.
+fn with_origin(f: &Fixture) -> PathBuf {
+    let root = f.base.parent().unwrap().to_path_buf();
+    sh(&root, "git clone -q --bare app origin.git");
+    sh(&f.base, "git remote add origin ../origin.git && git fetch -q origin && git branch -q --set-upstream-to=origin/main");
+    sh(&root, "git clone -q origin.git other && cd other && git config user.email t@t && git config user.name t");
+    root.join("other")
+}
+
+#[test]
+fn the_checkout_fast_forwards_to_its_upstream_when_it_can() {
+    use velmux_pool::BaseUpdate;
+    let f = fixture("slots = 1\nbase_ref = \"origin/main\"\n");
+    let other = with_origin(&f);
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    assert_eq!(pool.update_base(), BaseUpdate::UpToDate);
+
+    sh(&other, "echo a > a && git add a && git commit -qm a && echo b > b && git add b && git commit -qm b && git push -q");
+    pool.fetch().unwrap();
+    // A local edit to an unrelated file doesn't get in the way.
+    std::fs::write(f.base.join("README.md"), "local\n").unwrap();
+    assert_eq!(pool.update_base(), BaseUpdate::FastForwarded(2));
+    assert!(f.base.join("b").exists());
+    assert_eq!(std::fs::read_to_string(f.base.join("README.md")).unwrap(), "local\n");
+
+    // One that the new commit touches does: left as it was.
+    sh(&other, "echo theirs > README.md && git commit -qam readme && git push -q");
+    pool.fetch().unwrap();
+    assert_eq!(pool.update_base(), BaseUpdate::Blocked(1));
+    assert_eq!(std::fs::read_to_string(f.base.join("README.md")).unwrap(), "local\n");
+
+    // Commits of its own: never touched.
+    sh(&f.base, "git checkout -q README.md && echo mine > mine && git add mine && git commit -qm mine");
+    assert_eq!(pool.update_base(), BaseUpdate::Diverged { behind: 1, ahead: 1 });
+}
+
+#[test]
+fn changes_in_the_checkout_move_to_a_slot() {
+    let f = fixture("slots = 1\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    assert!(pool.base_changes().is_empty());
+    std::fs::write(f.base.join("README.md"), "edited in the checkout\n").unwrap();
+    std::fs::write(f.base.join("new.txt"), "new\n").unwrap();
+    assert_eq!(pool.base_changes().len(), 2);
+
+    pool.stash_base_for("feat/moved").unwrap();
+    assert!(pool.base_changes().is_empty(), "the checkout is clean again");
+    let s = pool.claim(&opts(Some("feat/moved")), &quiet).unwrap();
+    assert_eq!(std::fs::read_to_string(s.path.join("README.md")).unwrap(), "edited in the checkout\n");
+    assert!(s.path.join("new.txt").exists());
+    assert!(pool.stash_base_for("x").is_err(), "nothing left to move");
+}
+
 #[test]
 fn detached_commits_are_rescued_on_release() {
     let f = fixture("slots = 1\n");

@@ -344,6 +344,10 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     if app.preparing.contains_key(loc) {
         marks.push(("⋯".into(), Style::new().fg(t.dim)));
     }
+    // Changes in a repo's checkout: work that belongs in a slot.
+    if loc.slot.is_none() && project.base_changes > 0 {
+        marks.push((format!("✎{}", project.base_changes), Style::new().fg(t.alert).add_modifier(Modifier::BOLD)));
+    }
     if let Some(s) = slot {
         if s.conflict.is_some() {
             marks.push(("!".into(), Style::new().fg(t.blocked).add_modifier(Modifier::BOLD)));

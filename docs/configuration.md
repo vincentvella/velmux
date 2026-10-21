@@ -19,6 +19,7 @@ mouse = true
 auto_restart = true                      # restart in place when the velmux binary changes
 claude_history = true                    # group each slot's Claude transcripts under its repo
 fetch_every = 15                         # minutes between background fetches (0 = off)
+fast_forward = true                      # fast-forward each checkout to its upstream after a fetch
 sync = "rebase"                          # or "merge": how sync with base catches up
 theme = "rose-pine"
 ```

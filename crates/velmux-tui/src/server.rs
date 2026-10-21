@@ -27,8 +27,16 @@ use crate::session::{self, Saved, SavedFolder, SavedPane, SavedTab, SavedView};
 use crate::{paths, ui};
 
 
-/// One project's slots and parked work, as a background refresh found them.
-pub type PoolHealth = (usize, Option<Vec<SlotView>>, Option<Vec<velmux_pool::ParkedView>>);
+/// One project's slots, parked work and checkout, as a background refresh found them.
+pub struct PoolHealth {
+    project: usize,
+    slots: Option<Vec<SlotView>>,
+    parked: Option<Vec<velmux_pool::ParkedView>>,
+    /// Uncommitted changes in the checkout.
+    base_changes: usize,
+    /// What fast-forwarding the checkout did, after a fetch.
+    base_update: Option<velmux_pool::BaseUpdate>,
+}
 
 pub enum Event {
     /// A new connection and its first message (`Hello` attaches).
@@ -69,6 +77,10 @@ pub struct Project {
     pub parked: Vec<velmux_pool::ParkedView>,
     /// Pull requests by head branch (GitHub repos, with `gh` installed).
     pub prs: HashMap<String, velmux_pool::gh::Pr>,
+    /// Uncommitted changes in the checkout (work that belongs in a slot).
+    pub base_changes: usize,
+    /// The last thing said about fast-forwarding the checkout, so it isn't repeated.
+    base_said: Option<velmux_pool::BaseUpdate>,
     /// Unclassified only: its folders, addressed by id in `Loc::slot`.
     pub folders: Vec<Folder>,
     /// Removed from the sidebar. Kept in place (locations refer to projects by
@@ -83,7 +95,7 @@ pub struct Folder {
 
 impl Project {
     fn repo(pool: Pool) -> Project {
-        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), folders: Vec::new(), removed: false }
+        Project { cfg: pool.cfg.clone(), pool: Some(Arc::new(pool)), slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), base_changes: 0, base_said: None, folders: Vec::new(), removed: false }
     }
 
     pub fn name(&self) -> &str {
@@ -214,6 +226,8 @@ const CONFIG_TEMPLATE: &str = r#"# velmux global config. Save and quit the edito
 /// What a text prompt's answer is for.
 pub enum PromptFor {
     ClaimBranch,
+    /// A branch for the checkout's changes, in this project.
+    MoveToSlot(usize),
     RenameTab,
     RenameLocation,
 }
@@ -646,7 +660,7 @@ impl App {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         // Global settings (agent, editor) apply; a broken config falls back to defaults.
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
-        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), folders: Vec::new(), removed: false });
+        self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), base_changes: 0, base_said: None, folders: Vec::new(), removed: false });
         self.projects.len() - 1
     }
 
@@ -917,13 +931,17 @@ impl App {
                 if gen != self.slots_gen {
                     return; // a claim / release refreshed since this one started
                 }
-                for (p, slots, parked) in fresh {
-                    let Some(project) = self.projects.get_mut(p) else { continue };
-                    if let Some(slots) = slots {
+                for h in fresh {
+                    let Some(project) = self.projects.get_mut(h.project) else { continue };
+                    if let Some(slots) = h.slots {
                         project.slots = slots;
                     }
-                    if let Some(parked) = parked {
+                    if let Some(parked) = h.parked {
                         project.parked = parked;
+                    }
+                    project.base_changes = h.base_changes;
+                    if let Some(update) = h.base_update {
+                        self.base_updated(h.project, update);
                     }
                 }
                 self.dirty = true;
@@ -1416,10 +1434,9 @@ impl App {
             let fresh = work
                 .into_iter()
                 .map(|(i, pool, fetch)| {
-                    if fetch {
-                        let _ = pool.fetch();
-                    }
-                    (i, pool.status().ok(), pool.parked().ok())
+                    let fetched = fetch && pool.fetch().is_ok();
+                    let base_update = (fetched && pool.cfg.fast_forward).then(|| pool.update_base());
+                    PoolHealth { project: i, slots: pool.status().ok(), parked: pool.parked().ok(), base_changes: pool.base_changes().len(), base_update }
                 })
                 .collect();
             let _ = tx.send(Event::Pools { gen, fresh });
@@ -1748,6 +1765,56 @@ impl App {
             }
             Err(e) => self.say(format!("can't open {url}: {e}")),
         }
+    }
+
+    /// After a fetch: say what fast-forwarding the checkout did, and which
+    /// slots that left behind (once per outcome, not every fetch).
+    fn base_updated(&mut self, project: usize, update: velmux_pool::BaseUpdate) {
+        use velmux_pool::BaseUpdate as U;
+        let p = &mut self.projects[project];
+        if p.base_said.as_ref() == Some(&update) && update != U::UpToDate {
+            return;
+        }
+        let first = p.base_said.is_none();
+        p.base_said = Some(update.clone());
+        let name = p.name().to_string();
+        let base_ref = p.pool.as_ref().map(|pool| pool.base_ref().to_string()).unwrap_or_default();
+        let behind: Vec<String> = p.slots.iter().filter(|s| s.status == Status::InUse && s.behind > 0).map(|s| s.id.clone()).collect();
+        let slots = match behind.len() {
+            0 => String::new(),
+            1 => format!(" · {} is behind: sync it from its menu", behind[0]),
+            n => format!(" · {n} slots are behind: right-click {name} › sync all slots"),
+        };
+        match update {
+            U::FastForwarded(n) => {
+                let msg = format!("{name}: checkout fast-forwarded {n} commit{} to {base_ref}{slots}", if n == 1 { "" } else { "s" });
+                self.toast(&msg);
+                self.say(msg);
+            }
+            U::Blocked(n) => self.say(format!("{name}: checkout is {n} behind {base_ref}, but its local changes are in the way (move them to a slot)")),
+            U::Diverged { behind, ahead } if !first || behind > 0 => {
+                self.say(format!("{name}: checkout has {ahead} commit(s) of its own and is {behind} behind {base_ref}; left as it is"))
+            }
+            _ => {}
+        }
+    }
+
+    /// Sync every claimed slot that's behind, one after another, in the background.
+    fn sync_all(&mut self) {
+        let Some(project) = self.current_loc().map(|l| l.project) else { return };
+        let Some(pool) = self.projects[project].pool.clone() else { return self.say("scratch sessions have no slots") };
+        let ids: Vec<String> = self.projects[project].slots.iter().filter(|s| s.status == Status::InUse && s.behind > 0).map(|s| s.id.clone()).collect();
+        if ids.is_empty() {
+            return self.toast("every slot is up to date");
+        }
+        self.job_seq += 1;
+        let job = format!("sync {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("syncing {} slots", ids.len())));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let results: Vec<String> = ids.iter().map(|id| pool.sync(id, &|_| {}).unwrap_or_else(|e| format!("{id}: {e:#}"))).collect();
+            let _ = tx.send(Event::Synced { job, result: Ok(results.join(" · ")) });
+        });
     }
 
     /// Rebase (or merge) a slot's branch onto the base ref, in the background.
@@ -2322,14 +2389,25 @@ impl App {
         let items: Vec<(&'static str, Action)> = match (folder, target.slot.is_some()) {
             // The space: start work (Claude plans in the base and claims its
             // own slot), or take a slot yourself; manage the repo.
-            (false, false) => vec![
+            (false, false) => {
+                let p = &self.projects[target.project];
+                let mut items = Vec::new();
+                if p.base_changes > 0 {
+                    items.push(("move changes to a slot…", Action::MoveToSlot));
+                }
+                items.extend([
                 ("new conversation", Action::AgentBase),
                 ("claim a slot…", Action::ClaimSlot),
                 ("shell in base", Action::NewShell),
                 ("open base in editor", Action::NewEditor),
                 ("rename space", Action::RenameLocation),
                 ("remove repo", Action::RemovePlace),
-            ],
+                ]);
+                if p.slots.iter().any(|s| s.status == Status::InUse && s.behind > 0) {
+                    items.insert(items.len() - 2, ("sync all slots", Action::SyncAll));
+                }
+                items
+            }
             // A slot: work on what's already there, get it reviewed, hand it back.
             (false, true) => {
                 use velmux_pool::gh::{Checks, PrState};
@@ -2585,6 +2663,21 @@ impl App {
             let Mode::Prompt { purpose, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { unreachable!() };
             match purpose {
                 PromptFor::ClaimBranch => self.claim((!answer.is_empty()).then_some(answer)),
+                PromptFor::MoveToSlot(project) => {
+                    let Some(pool) = self.projects[project].pool.clone() else { return bytes.len() };
+                    if answer.is_empty() {
+                        self.say("a branch name is needed to move the changes to");
+                        return bytes.len();
+                    }
+                    match pool.stash_base_for(&answer) {
+                        Ok(()) => {
+                            self.projects[project].base_changes = 0;
+                            self.say(format!("moving the checkout's changes to {answer}…"));
+                            self.claim_in(project, Some(answer), None);
+                        }
+                        Err(e) => self.say(format!("couldn't move them: {e:#}")),
+                    }
+                }
                 PromptFor::RenameTab => {
                     if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
                         // `View` derefs to its active tab: this names the tab.
@@ -2823,6 +2916,18 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::SyncAll => self.sync_all(),
+            Action::MoveToSlot => match self.current_loc() {
+                Some(loc) if self.projects[loc.project].pool.is_some() => {
+                    let n = self.projects[loc.project].base_changes;
+                    self.mode = Mode::Prompt {
+                        label: format!("branch for the checkout's {n} changed file(s)"),
+                        input: String::new(),
+                        purpose: PromptFor::MoveToSlot(loc.project),
+                    };
+                }
+                _ => self.say("go to a repo to move its checkout's changes"),
+            },
             Action::SoundPicker => {
                 use crate::notify::{BLOCKED_SOUNDS, DONE_SOUNDS};
                 let (d, b) = (self.notify.done_sound.clone(), self.notify.blocked_sound.clone());
@@ -3102,6 +3207,27 @@ impl App {
             }
             Err(e) => self.say(e),
         }
+    }
+
+    /// Claude Code settings with a `PreToolUse` hook running `velmux guard`
+    /// before every file edit (written to the state dir, passed with
+    /// `--settings`; merged with your own settings, not replacing them).
+    fn guard_settings(&self) -> Option<PathBuf> {
+        let exe = self.exe.as_ref().map(|(p, _)| p.clone()).or_else(|| std::env::current_exe().ok())?;
+        let settings = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                    "hooks": [{ "type": "command", "command": format!("{} guard", shell_quote(&exe.display().to_string())) }]
+                }]
+            }
+        });
+        let path = crate::paths::state_dir().ok()?.join("claude-guard.json");
+        let text = serde_json::to_string_pretty(&settings).ok()?;
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::write(&path, text).ok()?;
+        }
+        Some(path)
     }
 
     /// `velmux doctor` in a new tab here (or in a new scratch session).
@@ -3646,6 +3772,12 @@ impl App {
             _ if opts.command.is_some() => opts.command.clone(),
             Kind::Agent if session::is_claude(&cfg.agent) => {
                 let mut agent = cfg.agent.clone();
+                // In a repo or its slots: a hook that stops edits to the checkout.
+                if project.pool.is_some() {
+                    if let Some(settings) = self.guard_settings() {
+                        agent = format!("{agent} --settings {}", shell_quote(&settings.display().to_string()));
+                    }
+                }
                 if let (None, Some(pool)) = (&loc.slot, &project.pool) {
                     let _ = std::fs::create_dir_all(&pool.dir);
                     let prompt = BASE_PROMPT.replace("{repo}", &pool.name);
@@ -3680,7 +3812,10 @@ impl App {
         // Slots get their own ports (and `VELMUX_SLOT`), so dev servers don't collide.
         let env = match (&project.pool, &loc.slot) {
             (Some(pool), Some(id)) => pool.slot_env(id),
-            (Some(pool), None) => vec![("VELMUX_BASE".to_string(), pool.base.to_string_lossy().into_owned())],
+            (Some(pool), None) => vec![
+                ("VELMUX_BASE".to_string(), pool.base.to_string_lossy().into_owned()),
+                ("VELMUX_POOL_DIR".to_string(), pool.dir.to_string_lossy().into_owned()),
+            ],
             (None, _) => Vec::new(),
         };
         let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden);

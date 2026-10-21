@@ -54,6 +54,19 @@ pub struct Released {
     pub rescued: Option<String>,
 }
 
+/// What [`Pool::update_base`] did to the checkout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseUpdate {
+    UpToDate,
+    /// Moved forward this many commits.
+    FastForwarded(usize),
+    /// Behind, but local changes would be overwritten: left as it was.
+    Blocked(usize),
+    /// It has commits of its own as well: left alone.
+    Diverged { behind: usize, ahead: usize },
+    Skipped(String),
+}
+
 /// Parked work, as the sidebar and `velmux parked` show it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ParkedView {
@@ -229,12 +242,6 @@ impl Pool {
         match &opts.branch {
             Some(b) if git::local_branch_exists(dir, b) => {
                 git(dir, &["switch", "--quiet", b])?;
-                if let Some(stash) = git::find_stash(dir, &stash_marker(b)) {
-                    report(&format!("restoring parked work from {stash}"));
-                    if let Err(e) = git(dir, &["stash", "pop", "--quiet", &stash]) {
-                        report(&format!("warning: could not restore {stash}, left in stash list: {e}"));
-                    }
-                }
             }
             Some(b) if git::remote_branch_exists(dir, b) => {
                 let remote = format!("origin/{b}");
@@ -245,6 +252,15 @@ impl Pool {
             }
             None => {
                 git(dir, &["switch", "--quiet", "--detach", &self.base_ref])?;
+            }
+        }
+        // Work parked on this branch (released, or moved out of the checkout).
+        if let Some(b) = &opts.branch {
+            if let Some(stash) = git::find_stash(dir, &stash_marker(b)) {
+                report(&format!("{}: restoring parked work from {stash}", slot.id));
+                if let Err(e) = git(dir, &["stash", "pop", "--quiet", &stash]) {
+                    report(&format!("warning: could not restore {stash}, left in stash list: {e}"));
+                }
             }
         }
         self.link_into(dir)?;
@@ -355,7 +371,11 @@ impl Pool {
 
     /// A slot's environment: `VELMUX_BASE`, `VELMUX_SLOT` and its ports.
     pub fn slot_env(&self, id: &str) -> Vec<(String, String)> {
-        let mut env = vec![("VELMUX_BASE".to_string(), self.base.display().to_string()), ("VELMUX_SLOT".to_string(), id.to_string())];
+        let mut env = vec![
+            ("VELMUX_BASE".to_string(), self.base.display().to_string()),
+            ("VELMUX_POOL_DIR".to_string(), self.dir.display().to_string()),
+            ("VELMUX_SLOT".to_string(), id.to_string()),
+        ];
         env.extend(self.cfg.ports.for_slot(slot_number(id)).into_iter().map(|(k, v)| (k, v.to_string())));
         env
     }
@@ -363,6 +383,45 @@ impl Pool {
     /// The slot's main port (`PORT`, else the first configured), if ports are on.
     pub fn slot_port(&self, id: &str) -> Option<u16> {
         self.cfg.ports.primary(slot_number(id))
+    }
+
+    /// The checkout's uncommitted changes, as `git status` lines (empty: clean).
+    /// Work there is what slots are for, so velmux flags it.
+    pub fn base_changes(&self) -> Vec<String> {
+        git(&self.base, &["status", "--porcelain"]).map(|s| s.lines().map(String::from).collect()).unwrap_or_default()
+    }
+
+    /// Move the checkout's uncommitted changes out of the way, parked for
+    /// `branch`: claiming that branch puts them back in its slot.
+    pub fn stash_base_for(&self, branch: &str) -> Result<()> {
+        if self.base_changes().is_empty() {
+            bail!("{}'s checkout has no changes to move", self.name);
+        }
+        git(&self.base, &["stash", "push", "--quiet", "--include-untracked", "-m", &format!("{} from the checkout", stash_marker(branch))])?;
+        Ok(())
+    }
+
+    /// Fast-forward the checkout to its upstream when that's the base ref and
+    /// it can: on that branch, nothing of its own committed, and git refusing
+    /// (leaving it as it was) if local changes are in the way.
+    pub fn update_base(&self) -> BaseUpdate {
+        let dir = &self.base;
+        let Some(upstream) = git(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok() else {
+            return BaseUpdate::Skipped("its branch has no upstream".into());
+        };
+        let same = |a: &str, b: &str| git(dir, &["rev-parse", a]).ok().zip(git(dir, &["rev-parse", b]).ok()).is_some_and(|(x, y)| x == y);
+        if upstream != self.base_ref && !same(&upstream, &self.base_ref) {
+            return BaseUpdate::Skipped(format!("it tracks {upstream}, not {}", self.base_ref));
+        }
+        let (behind, ahead) = git::behind_ahead(dir, "@{u}");
+        match (behind, ahead) {
+            (0, _) => BaseUpdate::UpToDate,
+            (_, a) if a > 0 => BaseUpdate::Diverged { behind, ahead: a },
+            (n, _) => match git(dir, &["merge", "--ff-only", "--quiet", "@{u}"]) {
+                Ok(_) => BaseUpdate::FastForwarded(n),
+                Err(_) => BaseUpdate::Blocked(n),
+            },
+        }
     }
 
     /// Fetch the repo's remote (no-op without one); slots see the new base ref.

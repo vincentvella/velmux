@@ -19,6 +19,9 @@ its dependencies installed between tasks, so claiming one is fast.
 
 ## In the base checkout: plan, then claim
 
+(If an edit is refused with a velmux message about the checkout, this is why:
+claim a slot and make the edit there.)
+
 Read, explore and plan in the base, but **don't change code there**. When you're
 ready to edit, claim a slot on a branch named for the work:
 

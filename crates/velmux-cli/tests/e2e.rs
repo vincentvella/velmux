@@ -246,3 +246,55 @@ fn the_welcome_screen_sets_you_up() {
     ui.send(b"a");
     ui.claude_id();
 }
+
+#[test]
+fn the_guard_hook_keeps_edits_out_of_the_checkout() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let pools = env.root.join("pools/app/slot-1");
+    std::fs::create_dir_all(&pools).unwrap();
+    let guard = |file: &Path| {
+        let input = serde_json::json!({"tool_name": "Edit", "tool_input": {"file_path": file}, "cwd": repo}).to_string();
+        let mut child = std::process::Command::new(VELMUX)
+            .arg("guard")
+            .envs(env.vars())
+            .env("VELMUX_BASE", &repo)
+            .env("VELMUX_POOL_DIR", env.root.join("pools/app"))
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let (code, why) = guard(&repo.join("src/new.rs"));
+    assert_eq!(code, Some(2), "an edit in the checkout is blocked");
+    assert!(why.contains("velmux claim"), "{why}");
+    assert_eq!(guard(Path::new("README.md")).0, Some(2), "relative to cwd, too");
+    assert_eq!(guard(&pools.join("README.md")).0, Some(0), "slots are fine");
+    assert_eq!(guard(&env.root.join("elsewhere.txt")).0, Some(0));
+}
+
+#[test]
+fn changes_in_the_checkout_are_flagged_and_move_to_a_slot() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    std::fs::write(repo.join("README.md"), "edited in the checkout\n").unwrap();
+    std::fs::write(repo.join("notes.txt"), "new\n").unwrap();
+    ui.wait_for("✎2");
+    ui.click_on("◆ base", true);
+    ui.wait_for("move changes to a slot…");
+    ui.send(b"\r");
+    ui.wait_for("branch for the checkout's 2 changed file(s)");
+    ui.line("feat/moved");
+    ui.wait_for("feat/moved* ·"); // dirty: the changes came along
+    let slot = env.json(&repo, &["status", "--json"]).as_array().unwrap().iter().find(|s| s["branch"] == "feat/moved").cloned().unwrap();
+    let path = Path::new(slot["path"].as_str().unwrap());
+    assert_eq!(std::fs::read_to_string(path.join("README.md")).unwrap(), "edited in the checkout\n");
+    assert!(path.join("notes.txt").exists());
+    assert_eq!(env.run_in(&repo, "git status --porcelain"), "", "the checkout is clean");
+    ui.wait_gone_text("✎2");
+}

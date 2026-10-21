@@ -62,6 +62,8 @@ struct GlobalFile {
     sync: Option<SyncMode>,
     /// Minutes between background `git fetch`es of each repo (0 turns it off).
     fetch_every: Option<u64>,
+    /// Fast-forward each repo's checkout to its upstream after a fetch.
+    fast_forward: Option<bool>,
     ports: Option<PortsFile>,
     /// Where new scratch sessions start, and where `new space` looks for repos.
     scratch_dir: Option<PathBuf>,
@@ -213,6 +215,7 @@ struct RepoFile {
     install: Option<bool>,
     install_cmd: Option<String>,
     sync: Option<SyncMode>,
+    fast_forward: Option<bool>,
     ports: Option<PortsFile>,
 }
 
@@ -235,6 +238,8 @@ pub struct Config {
     pub sync: SyncMode,
     /// Minutes between background fetches (0 = never).
     pub fetch_every: u64,
+    /// Fast-forward the checkout to its upstream after each fetch.
+    pub fast_forward: bool,
     pub ports: Ports,
 }
 
@@ -267,6 +272,7 @@ impl Config {
             install_cmd: repo.install_cmd,
             sync: repo.sync.or(global.sync).unwrap_or_default(),
             fetch_every: global.fetch_every.unwrap_or(15),
+            fast_forward: repo.fast_forward.or(global.fast_forward).unwrap_or(true),
             ports: {
                 let (g, r) = (global.ports.unwrap_or_default(), repo.ports.unwrap_or_default());
                 Ports {

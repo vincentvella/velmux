@@ -7,6 +7,26 @@ dependencies and build caches are still there from last time.
 
 ![a slot's right-click menu](screenshots/slot-menu.svg)
 
+## Your checkout
+
+The repo's own checkout is where agents read and plan; slots are where changes
+happen. velmux keeps it that way:
+
+- **It stays current.** After each background fetch, the checkout is
+  fast-forwarded to its upstream (your main branch), never merged or rebased.
+  If local changes are in the way, or it has commits of its own, it's left as it
+  is and you're told. When main moves you're also told which slots are now
+  behind; the repo's right-click menu has **sync all slots**. Turn it off with
+  `fast_forward = false`.
+- **Changes there are flagged.** Its row shows `✎2` when it has uncommitted
+  changes. **Move changes to a slot…** (its right-click menu) stashes them,
+  claims a slot on a branch you name, and puts them back there.
+- **Claudes velmux starts can't edit it.** They run with a Claude Code hook
+  that refuses file edits inside the checkout and tells Claude to
+  `velmux claim` a slot and edit there instead. (A Claude you start yourself
+  gets the same advice from the [skill](getting-started.md#teach-claude-about-velmux),
+  but no hook.)
+
 ## Claiming and releasing
 
 **Claim** a slot for a branch: an existing local or remote branch is checked
