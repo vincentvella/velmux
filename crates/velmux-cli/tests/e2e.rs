@@ -449,6 +449,36 @@ fn the_sidebar_resizes_by_its_edge_and_keys_and_keeps_its_width() {
 }
 
 #[test]
+fn a_slots_conversations_are_named_after_it_unless_you_named_them() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    let id = ui.claude_id();
+    ui.line("say hello");
+    ui.line("claim feat/names");
+    ui.wait_for("@1");
+    let transcript = || {
+        std::fs::read_dir(env.claude_dir.join("projects")).unwrap().flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()).unwrap()
+    };
+    let title = || velmux_pool::claude::custom_title(&transcript());
+    env.until("the conversation to be named after the branch", || title().as_deref() == Some("feat/names"));
+    // Renaming the slot renames it too.
+    ui.prefix("W");
+    ui.wait_for("name");
+    ui.line("checkout");
+    env.until("the conversation to follow the slot's name", || title().as_deref() == Some("checkout"));
+    // Once you've named it yourself (/rename), velmux leaves it alone.
+    velmux_pool::claude::set_title(&transcript(), &id, "my own name").unwrap();
+    ui.prefix("W");
+    ui.wait_for("name");
+    ui.send(&[0x15]); // clear the field
+    ui.line("payments");
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(title().as_deref(), Some("my own name"));
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

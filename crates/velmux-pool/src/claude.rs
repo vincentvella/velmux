@@ -74,6 +74,38 @@ pub fn session_exists(claude_dir: &Path, id: &str) -> bool {
     dirs.flatten().any(|d| d.path().join(&file).is_file())
 }
 
+/// Session `id`'s transcript, in whichever project dir it's in.
+pub fn transcript(claude_dir: &Path, id: &str) -> Option<PathBuf> {
+    let file = format!("{id}.jsonl");
+    std::fs::read_dir(claude_dir.join("projects")).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file())
+}
+
+/// The name a conversation was given (`/rename`, `--name`): its transcript's
+/// last `custom-title`.
+pub fn custom_title(transcript: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(transcript).ok()?;
+    text.lines().rev().filter(|l| l.contains("\"custom-title\"")).find_map(|l| {
+        let v: serde_json::Value = serde_json::from_str(l).ok()?;
+        (v["type"] == "custom-title").then(|| v["customTitle"].as_str().map(String::from))?
+    })
+}
+
+/// Name a conversation, the way `/rename` does: a `custom-title` (the
+/// `/resume` picker) and an `agent-name` (the prompt box) at the end of its
+/// transcript. A running Claude shows it once it's resumed.
+pub fn set_title(transcript: &Path, id: &str, title: &str) -> Result<()> {
+    use std::io::Write;
+    let lines = format!(
+        "{}\n{}\n",
+        serde_json::json!({ "type": "custom-title", "customTitle": title, "sessionId": id }),
+        serde_json::json!({ "type": "agent-name", "agentName": title, "sessionId": id })
+    );
+    let mut f = std::fs::OpenOptions::new().append(true).open(transcript)?;
+    // One write, so it can't interleave with Claude's own appends.
+    f.write_all(lines.as_bytes())?;
+    Ok(())
+}
+
 /// A conversation found on disk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -167,6 +199,19 @@ fn transcript_cwd(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_a_conversation_like_rename_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path().join("s1.jsonl");
+        std::fs::write(&t, "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
+        assert_eq!(custom_title(&t), None);
+        set_title(&t, "s1", "feat/checkout").unwrap();
+        assert_eq!(custom_title(&t).as_deref(), Some("feat/checkout"));
+        assert!(std::fs::read_to_string(&t).unwrap().contains("\"agentName\":\"feat/checkout\""));
+        set_title(&t, "s1", "renamed").unwrap();
+        assert_eq!(custom_title(&t).as_deref(), Some("renamed"), "the last one counts");
+    }
 
     #[test]
     fn newest_under_finds_conversations_in_subfolders() {

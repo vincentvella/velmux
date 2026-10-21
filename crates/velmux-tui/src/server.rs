@@ -340,6 +340,9 @@ pub struct App {
     current: Option<Loc>,
     pub mode: Mode,
     pub prefix: Prefix,
+    /// The names velmux gave conversations (session → name), so one you've
+    /// renamed yourself is left alone. Kept in `state/conversation-names.json`.
+    named: HashMap<String, String>,
     /// Until when a repeatable key (resizing) works again without the prefix.
     repeat_until: Option<Instant>,
     pub keymap: Keymap,
@@ -583,6 +586,7 @@ impl App {
             mode: Mode::Normal,
             prefix,
             repeat_until: None,
+            named: crate::paths::state_dir().ok().and_then(|d| std::fs::read_to_string(d.join("conversation-names.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
             keymap,
             theme: crate::theme::builtin("default").unwrap(),
             theme_colors: Default::default(),
@@ -993,6 +997,7 @@ impl App {
                         self.base_updated(h.project, update);
                     }
                 }
+                self.name_conversations();
                 self.dirty = true;
             }
             Event::Prs(fresh) => {
@@ -1533,6 +1538,48 @@ impl App {
                 })
                 .collect();
             let _ = tx.send(Event::Pools { gen, fresh });
+        });
+    }
+
+    /// Name each slot's Claude conversations after the slot: its name if you
+    /// gave it one, else its branch, as `/rename` would (the `/resume` picker,
+    /// and the prompt box once resumed). Ones you've named yourself are left
+    /// alone: velmux only renames a conversation that has no name, or still
+    /// has the one velmux gave it.
+    fn name_conversations(&mut self) {
+        let mut todo = Vec::new();
+        for pane in &self.panes {
+            let (Some(session), Some("claude"), Some(slot)) = (&pane.session, pane.agent, &pane.loc.slot) else { continue };
+            let project = &self.projects[pane.loc.project];
+            if project.is_unclassified() || !project.cfg.name_conversations {
+                continue;
+            }
+            let name = self.views.get(&pane.loc).and_then(|v| v.name.clone());
+            let Some(want) = name.or_else(|| project.slots.iter().find(|s| &s.id == slot).and_then(|s| s.branch.clone())) else { continue };
+            // Its transcript appears with its first message: until then, next time.
+            if self.named.get(session) != Some(&want) {
+                if let Some(file) = claude::transcript(&self.claude_dir, session) {
+                    todo.push((session.clone(), file, want, self.named.get(session).cloned()));
+                }
+            }
+        }
+        if todo.is_empty() {
+            return;
+        }
+        for (session, _, want, _) in &todo {
+            self.named.insert(session.clone(), want.clone());
+        }
+        if let Ok(dir) = crate::paths::state_dir() {
+            let _ = std::fs::write(dir.join("conversation-names.json"), serde_json::to_vec(&self.named).unwrap_or_default());
+        }
+        // Reading a long transcript for its current name: off the main thread.
+        std::thread::spawn(move || {
+            for (session, file, want, ours) in todo {
+                let current = claude::custom_title(&file);
+                if (current.is_none() || current == ours) && current.as_ref() != Some(&want) {
+                    let _ = claude::set_title(&file, &session, &want);
+                }
+            }
         });
     }
 
@@ -2863,6 +2910,7 @@ impl App {
                     if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
                         view.name = (!answer.is_empty()).then_some(answer);
                     }
+                    self.name_conversations();
                     self.relayout();
                 }
             }

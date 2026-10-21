@@ -69,6 +69,8 @@ struct GlobalFile {
     /// Keep Claudes velmux starts from editing a repo's checkout (a hook and
     /// deny rules, passed with `--settings`).
     guard: Option<bool>,
+    /// Name each slot's Claude conversations after its branch.
+    name_conversations: Option<bool>,
     ports: Option<PortsFile>,
     /// Where new scratch sessions start, and where `new space` looks for repos.
     scratch_dir: Option<PathBuf>,
@@ -230,6 +232,7 @@ struct RepoFile {
     sync: Option<SyncMode>,
     fast_forward: Option<bool>,
     guard: Option<bool>,
+    name_conversations: Option<bool>,
     ports: Option<PortsFile>,
 }
 
@@ -256,6 +259,8 @@ pub struct Config {
     pub fast_forward: bool,
     /// Keep velmux-started Claudes from editing the checkout.
     pub guard: bool,
+    /// Name a slot's Claude conversations after its branch (or its name).
+    pub name_conversations: bool,
     pub ports: Ports,
 }
 
@@ -290,6 +295,7 @@ impl Config {
             fetch_every: global.fetch_every.unwrap_or(15),
             fast_forward: repo.fast_forward.or(global.fast_forward).unwrap_or(true),
             guard: repo.guard.or(global.guard).unwrap_or(true),
+            name_conversations: repo.name_conversations.or(global.name_conversations).unwrap_or(true),
             ports: {
                 let (g, r) = (global.ports.unwrap_or_default(), repo.ports.unwrap_or_default());
                 Ports {

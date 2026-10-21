@@ -13,6 +13,12 @@ later go beside them, as `shop-pool-N`.
 
 ![a slot's right-click menu](screenshots/slot-menu.svg)
 
+Claude conversations in a slot are named after it, the way `/rename` would:
+its branch, or the name you gave the slot (**rename**, `<prefix> W`). That's
+what the `/resume` picker and velmux's conversation search show, and a resumed
+Claude shows it in its prompt box. One you've named yourself keeps your name.
+Turn it off with `name_conversations = false`.
+
 ## Your checkout
 
 The repo's own checkout is where agents read and plan; slots are where changes
