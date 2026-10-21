@@ -15,6 +15,7 @@ mod prefix;
 mod proto;
 mod pty_raw;
 mod server;
+mod search;
 mod session;
 mod theme;
 mod ui;

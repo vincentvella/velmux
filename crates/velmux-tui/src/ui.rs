@@ -68,6 +68,7 @@ pub const MENU: &[(&str, crate::keys::Action)] = {
         // Things for one place (create, rename, remove) live in the sidebar's
         // right-click menus.
         ("go to…", LocationPicker),
+        ("find conversation…", FindSession),
         ("rename tab", RenameTab),
         ("theme…", ThemePicker),
         ("settings", Settings),
@@ -568,6 +569,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let (text, style) = match &app.mode {
         Mode::Prefix => (format!("{} …", app.prefix.label), bar.fg(t.accent).add_modifier(Modifier::BOLD)),
         Mode::Picker(_) => ("enter go · esc cancel".into(), bar.fg(t.dim)),
+        Mode::Sessions { .. } => ("enter open · esc cancel".into(), bar.fg(t.dim)),
         Mode::Menu { .. } | Mode::ThemePicker { .. } => ("enter pick · esc close".into(), bar.fg(t.dim)),
         Mode::Prompt { .. } => ("enter save · esc cancel".into(), bar.fg(t.dim)),
         Mode::Confirm { .. } => ("y yes · n no".into(), bar.fg(t.dim)),
@@ -623,6 +625,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     }
     if let Mode::ThemePicker { selected, .. } = &app.mode {
         draw_theme_picker(app, *selected, buf);
+    }
+    if let Mode::Sessions { query, selected } = &app.mode {
+        cursor = draw_sessions(app, query, *selected, body, buf);
     }
     if let Mode::Picker(p) = &app.mode {
         cursor = draw_picker(app, p, body, buf);
@@ -989,6 +994,74 @@ fn draw_menu(app: &App, selected: usize, buf: &mut Buffer) {
                 buf.set_string(inner.right() - w - 1, y, hint, base.fg(t.dim));
             }
         }
+    }
+}
+
+/// The conversation search: two lines per hit (title, where it ran and how
+/// long ago; then the text around the match). Returns the cursor.
+fn draw_sessions(app: &App, query: &str, selected: usize, body: Rect, buf: &mut Buffer) -> Option<Position> {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+    let t = &app.theme;
+    let hits = crate::search::search(&app.sessions, query, crate::server::SESSION_HITS);
+    let width = 96.min(body.width.saturating_sub(2)).max(24);
+    let height = body.height.saturating_sub(2).clamp(6, 30);
+    let area = Rect::new(body.x + body.width.saturating_sub(width) / 2, body.y + 1, width, height);
+    Clear.render(area, buf);
+    let title = if app.indexing { " find conversation · indexing… " } else { " find conversation " };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.picker_border))
+        .title(title)
+        .title_bottom(ratatui::text::Span::styled(format!(" {} of {} ", hits.len(), app.sessions.len()), Style::new().fg(t.dim)))
+        .render(area, buf);
+    let inner = Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), area.height.saturating_sub(2));
+    let prompt = format!("› {query}");
+    buf.set_stringn(inner.x, inner.y, &prompt, inner.width as usize, Style::new().fg(t.text).add_modifier(Modifier::BOLD));
+    let per = 2usize;
+    let visible = (inner.height.saturating_sub(2) as usize / per).max(1);
+    let first = selected.saturating_sub(visible.saturating_sub(1));
+    if hits.is_empty() {
+        let msg = if app.indexing { "indexing…" } else { "no conversations match" };
+        buf.set_stringn(inner.x, inner.y + 2, msg, inner.width as usize, Style::new().fg(t.dim));
+    }
+    let now = std::time::SystemTime::now();
+    for (row, hit) in hits.iter().enumerate().skip(first).take(visible) {
+        let y = inner.y + 2 + ((row - first) * per) as u16;
+        let on = row == selected;
+        let base = if on { Style::new().bg(t.selected_bg) } else { Style::new() };
+        buf.set_style(Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, per as u16), base);
+        if on {
+            buf.set_string(inner.x.saturating_sub(1), y, "▌", base.fg(t.accent));
+            buf.set_string(inner.x.saturating_sub(1), y + 1, "▌", base.fg(t.accent));
+        }
+        // Right: open in a pane, where it ran, and its age.
+        let live = app.panes.iter().any(|p| p.session.as_deref() == Some(hit.doc.id.as_str()));
+        let place = app.session_loc(hit.doc).map(|(l, _)| app.loc_name(&l)).unwrap_or_default();
+        let branch = hit.doc.branch.as_deref().map(|b| format!(" · {b}")).unwrap_or_default();
+        let age = ago(now.duration_since(hit.doc.mtime).unwrap_or_default().as_secs());
+        let right = format!("{place}{branch} · {age}");
+        let right_w = (right.chars().count() as u16).min(inner.width / 2);
+        let live_w = if live { 2 } else { 0 };
+        let title_room = inner.width.saturating_sub(right_w + live_w + 2) as usize;
+        if live {
+            buf.set_string(inner.x, y, "●", base.fg(t.working));
+        }
+        let title_style = base.fg(t.text).add_modifier(if on { Modifier::BOLD } else { Modifier::empty() });
+        buf.set_stringn(inner.x + live_w, y, &hit.doc.title, title_room, title_style);
+        buf.set_stringn(inner.right() - right_w, y, &right, right_w as usize, base.fg(t.dim));
+        buf.set_stringn(inner.x + live_w, y + 1, &hit.snippet, inner.width.saturating_sub(live_w) as usize, base.fg(t.text2));
+    }
+    Some(Position::new((inner.x + prompt.chars().count() as u16).min(inner.right().saturating_sub(1)), inner.y))
+}
+
+/// `now`, `5m`, `3h`, `2d`.
+fn ago(secs: u64) -> String {
+    match secs {
+        0..60 => "now".into(),
+        60..3600 => format!("{}m", secs / 60),
+        3600..86400 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86400),
     }
 }
 

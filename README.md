@@ -66,6 +66,7 @@ in your editor and reloads it when you quit, and `<prefix> R` reloads it.
 | `b` | hide / show the sidebar |
 | `[` / `PgUp` | copy mode |
 | `]` | the pane's whole history in `$EDITOR` |
+| `/` | find a conversation (also `⌘⇧F`) |
 | `j` / `k`, `x` | cycle panes, close pane |
 | `d` / `Q` | detach / stop the server |
 | `<prefix>` | send the prefix key itself |
@@ -146,6 +147,17 @@ Roles: `text` `text2` `dim` `accent` `selected_bg` `base_glyph` `slot_glyph`
 `dirty` `working` `blocked` `done` `idle` `focus_bg` `focus_fg` `title_bg`
 `title_fg` `bar_bg` `bar_fg` `alert` `jobs` `menu_border` `picker_border`
 `toast_border` `copy_bg` `copy_fg` `tag_bg` `tag_fg`.
+
+### Finding a conversation
+
+`⌘⇧F` (or `<prefix> /`, or the menu) searches every Claude conversation in
+velmux's repos (base and slots) and folders: titles, your prompts and Claude's
+replies (not tool output), every word must match, title matches first, then
+newest. Each hit shows where it ran, its branch, how long ago, the text around
+the match, and `●` if it's open in a pane. Enter goes to that pane, or resumes
+the conversation: in its slot if that's still on its branch, by resuming the
+branch if it's parked, else in the repo's base. The index is built in the
+background and only re-reads transcripts that changed.
 
 ### Copying
 

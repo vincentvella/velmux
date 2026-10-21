@@ -23,6 +23,8 @@ pub enum Action {
     AgentBase,
     /// Claude right where you are (in a slot, not the base).
     AgentHere,
+    /// Search Claude conversations and open / resume one.
+    FindSession,
     /// Open the current slot's `http://localhost:<port>`.
     OpenBrowser,
     /// Open the focused pane's history in $EDITOR.
@@ -146,6 +148,7 @@ const NAMES: &[(&str, Action)] = &[
     ("send_prefix", Action::SendPrefix),
     ("agent_here", Action::AgentHere),
     ("copy_path", Action::CopyPath),
+    ("find_session", Action::FindSession),
     ("open_browser", Action::OpenBrowser),
     ("edit_scrollback", Action::EditScrollback),
     ("sync_slot", Action::SyncSlot),
@@ -205,6 +208,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (Tab(0), &["ctrl+1..9"]),
         (ToggleSidebar, &["prefix+b", "super+b"]),
         (LocationPicker, &["prefix+w", "super+p"]),
+        (FindSession, &["prefix+/", "super+shift+f"]),
         (RenameTab, &["prefix+T", "super+r"]),
         (RenameLocation, &["prefix+W", "super+shift+r"]),
         (Settings, &["prefix+s", "super+,"]),
@@ -516,6 +520,7 @@ impl Keymap {
                     (one(Slot(0)), "slot n"),
                     (one(Base), "base"),
                     (one(LocationPicker), "go to…"),
+                    (one(FindSession), "find conversation…"),
                     (one(RenameLocation), "rename place"),
                     (one(RemovePlace), "remove place"),
                 ],

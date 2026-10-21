@@ -49,6 +49,8 @@ pub enum Event {
     /// Fresh slot health and parked work, per project, from a background refresh.
     Pools(Vec<PoolHealth>),
     Synced { job: String, result: Result<String, String> },
+    /// The conversation index, rebuilt in the background.
+    Indexed(Vec<crate::search::Doc>),
 }
 
 /// A git repo with its pool, or the "unclassified" group of plain folders.
@@ -96,6 +98,8 @@ pub enum Mode {
     Prompt { label: String, input: String, purpose: PromptFor },
     /// Fuzzy location picker.
     Picker(Picker),
+    /// Searching Claude conversations (the index is `App::sessions`).
+    Sessions { query: String, selected: usize },
     /// The short menu, with the highlighted row; `context` when it was opened
     /// by right-clicking a place in the sidebar.
     Menu { selected: usize, context: Option<MenuContext> },
@@ -105,6 +109,9 @@ pub enum Mode {
     /// Scrolling/selecting in the focused pane's history (state in `App::copy`).
     Copy,
 }
+
+/// How many conversations the search shows.
+pub const SESSION_HITS: usize = 200;
 
 /// A right-click menu: actions for one place, run there.
 #[derive(Debug, Clone)]
@@ -311,6 +318,10 @@ pub struct App {
     fetched: HashMap<usize, Instant>,
     /// For unique job keys.
     job_seq: u64,
+    /// Every Claude conversation in velmux's repos and folders, for search.
+    pub sessions: Vec<crate::search::Doc>,
+    /// The index is being rebuilt.
+    pub indexing: bool,
     status: Option<(String, Instant)>,
     size: (u16, u16),
     events: Sender<Event>,
@@ -497,6 +508,8 @@ impl App {
             refreshing: false,
             fetched: HashMap::new(),
             job_seq: 0,
+            sessions: Vec::new(),
+            indexing: false,
             status: None,
             size: (80, 24),
             events,
@@ -745,6 +758,14 @@ impl App {
                     if let Some(parked) = parked {
                         project.parked = parked;
                     }
+                }
+                self.dirty = true;
+            }
+            Event::Indexed(docs) => {
+                self.sessions = docs;
+                self.indexing = false;
+                if let Mode::Sessions { selected, .. } = &mut self.mode {
+                    *selected = 0;
                 }
                 self.dirty = true;
             }
@@ -1200,6 +1221,128 @@ impl App {
                 .collect();
             let _ = tx.send(Event::Pools(fresh));
         });
+    }
+
+    /// Claude's transcript folders for every repo (base and slots) and folder.
+    fn transcript_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        for project in self.projects.iter().filter(|p| !p.removed) {
+            if let Some(base) = project.base() {
+                dirs.push(claude::project_dir(&self.claude_dir, base));
+            }
+            dirs.extend(project.slots.iter().map(|s| claude::project_dir(&self.claude_dir, &s.path)));
+            dirs.extend(project.folders.iter().map(|f| claude::project_dir(&self.claude_dir, &f.path)));
+        }
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
+    /// Rebuild the conversation index in the background (unchanged files are reused).
+    fn reindex_sessions(&mut self) {
+        if self.indexing {
+            return;
+        }
+        self.indexing = true;
+        let (dirs, old, tx) = (self.transcript_dirs(), self.sessions.clone(), self.events.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Event::Indexed(crate::search::scan(&dirs, old)));
+        });
+    }
+
+    /// Where a conversation ran, as a place velmux knows: (place, its slot is
+    /// still on the conversation's branch).
+    pub fn session_loc(&self, doc: &crate::search::Doc) -> Option<(Loc, bool)> {
+        let cwd = doc.cwd.as_ref()?;
+        for (i, project) in self.projects.iter().enumerate().filter(|(_, p)| !p.removed) {
+            for s in &project.slots {
+                if cwd.starts_with(&s.path) {
+                    let same = s.status == Status::InUse && (doc.branch.is_none() || s.branch == doc.branch);
+                    return Some((Loc { project: i, slot: Some(s.id.clone()) }, same));
+                }
+            }
+            if project.base().is_some_and(|b| cwd.starts_with(b)) {
+                return Some((Loc { project: i, slot: None }, true));
+            }
+            if let Some(f) = project.folders.iter().find(|f| cwd.starts_with(&f.path)) {
+                return Some((Loc { project: i, slot: Some(f.id.clone()) }, true));
+            }
+        }
+        None
+    }
+
+    /// Open a conversation: its pane if it's running; else resumed where it
+    /// ran (its slot, if still on that branch), by resuming the branch if it's
+    /// parked, or in the repo's base.
+    fn open_session(&mut self, doc: &crate::search::Doc) {
+        if let Some(pane) = self.panes.iter().find(|p| p.session.as_deref() == Some(doc.id.as_str())).map(|p| p.id) {
+            if self.copy.is_some() {
+                self.exit_copy();
+            }
+            self.focus = Some(pane);
+            self.current = self.pane(pane).map(|p| p.loc.clone());
+            self.reveal_focus();
+            self.full_redraw = true;
+            return;
+        }
+        let Some((loc, same)) = self.session_loc(doc) else {
+            return self.say("that conversation ran somewhere velmux doesn't know");
+        };
+        let unclassified = self.projects[loc.project].is_unclassified();
+        let parked = doc.branch.as_ref().filter(|b| self.projects[loc.project].parked.iter().any(|p| &p.branch == *b));
+        let target = match (unclassified, loc.slot.is_some() && same, parked) {
+            (true, _, _) | (false, true, _) => loc,
+            (false, false, Some(branch)) => {
+                let branch = branch.clone();
+                return self.claim_resuming(loc.project, Some(branch), None, vec![doc.id.clone()]);
+            }
+            (false, false, None) => Loc { project: loc.project, slot: None },
+        };
+        self.say(format!("resuming “{}” in {}", doc.title, self.loc_name(&target)));
+        self.resume_sessions(target, std::slice::from_ref(&doc.id));
+    }
+
+    fn sessions_input(&mut self, bytes: &[u8]) -> usize {
+        let Mode::Sessions { query, selected } = &mut self.mode else { return bytes.len() };
+        let count = crate::search::search(&self.sessions, query, SESSION_HITS).len();
+        let (used, key) = match bytes {
+            [0x1b, b'[', b'A', ..] => (3, Some(0x10)),
+            [0x1b, b'[', b'B', ..] => (3, Some(0x0e)),
+            [0x1b, b'[', rest @ ..] => {
+                let len = rest.iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |i| i + 3);
+                (len, None)
+            }
+            [0x1b] => (1, Some(0x1b)),
+            [b, ..] if b.is_ascii_control() || *b == 0x7f => (1, Some(*b)),
+            _ => {
+                let end = bytes.iter().position(|b| b.is_ascii_control()).unwrap_or(bytes.len());
+                query.push_str(&String::from_utf8_lossy(&bytes[..end]));
+                *selected = 0;
+                return end;
+            }
+        };
+        match key {
+            Some(0x10) => *selected = selected.checked_sub(1).unwrap_or(count.saturating_sub(1)),
+            Some(0x0e) => *selected = if count == 0 { 0 } else { (*selected + 1) % count },
+            Some(0x7f | 0x08) => {
+                query.pop();
+                *selected = 0;
+            }
+            Some(0x15) => {
+                query.clear();
+                *selected = 0;
+            }
+            Some(0x1b | 0x03) => self.mode = Mode::Normal,
+            Some(b'\r' | b'\n') => {
+                let doc = crate::search::search(&self.sessions, query, SESSION_HITS).get(*selected).map(|h| h.doc.clone());
+                self.mode = Mode::Normal;
+                if let Some(doc) = doc {
+                    self.open_session(&doc);
+                }
+            }
+            _ => {}
+        }
+        used
     }
 
     /// The current slot's port, if it has one.
@@ -1908,6 +2051,7 @@ impl App {
                 }
                 Mode::Prompt { .. } => self.prompt_input(bytes),
                 Mode::Picker(_) => self.picker_input(bytes),
+                Mode::Sessions { .. } => self.sessions_input(bytes),
                 Mode::Menu { .. } => self.menu_input(bytes),
                 Mode::ThemePicker { .. } => self.theme_input(bytes),
                 Mode::Copy => self.copy_input(bytes),
@@ -2162,6 +2306,10 @@ impl App {
                 }
             }
             Action::SyncSlot => self.sync_slot(),
+            Action::FindSession => {
+                self.mode = Mode::Sessions { query: String::new(), selected: 0 };
+                self.reindex_sessions();
+            }
             Action::OpenBrowser => self.open_browser(),
             Action::EditScrollback => self.edit_scrollback(),
             Action::ResumeParked | Action::DiscardParked => self.say("right-click a parked branch in the sidebar"),
@@ -2771,16 +2919,21 @@ impl App {
     /// Claim a slot in `project` (in the background). With `for_pane`, that pane
     /// moves into the slot and the stream gets its path, instead of a new pane.
     fn claim_in(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>) {
+        // Claiming a parked branch yourself resumes it: its Claude comes back too.
+        let resume = match (&branch, &for_pane) {
+            (Some(b), None) => self.projects[project].parked.iter().find(|p| &p.branch == b).map(|p| p.sessions.clone()).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        self.claim_resuming(project, branch, for_pane, resume);
+    }
+
+    /// [`claim_in`](Self::claim_in), bringing back the Claude `resume` sessions in the slot.
+    fn claim_resuming(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) {
         let Some(pool) = self.projects[project].pool.clone() else {
             if let Some((_, mut stream)) = for_pane {
                 let _ = ServerMsg::Reply("error: this folder isn't a git repo, so it has no slots".into()).write(&mut stream);
             }
             return self.say("unclassified folders aren't git repos, so they have no slots");
-        };
-        // Claiming a parked branch yourself resumes it: its Claude comes back too.
-        let resume = match (&branch, &for_pane) {
-            (Some(b), None) => self.projects[project].parked.iter().find(|p| &p.branch == b).map(|p| p.sessions.clone()).unwrap_or_default(),
-            _ => Vec::new(),
         };
         let tx = self.events.clone();
         self.job_seq += 1;
