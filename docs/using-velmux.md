@@ -92,6 +92,9 @@ press next:
 | `d` / `Q` | detach / stop the server |
 | `<prefix>` | send the prefix key itself |
 
+The resize keys (`H J K L`, `<` / `>`) repeat: after the first, press them again
+straight away without the prefix (`<prefix> > > >`).
+
 ### Prefix-less shortcuts
 
 Any action can be bound with no prefix. The defaults follow a ⌘-driven layout:

@@ -117,6 +117,14 @@ impl Project {
     }
 }
 
+/// How long after a resize its keys work again without the prefix.
+const REPEAT_FOR: Duration = Duration::from_millis(800);
+
+/// Keys you press several times in a row: resizing splits and the sidebar.
+fn repeatable(action: Action) -> bool {
+    matches!(action, Action::ResizeLeft | Action::ResizeRight | Action::ResizeUp | Action::ResizeDown | Action::SidebarWider | Action::SidebarNarrower)
+}
+
 pub enum Mode {
     Normal,
     Prefix,
@@ -332,6 +340,8 @@ pub struct App {
     current: Option<Loc>,
     pub mode: Mode,
     pub prefix: Prefix,
+    /// Until when a repeatable key (resizing) works again without the prefix.
+    repeat_until: Option<Instant>,
     pub keymap: Keymap,
     pub theme: crate::theme::Theme,
     /// Per-role overrides from config, re-applied when the theme changes.
@@ -572,6 +582,7 @@ impl App {
             current: None,
             mode: Mode::Normal,
             prefix,
+            repeat_until: None,
             keymap,
             theme: crate::theme::builtin("default").unwrap(),
             theme_colors: Default::default(),
@@ -2683,6 +2694,19 @@ impl App {
 
     fn keys(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
+            // Just after a resize, its keys repeat without the prefix
+            // (`<prefix> > > >`), like tmux; any other key ends that.
+            if let Some(until) = self.repeat_until.take() {
+                if let (Mode::Normal, true) = (&self.mode, Instant::now() < until) {
+                    if let Some((action, len)) = self.keymap.after_prefix(bytes).filter(|(a, _)| repeatable(*a)) {
+                        self.run(action);
+                        self.repeat_until = Some(Instant::now() + REPEAT_FOR);
+                        bytes = &bytes[len.min(bytes.len())..];
+                        self.dirty = true;
+                        continue;
+                    }
+                }
+            }
             let consumed = match self.mode {
                 Mode::Normal => {
                     // Whichever comes first: the prefix key or a root (prefix-less) binding.
@@ -2710,6 +2734,9 @@ impl App {
                     match self.keymap.after_prefix(bytes) {
                         Some((action, len)) => {
                             self.run(action);
+                            if repeatable(action) {
+                                self.repeat_until = Some(Instant::now() + REPEAT_FOR);
+                            }
                             len
                         }
                         None => unbound_len(bytes),

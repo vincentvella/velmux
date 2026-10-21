@@ -418,14 +418,29 @@ fn the_sidebar_resizes_by_its_edge_and_keys_and_keeps_its_width() {
     ui.send(format!("\x1b[<32;{};{row}M", start + 11).as_bytes());
     ui.send(format!("\x1b[<0;{};{row}m", start + 11).as_bytes());
     env.until("the edge to follow the drag", || edge(&ui) == start + 10);
-    // The keys move it 4 at a time.
+    // The keys move it 4 at a time, and repeat without the prefix.
     ui.prefix("<");
     env.until("the sidebar to narrow", || edge(&ui) == start + 6);
+    ui.prefix(">");
+    ui.send(b">");
+    env.until("a repeated > without the prefix", || edge(&ui) == start + 14);
+    // It won't go narrower than 20 columns.
+    ui.prefix("<");
+    ui.send(b"<<<<<<<<");
+    env.until("the sidebar to stop at its minimum", || edge(&ui) == 20);
+    // A key after the repeat window goes to the pane again.
+    std::thread::sleep(Duration::from_secs(1));
+    ui.send(b">");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(edge(&ui), 20);
+    ui.prefix(">");
+    ui.prefix(">");
+    env.until("the sidebar to widen", || edge(&ui) == 28);
     // It stays that wide after a restart.
     env.stop(&repo);
     drop(ui);
     let ui = env.attach(&repo);
-    env.until("the width to come back", || edge(&ui) == start + 6);
+    env.until("the width to come back", || edge(&ui) == 28);
 }
 
 #[test]

@@ -23,7 +23,8 @@ pub fn sidebar_width(cols: u16, hidden: bool, want: Option<u16>) -> u16 {
     }
 }
 
-pub const MIN_SIDEBAR: u16 = 12;
+/// Narrower and repo names, branches and states stop fitting.
+pub const MIN_SIDEBAR: u16 = 20;
 /// Columns the panes always keep beside a widened sidebar.
 const MIN_PANES: u16 = 20;
 
