@@ -1,0 +1,49 @@
+name: Deploy site
+
+# Deploys velmux.com when you start it (Actions → Deploy site → Run workflow,
+# or `gh workflow run site.yml`): never on push. The site is built here and
+# uploaded prebuilt, so Vercel does no building (no Vercel build minutes).
+#
+# Needs a repository secret VERCEL_TOKEN (a Vercel token scoped to the team).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: team_oA6YWL07AOthV0zIiIufrhSI
+  VERCEL_PROJECT_ID: prj_OSejoOEmPZeKkfIklMvkZYOWkgjU
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        working-directory: site
+        run: bun install --frozen-lockfile
+      - name: Vercel CLI
+        run: bun add --global vercel@latest
+      - name: Pull project settings
+        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+      - name: Build
+        run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+      - name: Deploy (prebuilt)
+        run: vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}" | tee url.txt
+      - name: Check it's up
+        run: |
+          for path in / /docs/getting-started /api/latest /install.sh; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://velmux.com$path")
+            echo "$path $code"
+            [ "$code" = 200 ] || exit 1
+          done
