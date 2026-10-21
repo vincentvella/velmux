@@ -52,6 +52,9 @@ pub enum Row {
     /// A parked branch: (project, index into its `parked`).
     Parked(usize, usize),
     Location(Loc),
+    /// A slot's second line: its number, how it stands against the base,
+    /// its PR (the branch gets the whole first line).
+    Detail(Loc),
     Pane(usize),
     /// Sidebar only: a section heading.
     Heading(&'static str),
@@ -173,7 +176,8 @@ pub fn display_rows(app: &App) -> Vec<Row> {
         for s in &app.projects[p].slots {
             let loc = Loc { project: p, slot: Some(s.id.clone()) };
             if s.status == Status::InUse || app.views.contains_key(&loc) {
-                out.push(Row::Location(loc));
+                out.push(Row::Location(loc.clone()));
+                out.push(Row::Detail(loc));
             }
         }
         out.extend((0..app.projects[p].parked.len()).map(|i| Row::Parked(p, i)));
@@ -201,7 +205,8 @@ pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
         SidebarView::Spaces => {
             let rows = display_rows(app);
             let current = app.current_loc();
-            let at = rows.iter().position(|r| matches!(r, Row::Location(l) if Some(l) == current.as_ref()));
+            // Its last line (a slot has two), so all of it stays in view.
+            let at = rows.iter().rposition(|r| matches!(r, Row::Location(l) | Row::Detail(l) if Some(l) == current.as_ref()));
             (rows, at)
         }
         SidebarView::Agents => {
@@ -334,52 +339,24 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     }
     let project = &app.projects[loc.project];
     let name = app.views.get(loc).and_then(|v| v.name.clone());
-    let (glyph, glyph_color, label, number, dirty) = match &loc.slot {
-        None => (Some("◆"), t.base_glyph, name.unwrap_or_else(|| "base".into()), None, false),
-        Some(id) if project.is_unclassified() => (None, Color::Reset, name.unwrap_or_else(|| id.clone()), None, false),
+    let (glyph, glyph_color, label, dirty) = match &loc.slot {
+        None => (Some("◆"), t.base_glyph, name.unwrap_or_else(|| "base".into()), false),
+        Some(id) if project.is_unclassified() => (None, Color::Reset, name.unwrap_or_else(|| id.clone()), false),
         Some(id) => {
             let slot = project.slots.iter().find(|s| &s.id == id);
             let branch = slot.and_then(|s| s.branch.clone()).unwrap_or_else(|| "detached".into());
-            let n = id.trim_start_matches("slot-").to_string();
-            (Some("▣"), t.slot_glyph, name.unwrap_or(branch), Some(n), slot.is_some_and(|s| s.dirty))
+            (Some("▣"), t.slot_glyph, name.unwrap_or(branch), slot.is_some_and(|s| s.dirty))
         }
     };
     let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
-    let dim = base.fg(t.dim);
 
-    // Right side first, so the label knows how much room it has: the slot's
-    // health (still being prepared, a rebase/merge stopped on conflicts,
-    // commits behind the base), then its agents' states.
+    // Right side first, so the label knows how much room it has: changes in
+    // a repo's checkout, then its agents' states. (A slot's health is on its
+    // second line.)
     let mut marks: Vec<(String, Style)> = Vec::new();
-    let slot = loc.slot.as_ref().filter(|_| !project.is_unclassified()).and_then(|id| project.slots.iter().find(|s| &s.id == id));
-    if app.preparing.contains_key(loc) {
-        marks.push(("⋯".into(), Style::new().fg(t.dim)));
-    }
     // Changes in a repo's checkout: work that belongs in a slot.
     if loc.slot.is_none() && project.base_changes > 0 {
         marks.push((format!("✎{}", project.base_changes), Style::new().fg(t.alert).add_modifier(Modifier::BOLD)));
-    }
-    if let Some(s) = slot {
-        if s.conflict.is_some() {
-            marks.push(("!".into(), Style::new().fg(t.blocked).add_modifier(Modifier::BOLD)));
-        }
-        if s.behind > 0 {
-            marks.push((format!("↓{}", s.behind), Style::new().fg(t.alert)));
-        }
-        // Its PR: number and checks (`#142✓`), or that it merged.
-        if let Some(pr) = s.branch.as_ref().and_then(|b| project.prs.get(b)) {
-            use velmux_pool::gh::{Checks, PrState};
-            let (glyph, color) = match (pr.state, pr.checks) {
-                (PrState::Merged, _) => ("⇡", t.accent),
-                (PrState::Closed, _) => ("×", t.dim),
-                (_, Checks::Failing) => ("✗", t.blocked),
-                (_, Checks::Pending) => ("…", t.working),
-                (_, Checks::Passing) => ("✓", t.done),
-                (_, Checks::None) => ("", t.dim),
-            };
-            let number = if pr.draft || pr.state == PrState::Closed { t.dim } else { t.text2 };
-            marks.push((format!("#{}{glyph}", pr.number), Style::new().fg(if glyph.is_empty() { number } else { color })));
-        }
     }
     for (g, n, style) in rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc)) {
         marks.push((if n > 1 { format!("{g}{n}") } else { g.to_string() }, style));
@@ -398,9 +375,8 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
         buf.set_string(x, y, g, base.fg(glyph_color));
         x += 2;
     }
-    let suffix = number.map(|n| format!(" ·{n}")).unwrap_or_default();
     let room = right_edge.saturating_sub(badge_w + 1).saturating_sub(x) as usize;
-    let room_for_label = room.saturating_sub(suffix.chars().count() + dirty as usize);
+    let room_for_label = room.saturating_sub(dirty as usize);
     let shown: String = if label.chars().count() > room_for_label {
         label.chars().take(room_for_label.saturating_sub(1)).chain(std::iter::once('…')).collect()
     } else {
@@ -410,10 +386,78 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     x += shown.chars().count() as u16;
     if dirty {
         buf.set_string(x, y, "*", base.fg(t.dirty));
-        x += 1;
     }
-    if !suffix.is_empty() {
-        buf.set_stringn(x, y, &suffix, right_edge.saturating_sub(x) as usize, dim);
+}
+
+/// A slot's second line, dim under its branch: `slot 2 · ↓3 ↑1 · #142✓`,
+/// plus `⋯` while it's being prepared and `! rebase` when one stopped.
+fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
+    let t = &app.theme;
+    let base = if selected { Style::new().bg(t.selected_bg) } else { Style::new() };
+    if selected {
+        buf.set_style(Rect::new(0, y, side, 1), base);
+        buf.set_string(0, y, "▌", base.fg(t.accent));
+    }
+    let project = &app.projects[loc.project];
+    let Some(id) = &loc.slot else { return };
+    let slot = project.slots.iter().find(|s| &s.id == id);
+    let dim = base.fg(t.dim);
+    let mut parts: Vec<Vec<(String, Style)>> = vec![vec![(format!("slot {}", id.trim_start_matches("slot-")), dim)]];
+    // Renamed, the first line shows the name: the branch goes here.
+    if let (Some(_), Some(branch)) = (app.views.get(loc).and_then(|v| v.name.as_ref()), slot.and_then(|s| s.branch.clone())) {
+        parts[0].push((branch, dim));
+    }
+    if app.preparing.contains_key(loc) {
+        parts.push(vec![("⋯ preparing".into(), dim)]);
+    }
+    if let Some(s) = slot {
+        if let Some(c) = &s.conflict {
+            parts.push(vec![(format!("! {c}"), base.fg(t.blocked).add_modifier(Modifier::BOLD))]);
+        }
+        let mut drift = Vec::new();
+        if s.behind > 0 {
+            drift.push((format!("↓{}", s.behind), base.fg(t.alert)));
+        }
+        if s.ahead > 0 {
+            drift.push((format!("↑{}", s.ahead), dim));
+        }
+        if !drift.is_empty() {
+            parts.push(drift);
+        }
+        // Its PR: number and checks (`#142✓`), or that it merged.
+        if let Some(pr) = s.branch.as_ref().and_then(|b| project.prs.get(b)) {
+            use velmux_pool::gh::{Checks, PrState};
+            let (glyph, color) = match (pr.state, pr.checks) {
+                (PrState::Merged, _) => ("⇡", t.accent),
+                (PrState::Closed, _) => ("×", t.dim),
+                (_, Checks::Failing) => ("✗", t.blocked),
+                (_, Checks::Pending) => ("…", t.working),
+                (_, Checks::Passing) => ("✓", t.done),
+                (_, Checks::None) => ("", t.dim),
+            };
+            let number = if pr.draft || pr.state == PrState::Closed { t.dim } else { t.text2 };
+            parts.push(vec![(format!("#{}{glyph}", pr.number), base.fg(if glyph.is_empty() { number } else { color }))]);
+        }
+    }
+    // Under the branch, as far as there's room.
+    let (mut x, end) = (5u16, side.saturating_sub(1));
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            if x + 3 > end {
+                break;
+            }
+            buf.set_string(x, y, " · ", dim);
+            x += 3;
+        }
+        for (j, (text, style)) in part.iter().enumerate() {
+            let gap = (j > 0) as u16;
+            let room = end.saturating_sub(x + gap) as usize;
+            if room == 0 {
+                return;
+            }
+            buf.set_stringn(x + gap, y, text, room, *style);
+            x += gap + text.chars().count().min(room) as u16;
+        }
     }
 }
 
@@ -497,6 +541,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
             }
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
+            Row::Detail(loc) => draw_location_detail(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
             Row::Parked(p, i) => draw_parked_row(app, p, &app.projects[p].parked[i], y, side, buf),
             Row::Pane(_) | Row::Blank => {}
             Row::TopBar => {

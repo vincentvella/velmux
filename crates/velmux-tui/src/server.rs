@@ -2380,7 +2380,7 @@ impl App {
         for (y, row) in ui::sidebar_rows(self, self.size.1) {
             match (grab, row) {
                 (Grab::Repo(_), ui::Row::Project(p)) => items.push((Grab::Repo(p), y, y)),
-                (Grab::Repo(_), ui::Row::Location(loc)) if !self.projects[loc.project].is_unclassified() => {
+                (Grab::Repo(_), ui::Row::Location(loc) | ui::Row::Detail(loc)) if !self.projects[loc.project].is_unclassified() => {
                     if let Some(last) = items.last_mut().filter(|(g, ..)| *g == Grab::Repo(loc.project)) {
                         last.2 = y;
                     }
@@ -2497,7 +2497,7 @@ impl App {
             }
             ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
             ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } | ui::Row::Parked(..) => unreachable!("handled above"),
-            ui::Row::Location(loc) => loc,
+            ui::Row::Location(loc) | ui::Row::Detail(loc) => loc,
             ui::Row::Project(p) => {
                 // Open the project at its first location with panes, else its root.
                 let live = self.live_locations().into_iter().find(|l| l.project == p);
@@ -2526,7 +2526,7 @@ impl App {
             return;
         }
         let target = match row {
-            ui::Row::Location(loc) => loc,
+            ui::Row::Location(loc) | ui::Row::Detail(loc) => loc,
             ui::Row::Project(p) if !self.projects[p].is_unclassified() => Loc { project: p, slot: None },
             ui::Row::Agent { pane, .. } => self.panes[pane].loc.clone(),
             _ => return,

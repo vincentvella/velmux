@@ -116,10 +116,7 @@
 
 <text x="41.2" y="189.5" fill="#9ccfd8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
 
-<text x="58.0" y="189.5" fill="#908caa" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">fix/search-fli…</text>
-<text x="184.0" y="189.5" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> ·1</text>
-
-<text x="217.6" y="189.5" fill="#eb6f92" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#143✗</text>
+<text x="58.0" y="189.5" fill="#908caa" xml:space="preserve" textLength="151.2" lengthAdjust="spacingAndGlyphs">fix/search-flicker</text>
 
 <text x="268.0" y="189.5" fill="#eb6f92" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">▲</text>
 
@@ -138,17 +135,10 @@
 
 <text x="654.4" y="189.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<rect x="16.0" y="194.0" width="8.4" height="18" fill="#26233a"/><text x="16.0" y="207.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
-<rect x="24.4" y="194.0" width="16.8" height="18" fill="#26233a"/>
-<rect x="41.2" y="194.0" width="8.4" height="18" fill="#26233a"/><text x="41.2" y="207.5" fill="#9ccfd8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
-<rect x="49.6" y="194.0" width="8.4" height="18" fill="#26233a"/>
-<rect x="58.0" y="194.0" width="109.2" height="18" fill="#26233a"/><text x="58.0" y="207.5" fill="#e0def4" xml:space="preserve" textLength="109.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">feat/checkout</text>
-<rect x="167.2" y="194.0" width="25.2" height="18" fill="#26233a"/><text x="167.2" y="207.5" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> ·2</text>
-<rect x="192.4" y="194.0" width="25.2" height="18" fill="#26233a"/>
-<rect x="217.6" y="194.0" width="42.0" height="18" fill="#26233a"/><text x="217.6" y="207.5" fill="#31748f" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#142✓</text>
-<rect x="259.6" y="194.0" width="8.4" height="18" fill="#26233a"/>
-<rect x="268.0" y="194.0" width="8.4" height="18" fill="#26233a"/><text x="268.0" y="207.5" fill="#f6c177" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">●</text>
-<rect x="276.4" y="194.0" width="8.4" height="18" fill="#26233a"/>
+
+<text x="58.0" y="207.5" fill="#6e6a86" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">slot 1 · </text>
+<text x="133.6" y="207.5" fill="#eb6f92" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#143✗</text>
+
 <text x="284.8" y="207.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="207.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
 
@@ -167,13 +157,14 @@
 
 <text x="654.4" y="207.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-
-<text x="41.2" y="225.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◌</text>
-
-<text x="58.0" y="225.5" fill="#908caa" xml:space="preserve" textLength="142.8" lengthAdjust="spacingAndGlyphs" font-style="italic">feat/promo-banner</text>
-
-<text x="251.2" y="225.5" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">now</text>
-
+<rect x="16.0" y="212.0" width="8.4" height="18" fill="#26233a"/><text x="16.0" y="225.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
+<rect x="24.4" y="212.0" width="16.8" height="18" fill="#26233a"/>
+<rect x="41.2" y="212.0" width="8.4" height="18" fill="#26233a"/><text x="41.2" y="225.5" fill="#9ccfd8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+<rect x="49.6" y="212.0" width="8.4" height="18" fill="#26233a"/>
+<rect x="58.0" y="212.0" width="109.2" height="18" fill="#26233a"/><text x="58.0" y="225.5" fill="#e0def4" xml:space="preserve" textLength="109.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">feat/checkout</text>
+<rect x="167.2" y="212.0" width="100.8" height="18" fill="#26233a"/>
+<rect x="268.0" y="212.0" width="8.4" height="18" fill="#26233a"/><text x="268.0" y="225.5" fill="#f6c177" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">●</text>
+<rect x="276.4" y="212.0" width="8.4" height="18" fill="#26233a"/>
 <text x="284.8" y="225.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="225.5" fill="#cdd6f4" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">  ⎿  Read </text>
 <text x="377.2" y="225.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
@@ -189,11 +180,11 @@
 
 <text x="654.4" y="225.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-
-<text x="24.4" y="243.5" fill="#908caa" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">api</text>
-
-<text x="226.0" y="243.5" fill="#6e6a86" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">1 free</text>
-
+<rect x="16.0" y="230.0" width="8.4" height="18" fill="#26233a"/><text x="16.0" y="243.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
+<rect x="24.4" y="230.0" width="33.6" height="18" fill="#26233a"/>
+<rect x="58.0" y="230.0" width="75.6" height="18" fill="#26233a"/><text x="58.0" y="243.5" fill="#6e6a86" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">slot 2 · </text>
+<rect x="133.6" y="230.0" width="42.0" height="18" fill="#26233a"/><text x="133.6" y="243.5" fill="#31748f" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">#142✓</text>
+<rect x="175.6" y="230.0" width="109.2" height="18" fill="#26233a"/>
 <text x="284.8" y="243.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 <text x="377.2" y="243.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
@@ -210,9 +201,11 @@
 <text x="654.4" y="243.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="41.2" y="261.5" fill="#ebbcba" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
+<text x="41.2" y="261.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◌</text>
 
-<text x="58.0" y="261.5" fill="#908caa" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">base</text>
+<text x="58.0" y="261.5" fill="#908caa" xml:space="preserve" textLength="142.8" lengthAdjust="spacingAndGlyphs" font-style="italic">feat/promo-banner</text>
+
+<text x="251.2" y="261.5" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">now</text>
 
 <text x="284.8" y="261.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="261.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
@@ -233,12 +226,9 @@
 <text x="654.4" y="261.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="41.2" y="279.5" fill="#9ccfd8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+<text x="24.4" y="279.5" fill="#908caa" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">api</text>
 
-<text x="58.0" y="279.5" fill="#908caa" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">feat/rate-limits</text>
-<text x="192.4" y="279.5" fill="#6e6a86" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> ·1</text>
-
-<text x="268.0" y="279.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">○</text>
+<text x="226.0" y="279.5" fill="#6e6a86" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">1 free</text>
 
 <text x="284.8" y="279.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="279.5" fill="#cdd6f4" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">  ⎿  Updat</text>
@@ -246,14 +236,18 @@
 <text x="662.8" y="279.5" fill="#f38ba8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">s</text>
 
 
-<text x="24.4" y="297.5" fill="#6e6a86" xml:space="preserve" textLength="226.8" lengthAdjust="spacingAndGlyphs">───────────────────────────</text>
+<text x="41.2" y="297.5" fill="#ebbcba" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
 
-<text x="259.6" y="297.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">+</text>
+<text x="58.0" y="297.5" fill="#908caa" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">base</text>
 
 <text x="284.8" y="297.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="41.2" y="315.5" fill="#908caa" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">scratch</text>
+<text x="41.2" y="315.5" fill="#9ccfd8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+
+<text x="58.0" y="315.5" fill="#908caa" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">feat/rate-limits</text>
+
+<text x="268.0" y="315.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">○</text>
 
 <text x="284.8" y="315.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="315.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
@@ -261,13 +255,21 @@
 <text x="310.0" y="315.5" fill="#cdd6f4" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs" font-weight="bold">Bash</text>
 <text x="343.6" y="315.5" fill="#cdd6f4" xml:space="preserve" textLength="680.4" lengthAdjust="spacingAndGlyphs">(bun test src/checkout)                                                          </text>
 
+<text x="58.0" y="333.5" fill="#6e6a86" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">slot 1</text>
+
 <text x="284.8" y="333.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="333.5" fill="#cdd6f4" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">  ⎿  </text>
 <text x="335.2" y="333.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">✓</text>
 <text x="343.6" y="333.5" fill="#cdd6f4" xml:space="preserve" textLength="680.4" lengthAdjust="spacingAndGlyphs"> 12 passed                                                                       </text>
 
+<text x="24.4" y="351.5" fill="#6e6a86" xml:space="preserve" textLength="226.8" lengthAdjust="spacingAndGlyphs">───────────────────────────</text>
+
+<text x="259.6" y="351.5" fill="#c4a7e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">+</text>
+
 <text x="284.8" y="351.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
+
+<text x="41.2" y="369.5" fill="#908caa" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">scratch</text>
 
 <text x="284.8" y="369.5" fill="#6e6a86" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="369.5" fill="#ff875f" xml:space="preserve" textLength="436.8" lengthAdjust="spacingAndGlyphs">✻ Wiring up the saved-cards list… (esc to interrupt)</text>

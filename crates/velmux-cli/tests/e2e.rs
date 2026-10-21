@@ -17,7 +17,8 @@ fn base_claude_claims_a_slot_and_releases_it() {
     let id = ui.claude_id();
     ui.line("claim feat/e2e");
     ui.wait_for("claimed ");
-    ui.wait_for("feat/e2e ·1");
+    ui.wait_for("▣ feat/e2e");
+    ui.wait_for("slot 1");
     let slot = env.slot(&repo, "slot-1");
     assert_eq!((slot["status"].as_str(), slot["branch"].as_str()), (Some("inuse"), Some("feat/e2e")));
     ui.wait_for("slot-1 · feat/e2e");
@@ -290,7 +291,7 @@ fn changes_in_the_checkout_are_flagged_and_move_to_a_slot() {
     ui.send(b"\r");
     ui.wait_for("branch for the checkout's 2 changed file(s)");
     ui.line("feat/moved");
-    ui.wait_for("feat/moved* ·"); // dirty: the changes came along
+    ui.wait_for("feat/moved*"); // dirty: the changes came along
     let slot = env.json(&repo, &["status", "--json"]).as_array().unwrap().iter().find(|s| s["branch"] == "feat/moved").cloned().unwrap();
     let path = Path::new(slot["path"].as_str().unwrap());
     assert_eq!(std::fs::read_to_string(path.join("README.md")).unwrap(), "edited in the checkout\n");
