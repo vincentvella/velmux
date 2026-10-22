@@ -4349,6 +4349,7 @@ impl App {
         let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
         pane.freeze();
         let mut c = Copy::enter(id, &pane.parser);
+        c.rewrap = pane.agent.is_some();
         if page_up {
             c.key(&[0x02], &mut pane.parser);
         }

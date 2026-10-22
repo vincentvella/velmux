@@ -23,6 +23,8 @@ pub struct Copy {
     pub message: Option<String>,
     /// Opened by the wheel: scrolling back to the bottom closes it again.
     pub from_mouse: bool,
+    /// The pane runs an agent, which wraps its own long lines (see `extract`).
+    pub rewrap: bool,
 }
 
 pub enum Action {
@@ -80,6 +82,7 @@ impl Copy {
                 .alternate_screen()
                 .then(|| "full-screen app: no history here (it scrolls itself) — copy what's visible".into()),
             from_mouse: false,
+            rewrap: false,
         }
     }
 
@@ -282,25 +285,49 @@ impl Copy {
         Some(self.extract(p, a, b))
     }
 
-    /// Text between two positions (inclusive), rejoining soft-wrapped lines.
+    /// Text between two positions (inclusive), rejoining soft-wrapped lines:
+    /// ones the terminal wrapped, and in an agent's pane (`rewrap`) ones the
+    /// agent broke itself, which reach its right edge and carry on, indented,
+    /// on the next line (Claude Code lays a long command out like that).
     fn extract<CB: vt100::Callbacks>(&self, p: &mut vt100::Parser<CB>, a: Pos, b: Pos) -> String {
+        let (_, _, cols) = dims(p);
         let mut out = String::new();
+        let mut joined = false;
         for abs in a.0..=b.0 {
             let (cells, wrapped) = line_cells(p, abs);
             let from = if abs == a.0 { a.1 as usize } else { 0 };
             let to = if abs == b.0 { (b.1 as usize + 1).min(cells.len()) } else { cells.len() };
-            let piece = cells.get(from..to.max(from)).map(|c| c.concat()).unwrap_or_default();
+            let mut piece = cells.get(from..to.max(from)).map(|c| c.concat()).unwrap_or_default();
+            if joined {
+                piece = piece.trim_start().to_string();
+            }
+            joined = false;
             if abs != b.0 && wrapped {
                 out.push_str(&piece);
             } else {
                 out.push_str(piece.trim_end());
                 if abs != b.0 {
-                    out.push('\n');
+                    if self.rewrap && agent_wrapped(&cells.concat(), &line_cells(p, abs + 1).0.concat(), cols) {
+                        joined = true;
+                    } else {
+                        out.push('\n');
+                    }
                 }
             }
         }
         out
     }
+}
+
+/// An agent broke `line` to fit and `next` carries on: `line` reaches the
+/// agent's right edge (within a few columns: its margin) and isn't a rule,
+/// and `next` is indented text.
+fn agent_wrapped(line: &str, next: &str, cols: u16) -> bool {
+    let text = line.trim_end();
+    let filled = text.chars().count() + 3 >= cols as usize;
+    let rule = text.trim().chars().all(|c| matches!(c, '─' | '━' | '═' | '-' | '│' | '╭' | '╮' | '╰' | '╯'));
+    let continues = next.starts_with(' ') && !next.trim().is_empty();
+    filled && !rule && continues
 }
 
 /// OSC 52 sequence that asks the outer terminal to set its clipboard.
@@ -325,6 +352,37 @@ fn base64(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejoins_a_command_an_agent_wrapped_itself() {
+        // Claude Code's prompt box at 40 columns, as it draws it.
+        let rule = "─".repeat(40);
+        let lines = [
+            rule.as_str(),
+            "❯ echo the-quick-brown-fox-jumps-over-",
+            "  the-lazy-dog-and-keeps-running-for-a",
+            "  -while",
+            rule.as_str(),
+            "short line",
+            "  indented, but the line above was short",
+        ];
+        let mut p = vt100::Parser::new(std::num::NonZero::new(8).unwrap(), std::num::NonZero::new(40).unwrap(), 0);
+        p.process(lines.join("\r\n").as_bytes());
+        let mut c = Copy::enter(1, &p);
+        c.rewrap = true;
+        let all = c.extract(&mut p, (0, 0), (6, 39));
+        let want = [
+            rule.as_str(),
+            "❯ echo the-quick-brown-fox-jumps-over-the-lazy-dog-and-keeps-running-for-a-while",
+            rule.as_str(),
+            "short line",
+            "  indented, but the line above was short",
+        ];
+        assert_eq!(all, want.join("\n"));
+        // A shell's lines are only joined where the terminal wrapped them.
+        c.rewrap = false;
+        assert!(c.extract(&mut p, (1, 0), (3, 39)).contains("over-\n  the-lazy"));
+    }
     use std::num::NonZeroU16;
 
     fn parser(rows: u16, cols: u16, text: &str) -> vt100::Parser {
