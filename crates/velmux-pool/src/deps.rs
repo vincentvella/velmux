@@ -126,14 +126,20 @@ pub fn run_shell(dir: &Path, command: &str) -> Result<()> {
 /// the slot's `.nvmrc` or `.tool-versions`. With a `.nvmrc` and nvm installed,
 /// nvm is also switched explicitly, for configs that don't do it on `cd`.
 pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
     let (program, args) = user_shell(dir, command);
-    let out = Command::new(&program)
-        .args(&args)
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .current_dir(dir)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .with_context(|| format!("running `{command}`"))?;
+    let mut cmd = Command::new(&program);
+    cmd.args(&args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(dir).stdin(std::process::Stdio::null());
+    // A session of its own, with no terminal: an interactive shell takes the
+    // terminal it's started from for job control, which would leave a
+    // `velmux claim` run in your terminal stopped in the background (SIGTTIN).
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let out = cmd.output().with_context(|| format!("running `{command}`"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let tail: Vec<&str> = stderr.lines().rev().take(20).collect();

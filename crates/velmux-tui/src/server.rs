@@ -117,6 +117,17 @@ impl Project {
     }
 }
 
+/// Let go of the terminal the server was started from (the first client's).
+/// Kept, a program a pane or an install runs that takes its terminal for job
+/// control (an interactive shell) could take yours, and stop the client
+/// you're using (`suspended (tty input)`).
+fn detach_terminal() {
+    if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        use std::os::fd::AsRawFd;
+        unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCNOTTY) };
+    }
+}
+
 /// How long after a resize its keys work again without the prefix.
 const REPEAT_FOR: Duration = Duration::from_millis(800);
 
@@ -437,6 +448,7 @@ pub struct App {
 }
 
 pub fn serve() -> Result<()> {
+    detach_terminal();
     let sock = paths::socket()?;
     if UnixStream::connect(&sock).is_ok() {
         anyhow::bail!("a velmux server is already running at {}", sock.display());

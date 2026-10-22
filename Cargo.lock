@@ -1817,6 +1817,7 @@ name = "velmux-pool"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

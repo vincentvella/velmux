@@ -136,9 +136,15 @@ fn connect_or_spawn() -> Result<UnixStream> {
     cmd.arg("__server")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(log)
-        .process_group(0)
-        .spawn()
+        .stderr(log);
+    // Its own session, with no terminal: nothing it runs can take yours.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn()
         .context("starting velmux server")?;
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
