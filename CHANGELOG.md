@@ -5,6 +5,11 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- The pane menu in an agent's pane: Claude Code turns the mouse on, so its
+  right-clicks were going to it; an agent's pane now always gives the menu.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

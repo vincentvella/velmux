@@ -1816,7 +1816,7 @@ impl App {
         let (rows, cols) = pane.parser.screen().size();
         let pty = pane.pty_size();
         let mut out = format!(
-            "pane {} · client {}x{} · pane area {}x{} at col {} · parser {}x{} · pty {} · alt screen {} · scrollback {}\n",
+            "pane {} · client {}x{} · pane area {}x{} at col {} · parser {}x{} · pty {} · alt screen {} · mouse {:?} · scrollback {}\n",
             pane.id,
             self.size.0,
             self.size.1,
@@ -1827,6 +1827,7 @@ impl App {
             rows.get(),
             pty.map_or("?".into(), |(c, r)| format!("{c}x{r}")),
             pane.parser.screen().alternate_screen(),
+            pane.parser.screen().mouse_protocol_mode(),
             pane.parser.screen().scrollback(),
         );
         for (i, row) in pane.parser.screen().rows(0, cols.get()).enumerate() {
@@ -2299,10 +2300,12 @@ impl App {
         }
         let inner = ui::content_rect(outer, titled);
         // Right-click: the pane's menu, unless it's in the content of an app
-        // that takes the mouse itself (vim); its title bar always gives the menu.
+        // that takes the mouse itself (vim, not an agent); its title bar
+        // always gives the menu.
         if ev.is_press() && ev.is_right() {
             let copying = self.copy.as_ref().is_some_and(|c| c.pane == id);
-            let app_mouse = self.pane(id).is_some_and(|p| p.parser.screen().mouse_protocol_mode() != MouseProtocolMode::None);
+            // Agents (Claude Code turns the mouse on) don't use right-click: theirs is the menu.
+            let app_mouse = self.pane(id).is_some_and(|p| p.agent.is_none() && p.parser.screen().mouse_protocol_mode() != MouseProtocolMode::None);
             if !(inner.contains(at) && app_mouse && !copying) {
                 return self.open_pane_menu(id, ev.x, ev.y);
             }

@@ -782,6 +782,22 @@ fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
 }
 
 #[test]
+fn an_agent_that_takes_the_mouse_still_gets_the_pane_menu() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    ui.claude_id();
+    // Claude Code turns mouse reporting on: a right-click is still velmux's menu.
+    ui.line("mouse");
+    ui.line("say ready");
+    ui.wait_for("said ready");
+    env.until("the pane to report mouse mode", || String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).contains("mouse ButtonMotion"));
+    ui.send(b"\x1b[<2;80;12M\x1b[<2;80;12m");
+    ui.wait_for("split right");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

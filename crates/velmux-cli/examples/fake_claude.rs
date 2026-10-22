@@ -7,7 +7,8 @@
 //! - `claim <branch>` / `release`: run `velmux claim` / `velmux release`
 //! - `sh <command>`: run a shell command in the current folder
 //! - `show <file>`: clear the screen and draw the file (a mock screen, for
-//!   screenshots); `title <text>`: set the window title
+//!   screenshots); `title <text>`: set the window title; `mouse`: turn mouse
+//!   reporting on
 //! - `exit`
 
 use std::io::{BufRead, Write};
@@ -94,6 +95,8 @@ fn main() {
                 print!("\x1b[H\x1b[2J\x1b[3J{}", std::fs::read_to_string(rest).unwrap_or_default().replace('\n', "\r\n"));
                 prompt = false;
             }
+            // `mouse`: turn mouse reporting on, as Claude Code does.
+            "mouse" => print!("\x1b[?1000h\x1b[?1002h\x1b[?1006h"),
             "title" => {
                 print!("\x1b]2;{rest}\x07");
                 // Claude also records its title for the conversation.
