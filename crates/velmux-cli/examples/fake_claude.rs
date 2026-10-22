@@ -191,5 +191,9 @@ fn fake_droid(args: &[String]) {
         if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 || line.trim() == "exit" {
             break;
         }
+        // `ask`: Droid's permission menu (velmux should see it as blocked).
+        if line.trim() == "ask" {
+            println!("Run command: rm -rf dist\n> Yes, allow\n  No, cancel\nUse ↑↓ to navigate, Enter to select, Esc to cancel");
+        }
     }
 }

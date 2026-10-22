@@ -5,6 +5,14 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- Working / blocked / idle for GitHub Copilot CLI, Cursor Agent, Droid, Devin
+  CLI, Qwen Code, Grok CLI, Qoder CLI, Kimi Code, Letta Code, Antigravity CLI,
+  Kilo Code, pi, oh-my-pi and Hermes Agent, from herdr's detection rules
+  (their permission prompts, spinners, titles and progress reports), instead of
+  just "working while output flows". They show as blocked when they ask you.
+
 ## [0.7.1] - 2026-10-22
 
 ### Added

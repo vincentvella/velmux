@@ -405,6 +405,10 @@ fn an_agent_with_a_session_hook_is_resumed() {
     drop(ui);
     let ui = env.attach(&repo);
     ui.wait_for(&format!("FAKE-DROID id={id} mode=resume"));
+    // Its permission menu shows as blocked (herdr's rules for Droid).
+    ui.line("ask");
+    ui.wait_for("Enter to select");
+    env.until("the sidebar to show it blocked", || ui.find("▲").is_some());
     // And uninstalling takes the hook out again, leaving your settings.
     env.velmux(&repo, &["skill", "uninstall"]);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(factory.join("settings.json")).unwrap()).unwrap(), serde_json::json!({"model":"mine"}));

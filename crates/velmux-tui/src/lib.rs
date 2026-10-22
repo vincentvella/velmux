@@ -21,6 +21,7 @@ pub mod skill;
 pub mod ghostty;
 pub mod agents;
 pub mod hooks;
+mod rules;
 pub mod guard;
 pub mod update;
 mod theme;

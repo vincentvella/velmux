@@ -36,8 +36,10 @@ enabled in Hermes's `config.yaml`). Either way it does nothing outside velmux, a
 with…** or by hand in a pane; `velmux doctor` lists any that are set up but
 not hooked yet.
 
-For these, working / idle comes from whether their output is flowing, and
-they don't get velmux's instructions or the checkout guard. Other agents
+Their working / blocked / idle comes from herdr's detection rules for each
+(their permission prompts, spinners, window titles and progress reports;
+Mastra Code, which has none, counts as working while its output is flowing).
+They don't get velmux's instructions or the checkout guard. Other agents
 (aider…) are recognised in a pane the same way, without resuming.
 
 ## How each one is followed

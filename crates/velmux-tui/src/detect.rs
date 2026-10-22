@@ -235,7 +235,7 @@ fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
 /// What agent `agent` is doing: from what it reports (Codex's OSC 7501
 /// `status`), its window title, or its screen (`lines`, top to bottom). Agents
 /// without rules count as working while their output is flowing (`busy`).
-pub fn classify(agent: &str, title: &str, lines: &[String], status: Option<&str>, busy: bool) -> AgentState {
+pub fn classify(agent: &str, title: &str, lines: &[String], status: Option<&str>, progress: &str, busy: bool) -> AgentState {
     if agent == "claude" {
         return classify_claude(title, lines);
     }
@@ -244,8 +244,12 @@ pub fn classify(agent: &str, title: &str, lines: &[String], status: Option<&str>
         "codex" => classify_codex(title, &lines, status),
         "gemini" => classify_gemini(title, &lines),
         "opencode" => classify_opencode(&lines),
-        _ if busy => AgentState::Working,
-        _ => AgentState::Idle,
+        // herdr's rules for the rest it knows (see `rules`).
+        _ => match crate::rules::classify(agent, title, progress, &lines) {
+            Some(state) => state,
+            None if busy => AgentState::Working,
+            None => AgentState::Idle,
+        },
     }
 }
 
@@ -500,23 +504,23 @@ mod tests {
     #[test]
     fn codex_states() {
         // Its own status report wins.
-        assert_eq!(classify("codex", "", &lines("› "), Some("working"), false), AgentState::Working);
-        assert_eq!(classify("codex", "", &lines("› "), Some("blocked"), false), AgentState::Blocked);
-        assert_eq!(classify("codex", "", &lines("› "), Some("idle"), false), AgentState::Idle);
+        assert_eq!(classify("codex", "", &lines("› "), Some("working"), "", false), AgentState::Working);
+        assert_eq!(classify("codex", "", &lines("› "), Some("blocked"), "", false), AgentState::Blocked);
+        assert_eq!(classify("codex", "", &lines("› "), Some("idle"), "", false), AgentState::Idle);
         // Else the screen.
-        assert_eq!(classify("codex", "", &lines("⠙ Working (12s • esc to interrupt)\n› "), None, false), AgentState::Working);
+        assert_eq!(classify("codex", "", &lines("⠙ Working (12s • esc to interrupt)\n› "), None, "", false), AgentState::Working);
         let approval = lines("Would you like to run the following command?\n  $ rm -rf dist\n› 1. Yes, proceed (y)\n  3. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel");
-        assert_eq!(classify("codex", "", &approval, None, false), AgentState::Blocked);
-        assert_eq!(classify("codex", "[ ! ] Action Required", &lines("› "), None, false), AgentState::Blocked);
-        assert_eq!(classify("codex", "", &lines("› "), None, true), AgentState::Idle, "output alone isn't work");
+        assert_eq!(classify("codex", "", &approval, None, "", false), AgentState::Blocked);
+        assert_eq!(classify("codex", "[ ! ] Action Required", &lines("› "), None, "", false), AgentState::Blocked);
+        assert_eq!(classify("codex", "", &lines("› "), None, "", true), AgentState::Idle, "output alone isn't work");
     }
 
     #[test]
     fn codex_screens() {
-        let codex = |title: &str, screen: &str| classify("codex", title, &lines(screen), None, false);
+        let codex = |title: &str, screen: &str| classify("codex", title, &lines(screen), None, "", false);
         // Start-up dialogs block even when it reports idle.
         let trust = "> You are in /w/app\n\n  Do you trust the contents of this\n  directory? Working with untrusted contents\n› 1. Yes, continue\n  2. No, quit";
-        assert_eq!(classify("codex", "", &lines(trust), Some("idle"), false), AgentState::Blocked);
+        assert_eq!(classify("codex", "", &lines(trust), Some("idle"), "", false), AgentState::Blocked);
         let folder = "  Folder access\n  Trust this folder?\n  Codex can read, edit, and run files here.\n  enter continue · esc quit";
         assert_eq!(codex("", folder), AgentState::Blocked);
         let update = "  ✨ Update available! 0.150.0 -> 0.160.0\n› 1. Update now\n  2. Skip\n  3. Skip until next version\n  Press enter to continue";
@@ -543,12 +547,12 @@ mod tests {
 
     #[test]
     fn gemini_and_opencode_screens() {
-        let gemini = |screen: &str| classify("gemini", "Gemini CLI (app)", &lines(screen), None, false);
+        let gemini = |screen: &str| classify("gemini", "Gemini CLI (app)", &lines(screen), None, "", false);
         assert_eq!(gemini("╭──\n│ Apply this change?\n│ ● 1. Yes, allow once"), AgentState::Blocked);
         assert_eq!(gemini("│ Allow execution of: 'rm -rf dist'?"), AgentState::Blocked);
         assert_eq!(gemini("  ❯ 1. Allow once\n    2. No"), AgentState::Blocked);
         assert_eq!(gemini("> Type your message"), AgentState::Idle);
-        let opencode = |screen: &str| classify("opencode", "OC | fix", &lines(screen), None, false);
+        let opencode = |screen: &str| classify("opencode", "OC | fix", &lines(screen), None, "", false);
         assert_eq!(opencode("  Allow edit to src/a.ts?\n  ↑↓ select  enter confirm  esc dismiss"), AgentState::Blocked);
         assert_eq!(opencode("  ■■■■⬝⬝⬝⬝  Build"), AgentState::Working);
         assert_eq!(opencode("  ctrl+c to interrupt"), AgentState::Working);
@@ -557,21 +561,21 @@ mod tests {
 
     #[test]
     fn gemini_states() {
-        assert_eq!(classify("gemini", "✋  Action Required (app)      ", &lines(""), None, false), AgentState::Blocked);
-        assert_eq!(classify("gemini", "✦  Working… (app)", &lines(""), None, false), AgentState::Working);
-        assert_eq!(classify("gemini", "◇  Ready (app)", &lines(""), None, false), AgentState::Idle);
+        assert_eq!(classify("gemini", "✋  Action Required (app)      ", &lines(""), None, "", false), AgentState::Blocked);
+        assert_eq!(classify("gemini", "✦  Working… (app)", &lines(""), None, "", false), AgentState::Working);
+        assert_eq!(classify("gemini", "◇  Ready (app)", &lines(""), None, "", false), AgentState::Idle);
         // Title off: the screen.
-        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠏ Waiting for user confirmation..."), None, false), AgentState::Blocked);
-        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠋ Thinking... (esc to cancel, 12s)"), None, false), AgentState::Working);
+        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠏ Waiting for user confirmation..."), None, "", false), AgentState::Blocked);
+        assert_eq!(classify("gemini", "Gemini CLI (app)", &lines("⠋ Thinking... (esc to cancel, 12s)"), None, "", false), AgentState::Working);
     }
 
     #[test]
     fn opencode_states() {
-        assert_eq!(classify("opencode", "OC | fix", &lines("⠋ esc interrupt"), None, false), AgentState::Working);
-        assert_eq!(classify("opencode", "OC | fix", &lines("△ Permission required\n  Edit src/a.ts\nAllow once  Allow always  Reject"), None, false), AgentState::Blocked);
-        assert_eq!(classify("opencode", "OC | fix", &lines("> "), None, false), AgentState::Idle);
+        assert_eq!(classify("opencode", "OC | fix", &lines("⠋ esc interrupt"), None, "", false), AgentState::Working);
+        assert_eq!(classify("opencode", "OC | fix", &lines("△ Permission required\n  Edit src/a.ts\nAllow once  Allow always  Reject"), None, "", false), AgentState::Blocked);
+        assert_eq!(classify("opencode", "OC | fix", &lines("> "), None, "", false), AgentState::Idle);
         // Agents without rules: working while output flows.
-        assert_eq!(classify("aider", "", &lines(""), None, true), AgentState::Working);
+        assert_eq!(classify("aider", "", &lines(""), None, "", true), AgentState::Working);
     }
 
     #[test]

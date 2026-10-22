@@ -32,6 +32,8 @@ pub struct Term {
     pub title: String,
     /// What the agent reports about itself (Codex's OSC 7501 `state=`).
     pub status: Option<String>,
+    /// Its last progress report (OSC 9;4), as `4;<state>;<percent>`.
+    pub progress: String,
     /// Replies to write back to the app.
     replies: Vec<u8>,
 }
@@ -67,6 +69,11 @@ impl vt100::Callbacks for Term {
                 let state = state.split(':').next().unwrap_or_default();
                 self.status = (state != "clear" && !state.is_empty()).then(|| state.to_string());
             }
+            return;
+        }
+        // OSC 9;4 ; <state> ; <percent>: a progress report (some agents' "working").
+        if params.first() == Some(&&b"9"[..]) && params.get(1) == Some(&&b"4"[..]) {
+            self.progress = params[1..].iter().map(|p| String::from_utf8_lossy(p).into_owned()).collect::<Vec<_>>().join(";");
             return;
         }
         // OSC 10/11 colour queries: report a dark theme (light fg on black).
@@ -455,7 +462,8 @@ impl Pane {
                 let (_, cols) = screen.size();
                 let lines: Vec<String> = screen.rows(0, cols.get()).collect();
                 let busy = self.last_output.elapsed().as_millis() < 1500;
-                Some(detect::classify(name, self.title(), &lines, self.parser.callbacks().status.as_deref(), busy))
+                let cb = self.parser.callbacks();
+                Some(detect::classify(name, self.title(), &lines, cb.status.as_deref(), &cb.progress, busy))
             }
             None => None,
         };
