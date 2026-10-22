@@ -103,14 +103,13 @@ impl Store {
         self.read()
     }
 
-    fn lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.dir.join("pool.lock"))?;
-        file.lock().context("locking pool")?;
-        Ok(file)
+    /// An advisory lock for the moment `pool.json` is read or written. Best
+    /// effort: where the file can't be made or locked (a sandbox, a filesystem
+    /// without `flock`), go ahead unlocked rather than fail; the write itself
+    /// is still an atomic rename.
+    fn lock(&self) -> Result<Option<File>> {
+        let file = OpenOptions::new().create(true).truncate(false).write(true).open(self.dir.join("pool.lock"));
+        Ok(file.ok().filter(|f| f.lock().is_ok()))
     }
 
     fn read(&self) -> Result<Option<State>> {

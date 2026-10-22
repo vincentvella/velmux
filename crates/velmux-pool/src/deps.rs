@@ -119,12 +119,19 @@ pub fn run_shell(dir: &Path, command: &str) -> Result<()> {
 }
 
 /// [`run_shell`] with extra environment variables.
+///
+/// It runs in your own shell, as an interactive login shell started in `dir`
+/// (`$SHELL -l -i -c`), so the node (or ruby, python…) it uses is the one a
+/// terminal there would get: nvm / fnm / mise hooks in your shell config see
+/// the slot's `.nvmrc` or `.tool-versions`. With a `.nvmrc` and nvm installed,
+/// nvm is also switched explicitly, for configs that don't do it on `cd`.
 pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Result<()> {
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let (program, args) = user_shell(dir, command);
+    let out = Command::new(&program)
+        .args(&args)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(dir)
+        .stdin(std::process::Stdio::null())
         .output()
         .with_context(|| format!("running `{command}`"))?;
     if !out.status.success() {
@@ -134,6 +141,30 @@ pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Re
         bail!("`{command}` failed in {}:\n{}", dir.display(), tail.join("\n"));
     }
     Ok(())
+}
+
+/// The shell and arguments for [`run_shell_with`]: `$SHELL` when it's one
+/// we know how to start like that (zsh, bash, fish), else plain `sh -c`.
+fn user_shell(dir: &Path, command: &str) -> (String, Vec<String>) {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let name = Path::new(&shell).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".nvm")));
+    let nvm_sh = nvm.map(|d| d.join("nvm.sh")).filter(|f| f.is_file());
+    // nvm is a POSIX shell script: sourced in sh, bash and zsh (not fish).
+    let command = match nvm_sh {
+        Some(f) if dir.join(".nvmrc").is_file() && name != "fish" => {
+            format!(". {} >/dev/null 2>&1 && nvm use >/dev/null 2>&1; {command}", shell_quote(&f.display().to_string()))
+        }
+        _ => command.to_string(),
+    };
+    match name.as_str() {
+        "zsh" | "bash" | "fish" => (shell, vec!["-l".into(), "-i".into(), "-c".into(), command]),
+        _ => ("sh".into(), vec!["-c".into(), command]),
+    }
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// FNV-1a 64: stable across Rust versions, unlike `DefaultHasher`.
@@ -150,6 +181,19 @@ fn hash_file(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runs_in_your_shell_with_nvm_switched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, args) = user_shell(tmp.path(), "yarn install");
+        assert_eq!(args.last().unwrap(), "yarn install", "no .nvmrc: as is");
+        std::fs::write(tmp.path().join(".nvmrc"), "24\n").unwrap();
+        let (_, args) = user_shell(tmp.path(), "yarn install");
+        let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap()).join(".nvm"));
+        if nvm.join("nvm.sh").is_file() {
+            assert!(args.last().unwrap().contains("nvm use") && args.last().unwrap().ends_with("; yarn install"), "{args:?}");
+        }
+    }
 
     #[test]
     fn detects_managers_by_lockfile() {
