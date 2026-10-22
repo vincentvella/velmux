@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- Dragging a selection down to the bottom of a pane scrolls (a pane at the foot
+  of the screen has no row below it to drag onto), and holding it at the top or
+  bottom edge keeps scrolling.
+
 ## [0.9.1] - 2026-10-22
 
 ### Fixed

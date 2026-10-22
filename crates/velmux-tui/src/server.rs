@@ -376,6 +376,9 @@ pub struct App {
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
     menu_at: Option<(u16, u16)>,
+    /// A selection being dragged at a pane's edge: which way it scrolls, the
+    /// pointer's cell, and when it last scrolled.
+    select_edge: Option<(isize, u16, u16, Instant)>,
     pub keymap: Keymap,
     pub theme: crate::theme::Theme,
     /// Per-role overrides from config, re-applied when the theme changes.
@@ -585,6 +588,7 @@ pub fn serve() -> Result<()> {
             last_slots = Instant::now();
         }
         app.finish_nudge();
+        app.autoscroll_selection();
         if last_history.elapsed() >= Duration::from_secs(60) {
             app.save_histories(false);
             last_history = Instant::now();
@@ -622,6 +626,7 @@ impl App {
             claim_into: HashMap::new(),
             interned: HashMap::new(),
             menu_at: None,
+            select_edge: None,
             named: crate::paths::state_dir().ok().and_then(|d| std::fs::read_to_string(d.join("conversation-names.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
             keymap,
             theme: crate::theme::builtin("default").unwrap(),
@@ -2451,6 +2456,7 @@ impl App {
             }
             Drag::Select { pane, origin, mut moved, click } => {
                 if ev.release {
+                    self.select_edge = None;
                     if moved {
                         self.yank_selection();
                     } else if click {
@@ -2461,8 +2467,10 @@ impl App {
                 }
                 if ev.is_motion() {
                     let Some(inner) = self.pane_inner(pane) else { return };
-                    // Dragging past the top or bottom edge scrolls.
-                    let edge = if ev.y < inner.y { -1 } else if ev.y >= inner.bottom() { 1 } else { 0 };
+                    // Dragging past the top edge, or onto the bottom row (a pane at
+                    // the foot of the screen has nothing below it), scrolls; held
+                    // there, it keeps scrolling (`autoscroll_selection`).
+                    let edge = if ev.y < inner.y { -1 } else if ev.y + 1 >= inner.bottom() { 1 } else { 0 };
                     let lx = ev.x.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
                     let ly = ev.y.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
                     if !moved {
@@ -2479,10 +2487,31 @@ impl App {
                         c.cursor = c.at(ly, lx, p);
                         c.sync(p);
                     });
+                    self.select_edge = (edge != 0).then(|| (edge, lx, ly, Instant::now()));
                 }
                 self.drag = Some(Drag::Select { pane, origin, moved, click });
             }
         }
+    }
+
+    /// A selection held at a pane's top or bottom edge keeps scrolling (a
+    /// line every 60ms), as it would in a terminal.
+    fn autoscroll_selection(&mut self) {
+        let Some((edge, lx, ly, at)) = self.select_edge else { return };
+        if !matches!(self.drag, Some(Drag::Select { moved: true, .. })) {
+            self.select_edge = None;
+            return;
+        }
+        if at.elapsed() < Duration::from_millis(60) {
+            return;
+        }
+        self.with_copy(|c, p| {
+            c.scroll(edge, p);
+            c.cursor = c.at(ly, lx, p);
+            c.sync(p);
+        });
+        self.select_edge = Some((edge, lx, ly, Instant::now()));
+        self.dirty = true;
     }
 
     fn pane_inner(&self, id: u64) -> Option<Rect> {

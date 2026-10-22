@@ -798,6 +798,38 @@ fn an_agent_that_takes_the_mouse_still_gets_the_pane_menu() {
 }
 
 #[test]
+fn dragging_a_selection_to_a_panes_edge_scrolls_both_ways() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for("$");
+    ui.line("seq 1 400");
+    ui.wait_for("400");
+    // Scroll well back into history with the wheel (SGR 64 = wheel up).
+    for _ in 0..40 {
+        ui.send(b"\x1b[<64;80;10M");
+    }
+    // The number on the pane's first row (just under its title).
+    let top = |ui: &Ui| {
+        let s = ui.screen();
+        s.lines().nth(1).and_then(|l| l.split('│').nth(1)).and_then(|t| t.split_whitespace().next()?.parse::<u32>().ok()).unwrap_or(0)
+    };
+    env.until("the view to be back in history", || (1..300).contains(&top(&ui)));
+    let before = top(&ui);
+    // Drag from the middle onto the pane's last row (the screen's foot) and hold.
+    ui.send(b"\x1b[<0;80;10M");
+    ui.send(b"\x1b[<32;80;20M");
+    ui.send(format!("\x1b[<32;80;{ROWS}M").as_bytes());
+    env.until("the view to scroll down by itself", || top(&ui) > before + 20);
+    // Held above the top edge, it scrolls back up the same way.
+    let lower = top(&ui);
+    ui.send(b"\x1b[<32;80;1M");
+    env.until("the view to scroll up by itself", || top(&ui) + 20 < lower);
+    ui.send(b"\x1b[<0;80;1m");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

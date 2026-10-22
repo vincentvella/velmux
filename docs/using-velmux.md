@@ -147,7 +147,8 @@ split). Movement alone is never passed on to the apps in panes.
 ## Copying
 
 Drag over text in any pane to copy it, even in apps that use the mouse; a click
-that doesn't move still reaches the app. Double-click copies a word,
+that doesn't move still reaches the app. Drag to a pane's top or bottom edge and
+hold it there to scroll while you select. Double-click copies a word,
 triple-click a line. Copies go to the clipboard and to your terminal (OSC 52),
 so they work over SSH too.
 
