@@ -550,7 +550,14 @@ fn a_workstream_groups_slots_from_several_repos() {
     let api_slot = env.slot(&api, "slot-1");
     assert_eq!(api_slot["status"], "inuse");
     env.until("the folder to link the api's slot too", || std::fs::read_link(dir.join("api")).is_ok());
-    // Releasing it hands every slot back and removes it.
+    // A shell open in one of its slots…
+    ui.click_on("feat/a", false);
+    ui.wait_for("app › slot-1");
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.line("echo still-here");
+    ui.wait_for("still-here");
+    // Releasing it hands every slot back and removes it…
     ui.click_on("◇ checkout", true);
     ui.click_on("release workstream…", false);
     ui.wait_for("y yes");
@@ -558,6 +565,12 @@ fn a_workstream_groups_slots_from_several_repos() {
     env.until("both slots to be free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
     ui.wait_gone_text("◇ checkout");
     assert!(!dir.exists(), "its folder goes");
+    // …and the shell is still running, back in app's checkout.
+    ui.click_on("◆ base", false);
+    ui.wait_for("app › base · shell");
+    ui.wait_for("still-here");
+    ui.line("echo alive");
+    ui.wait_for("alive");
 }
 
 #[test]

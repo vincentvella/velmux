@@ -205,12 +205,19 @@ impl App {
     }
 
     /// Hand back every slot in a workstream (parking unfinished work as a
-    /// release does), then remove it.
+    /// release does), then remove it. Panes open in its slots move back to
+    /// their repo's checkout, still running, as `velmux release` does for one;
+    /// their conversations are also kept with the parked branch.
     pub(super) fn release_workstream(&mut self, ws: Loc) {
         let members = self.members(&ws);
         let n = members.len();
         for slot in members {
-            self.release_location(slot, None);
+            let base = Loc { project: slot.project, slot: None };
+            let here: Vec<(u64, Option<String>)> = self.panes.iter().filter(|p| p.loc == slot).map(|p| (p.id, p.session.clone())).collect();
+            for (id, _) in &here {
+                self.move_pane(*id, base.clone());
+            }
+            self.release_keeping(slot, here.into_iter().filter_map(|(_, s)| s).collect());
         }
         self.remove_workstream(ws.clone());
         self.say(format!("released {n} slot(s) and removed {}", ws.slot.unwrap_or_default()));

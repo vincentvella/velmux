@@ -43,6 +43,9 @@ code in those subfolders and commit in each repo's own git. Panes there get
 ## Done
 
 Right-click the workstream: **release workstream…** hands back every slot in
-it (unfinished work is parked, as a release does) and removes it. **remove
+it (unfinished work is parked, as a release does) and removes it. Panes open in
+its slots move back to their repo's checkout, still running (their
+conversations are kept with the parked work too); the workstream's own panes
+close with it. **remove
 workstream** only ungroups: its slots go back to their repos, still claimed.
 A slot released on its own leaves its workstream.

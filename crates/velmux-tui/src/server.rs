@@ -4161,9 +4161,14 @@ impl App {
     /// and is heading back to the base, then any closed here) are kept with
     /// the parked branch for resuming.
     fn release_location(&mut self, loc: Loc, first: Option<String>) {
+        self.release_keeping(loc, first.into_iter().collect());
+    }
+
+    /// [`release_location`](Self::release_location), keeping `sessions` (ones
+    /// that left the slot before it was released) with the parked branch too.
+    fn release_keeping(&mut self, loc: Loc, mut sessions: Vec<String>) {
         let Some(slot) = loc.slot.clone() else { return };
         let Some(pool) = self.projects[loc.project].pool.clone() else { return };
-        let mut sessions: Vec<String> = first.into_iter().collect();
         for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
             if let Some(s) = pane.session.clone().filter(|s| !sessions.contains(s)) {
                 sessions.push(s);

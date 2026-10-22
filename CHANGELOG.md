@@ -5,6 +5,11 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Changed
+
+- Releasing a workstream moves the panes open in its slots back to their
+  repo's checkout, still running, instead of closing them.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added
