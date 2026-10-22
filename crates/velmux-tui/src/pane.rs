@@ -213,9 +213,13 @@ impl Pane {
         let mut cmd = CommandBuilder::new(&shell);
         cmd.arg("-l");
         if let Some(command) = launch.command {
-            // Drop back into a shell when the command exits so the pane survives.
+            // Drop back into a shell when the command exits so the pane survives:
+            // the one the pane started with, interactive for certain (`-i`), so
+            // it reads your `.zshrc` / `.bashrc` whatever state the agent left
+            // the terminal in.
+            let quoted = format!("'{}'", shell.replace('\'', r"'\''"));
             cmd.arg("-c");
-            cmd.arg(format!("{command}; exec \"$SHELL\" -l"));
+            cmd.arg(format!("{command}; exec {quoted} -l -i"));
         }
         cmd.cwd(launch.cwd);
         cmd.env("TERM", "xterm-256color");
