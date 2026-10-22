@@ -599,6 +599,61 @@ fn slots_drag_into_a_workstream_and_leave_it() {
 }
 
 #[test]
+fn a_claude_claims_in_another_repo_and_comes_back_there() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for repo in [&app, &api] {
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    let ui = env.attach(&app);
+    ui.prefix("a");
+    let id = ui.claude_id();
+    // From app's checkout, a slot in api: the conversation moves over there.
+    ui.line(&format!("claim feat/x --repo {}", api.display()));
+    ui.wait_for("claimed ");
+    ui.wait_for("api › slot-1 · feat/x");
+    let slot = env.slot(&api, "slot-1");
+    assert_eq!((slot["status"].as_str(), slot["branch"].as_str()), (Some("inuse"), Some("feat/x")));
+    assert_eq!(env.slot(&app, "slot-1")["status"], "free", "nothing claimed in app");
+    assert!(ui.screen().contains(&format!("FAKE-CLAUDE id={id}")), "the same conversation, moved");
+    // Released, it comes back to api's checkout (the repo the slot was in).
+    ui.line("release");
+    env.until("api's slot to be free", || env.slot(&api, "slot-1")["status"] == "free");
+    ui.wait_for("api › base");
+    assert!(ui.screen().contains(&format!("FAKE-CLAUDE id={id}")), "still the same conversation");
+}
+
+#[test]
+fn a_workstream_slot_released_from_its_own_pane_leaves_it() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/w", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&app);
+    ui.click_on("feat/w", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("ws");
+    ui.wait_for("@1 app");
+    let link = env.root.join("pools/.workstreams/ws/app");
+    env.until("the link", || std::fs::read_link(&link).is_ok());
+    // A shell in the slot (under the workstream) releases it.
+    ui.click_on("feat/w", false);
+    ui.wait_for("app › slot-1");
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.line("velmux release");
+    env.until("the slot to be free", || env.slot(&app, "slot-1")["status"] == "free");
+    // The pane is back in app's checkout; the slot has left the workstream (which stays).
+    ui.wait_for("app › base");
+    ui.wait_gone_text("@1 app");
+    ui.wait_for("◇ ws");
+    env.until("its link to go", || std::fs::symlink_metadata(&link).is_err());
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

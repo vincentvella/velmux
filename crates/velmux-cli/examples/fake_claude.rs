@@ -72,9 +72,7 @@ fn main() {
             "claim" | "release" => {
                 let mut c = Command::new(&velmux);
                 c.arg(cmd).current_dir(&here);
-                if !rest.is_empty() {
-                    c.arg(rest);
-                }
+                c.args(rest.split_whitespace());
                 let out = c.output().unwrap();
                 let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if cmd == "claim" && out.status.success() {
