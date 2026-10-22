@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-22
+
 ### Added
 
 - Working / blocked / idle for GitHub Copilot CLI, Cursor Agent, Droid, Devin
@@ -173,7 +175,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/vincentvella/velmux/releases/tag/v0.8.0
 [0.7.1]: https://github.com/vincentvella/velmux/releases/tag/v0.7.1
 [0.7.0]: https://github.com/vincentvella/velmux/releases/tag/v0.7.0
 [0.6.0]: https://github.com/vincentvella/velmux/releases/tag/v0.6.0
