@@ -128,6 +128,26 @@ fn screenshots() {
     ui.wait_for("api › base");
     agent(&env, &ui, "feat/rate-limits", "rate-limit the public endpoints, and the checkout webhook | Added a token bucket per API key (60/min, burst 20) in front of /v1/* and the checkout webhook, with a 429 and Retry-After.", IDLE, "✳ Rate limits");
 
+    // A workstream across both repos: the checkout slot, and a slot in api
+    // claimed from the workstream's own screen.
+    ui.click_on("feat/checkout", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("saved-cards");
+    ui.wait_for("claim a slot in a repo");
+    ui.send(b"n");
+    ui.wait_for("a slot in…");
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("a slot in…")).skip(1).position(|l| l.contains(" api")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    ui.wait_for("branch for a slot in api");
+    ui.line("feat/saved-cards");
+    ui.wait_for("@2 api");
+
     // A scratch session.
     let y = ui.find("SCRATCH").map(|(_, y)| y).unwrap();
     ui.send(format!("\x1b[<0;30;{}M\x1b[<0;30;{}m", y + 1, y + 1).as_bytes());

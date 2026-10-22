@@ -32,6 +32,8 @@ pub enum Action {
     NewWorkstream,
     LeaveWorkstream,
     ReleaseWorkstream,
+    /// Claim a slot into the workstream here: in repo N (menu order), or pick one (`u8::MAX`).
+    ClaimIntoWorkstream(u8),
     /// Update velmux (checking first if no update is known).
     Update,
     /// Sync every claimed slot that's behind the base.

@@ -667,6 +667,67 @@ fn a_workstream_slot_released_from_its_own_pane_leaves_it() {
 }
 
 #[test]
+fn releasing_a_slot_from_its_menu_moves_its_panes_back() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/menu", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&app);
+    ui.click_on("feat/menu", false);
+    ui.wait_for("app › slot-1");
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.line("echo still-here");
+    ui.wait_for("still-here");
+    ui.click_on("feat/menu", true);
+    ui.click_on("release slot", false);
+    ui.wait_for("its panes move back to the");
+    ui.send(b"y");
+    env.until("the slot to be free", || env.slot(&app, "slot-1")["status"] == "free");
+    // The shell is still running, now in the checkout.
+    ui.wait_for("app › base · shell");
+    ui.wait_for("still-here");
+    ui.line("echo alive");
+    ui.wait_for("alive");
+}
+
+#[test]
+fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for repo in [&app, &api] {
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    // Both repos open in velmux (attaching in a repo adds it).
+    drop(env.attach(&api));
+    let ui = env.attach(&app);
+    ui.wait_for("api");
+    let (_, y) = ui.find("WORKSTREAMS").unwrap();
+    let plus = ui.screen().lines().nth(y as usize).unwrap().chars().take(32).collect::<String>().rfind('+').unwrap();
+    ui.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", plus + 1, y + 1, plus + 1, y + 1).as_bytes());
+    ui.wait_for("name for the workstream");
+    ui.line("pair");
+    ui.wait_for("claim a slot in a repo");
+    // n: pick the repo, then name the branch.
+    ui.send(b"n");
+    ui.wait_for("a slot in…");
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("a slot in…")).skip(1).position(|l| l.contains(" api")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    ui.wait_for("branch for a slot in api");
+    ui.line("feat/pair");
+    env.until("api's slot to be claimed", || env.slot(&api, "slot-1")["status"] == "inuse");
+    ui.wait_for("@1 api");
+    assert_eq!(env.slot(&api, "slot-1")["branch"], "feat/pair");
+    assert_eq!(env.slot(&app, "slot-1")["status"], "free");
+    env.until("its link", || std::fs::read_link(env.root.join("pools/.workstreams/pair/api")).is_ok());
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

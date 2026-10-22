@@ -269,6 +269,8 @@ pub enum PromptFor {
     RenameLocation,
     /// A name for a new workstream, and the slot to put in it (if any).
     NewWorkstream(Option<Loc>),
+    /// A branch for a slot in this repo, claimed into this workstream.
+    ClaimInto { ws: Loc, project: usize },
 }
 
 pub enum Confirm {
@@ -975,6 +977,14 @@ impl App {
                 self.preparing.retain(|_, (k, _)| k != &job);
                 self.refresh_slots();
                 match (result, for_pane) {
+                    // Claimed from a workstream's menu: the slot joins it.
+                    (Ok(slot), None) if self.claim_into.contains_key(&job) => {
+                        let ws = self.claim_into.remove(&job).unwrap();
+                        let loc = Loc { project, slot: Some(slot.id.clone()) };
+                        self.add_to_workstream(&ws, &loc);
+                        let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
+                        self.say(format!("claimed {}{branch} into {}", slot.id, ws.slot.clone().unwrap_or_default()));
+                    }
                     (Ok(slot), None) if !resume.is_empty() => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         let branch = slot.branch.clone().unwrap_or_default();
@@ -1005,7 +1015,10 @@ impl App {
                         self.say(format!("claimed {}{branch}", slot.id));
                         let _ = ServerMsg::Reply(slot.path.display().to_string()).write(&mut stream);
                     }
-                    (Err(e), None) => self.say(format!("claim failed: {e}")),
+                    (Err(e), None) => {
+                        self.claim_into.remove(&job);
+                        self.say(format!("claim failed: {e}"));
+                    }
                     (Err(e), Some((_, mut stream))) => {
                         self.claim_into.remove(&job);
                         let _ = ServerMsg::Reply(format!("error: {e}")).write(&mut stream);
@@ -2757,6 +2770,7 @@ impl App {
                 items
             }
             (true, _) if self.is_workstream(&target) => vec![
+                ("claim a slot in a repo…", Action::ClaimIntoWorkstream(u8::MAX)),
                 ("claude here", Action::AgentHere),
                 ("shell here", Action::NewShell),
                 ("new tab", Action::NewTab),
@@ -3020,6 +3034,11 @@ impl App {
                             self.claim_in(project, Some(answer), None);
                         }
                         Err(e) => self.say(format!("couldn't move them: {e:#}")),
+                    }
+                }
+                PromptFor::ClaimInto { ws, project } => {
+                    if let Some(job) = self.claim_in(project, (!answer.is_empty()).then_some(answer), None) {
+                        self.claim_into.insert(job, ws);
                     }
                 }
                 PromptFor::NewWorkstream(slot) => match self.new_workstream(&answer) {
@@ -3314,6 +3333,34 @@ impl App {
                 let slot = self.current_loc().filter(|l| l.slot.is_some() && !self.projects[l.project].is_unclassified());
                 self.mode = Mode::Prompt { label: "name for the workstream".into(), input: String::new(), purpose: PromptFor::NewWorkstream(slot) };
             }
+            // Which repo: the only one, or a menu of them.
+            Action::ClaimIntoWorkstream(u8::MAX) => {
+                let Some(ws) = self.current_loc().filter(|l| self.is_workstream(l)) else { return self.say("go to a workstream first") };
+                let repos: Vec<usize> = self.ordered_projects().into_iter().filter(|&p| !self.projects[p].is_unclassified()).collect();
+                match repos.len() {
+                    0 => self.say("add a repo first (⊕ new space)"),
+                    1 => self.run(Action::ClaimIntoWorkstream(0)),
+                    _ => {
+                        let mut items: Vec<(&'static str, Action)> = Vec::new();
+                        for (i, &p) in repos.iter().enumerate().take(200) {
+                            let name = self.projects[p].name().to_string();
+                            items.push((self.intern(&name), Action::ClaimIntoWorkstream(i as u8)));
+                        }
+                        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
+                        self.mode = Mode::Menu {
+                            selected: 0,
+                            context: Some(MenuContext { target: ws, parked: None, title: "a slot in…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                        };
+                    }
+                }
+            }
+            Action::ClaimIntoWorkstream(n) => {
+                let Some(ws) = self.current_loc().filter(|l| self.is_workstream(l)) else { return };
+                let repos: Vec<usize> = self.ordered_projects().into_iter().filter(|&p| !self.projects[p].is_unclassified()).collect();
+                let Some(&project) = repos.get(n as usize) else { return };
+                let label = format!("branch for a slot in {} (into {})", self.projects[project].name(), ws.slot.clone().unwrap_or_default());
+                self.mode = Mode::Prompt { label, input: String::new(), purpose: PromptFor::ClaimInto { ws, project } };
+            }
             Action::LeaveWorkstream => {
                 if let Some(slot) = self.current_loc() {
                     self.remove_from_workstream(&slot);
@@ -3430,7 +3477,7 @@ impl App {
             Action::ReleaseSlot => match self.current_loc() {
                 Some(loc) if loc.slot.is_some() && !self.projects[loc.project].is_unclassified() => {
                     let label = format!(
-                        "release {}? its panes close; uncommitted work is stashed",
+                        "release {}? its panes move back to the checkout; uncommitted work is stashed",
                         self.loc_name(&loc)
                     );
                     self.mode = Mode::Confirm { label, action: Confirm::Release(loc) };
@@ -4048,7 +4095,7 @@ impl App {
     fn confirm(&mut self, action: Confirm) {
         match action {
             Confirm::Quit => self.quit = true,
-            Confirm::Release(loc) => self.release_location(loc, None),
+            Confirm::Release(loc) => self.release_moving_panes(loc),
             Confirm::GhosttyKeys => match crate::ghostty::install(&crate::ghostty_lines(&self.keymap)) {
                 Ok(path) => {
                     let msg = format!("added velmux's keybinds to {} — reload Ghostty's config (⌘⇧,)", path.display());
@@ -4162,6 +4209,21 @@ impl App {
     /// the parked branch for resuming.
     fn release_location(&mut self, loc: Loc, first: Option<String>) {
         self.release_keeping(loc, first.into_iter().collect());
+    }
+
+    /// Release a slot, moving the panes open in it back to its repo's
+    /// checkout, still running (as `velmux release` does for its own pane);
+    /// their conversations are kept with the parked branch too.
+    fn release_moving_panes(&mut self, slot: Loc) {
+        let base = Loc { project: slot.project, slot: None };
+        let here: Vec<(u64, Option<String>)> = self.panes.iter().filter(|p| p.loc == slot).map(|p| (p.id, p.session.clone())).collect();
+        for (id, _) in &here {
+            self.move_pane(*id, base.clone());
+        }
+        if self.current.as_ref() == Some(&slot) && !here.is_empty() {
+            self.go_to(base);
+        }
+        self.release_keeping(slot, here.into_iter().filter_map(|(_, s)| s).collect());
     }
 
     /// [`release_location`](Self::release_location), keeping `sessions` (ones

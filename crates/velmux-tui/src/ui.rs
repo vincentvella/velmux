@@ -1092,10 +1092,11 @@ pub fn empty_screen(app: &App, loc: Option<&Loc>) -> (String, Vec<&'static str>,
             vec![
                 "a workstream: slots from one or more repos, worked on together.",
                 "Its folder links to each slot (one subfolder per repo), so an agent",
-                "here reaches them all. Add a slot from its right-click menu, or let",
-                "the agent claim one: velmux claim <branch> --repo <repo>.",
+                "here reaches them all. Claim a slot into it, add one from a slot's",
+                "menu, or let the agent: velmux claim <branch> --repo <repo>.",
             ],
             vec![
+                item('n', "claim a slot in a repo", A::ClaimIntoWorkstream(u8::MAX)),
                 item('a', "Claude here", A::AgentHere),
                 item('c', "shell here", A::NewShell),
                 item('w', "go somewhere else", A::LocationPicker),

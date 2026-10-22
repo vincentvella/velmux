@@ -212,12 +212,7 @@ impl App {
         let members = self.members(&ws);
         let n = members.len();
         for slot in members {
-            let base = Loc { project: slot.project, slot: None };
-            let here: Vec<(u64, Option<String>)> = self.panes.iter().filter(|p| p.loc == slot).map(|p| (p.id, p.session.clone())).collect();
-            for (id, _) in &here {
-                self.move_pane(*id, base.clone());
-            }
-            self.release_keeping(slot, here.into_iter().filter_map(|(_, s)| s).collect());
+            self.release_moving_panes(slot);
         }
         self.remove_workstream(ws.clone());
         self.say(format!("released {n} slot(s) and removed {}", ws.slot.unwrap_or_default()));

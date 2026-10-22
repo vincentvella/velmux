@@ -5,10 +5,17 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- **claim a slot in a repo…** in a workstream (its right-click menu, or `n` on
+  its empty screen): pick a repo and a branch, and the slot joins it.
+
 ### Changed
 
-- Releasing a workstream moves the panes open in its slots back to their
-  repo's checkout, still running, instead of closing them.
+- Releasing a slot (its menu, `⏏ free`) or a whole workstream moves the panes
+  open in it back to the repo's checkout, still running, instead of closing
+  them.
+- The demo screenshots show a workstream.
 
 ## [0.7.0] - 2026-10-21
 

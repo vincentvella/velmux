@@ -30,6 +30,9 @@ code in those subfolders and commit in each repo's own git. Panes there get
 ## Making one, adding slots
 
 - The `+` on the **Workstreams** heading starts an empty one (it asks for a name).
+- In a workstream, **claim a slot in a repo…** (its right-click menu, or `n` on
+  its empty screen) picks a repo, asks for a branch, and claims a slot there
+  into it.
 - Right-click a slot: **add to workstream…** picks one, or **new workstream…**
   starts one with it.
 - Drag a slot onto a workstream (its row or one of its slots); drag it back onto
