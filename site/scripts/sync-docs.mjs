@@ -10,15 +10,20 @@ const docs = join(repo, 'docs');
 const out = new URL('../content/docs', import.meta.url).pathname;
 const github = 'https://github.com/vincentvella/velmux/blob/main';
 // Sidebar order; anything else follows alphabetically.
-const order = ['getting-started', 'using-velmux', 'slots', 'agents', 'configuration', 'cli', 'how-it-works'];
+const order = ['getting-started', 'using-velmux', 'slots', 'agents', 'configuration', 'cli', 'how-it-works', 'changelog'];
+// Pages from outside docs/: the repo's CHANGELOG.md, as /docs/changelog.
+const extra = { changelog: join(repo, 'CHANGELOG.md') };
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 const pages = [];
-for (const file of readdirSync(docs).filter((f) => f.endsWith('.md'))) {
-	const slug = file.replace(/\.md$/, '');
+const sources = readdirSync(docs)
+	.filter((f) => f.endsWith('.md'))
+	.map((f) => [f.replace(/\.md$/, ''), join(docs, f)])
+	.concat(Object.entries(extra));
+for (const [slug, file] of sources) {
 	pages.push(slug);
-	let text = readFileSync(join(docs, file), 'utf8');
+	let text = readFileSync(file, 'utf8');
 	const title = text.match(/^# (.+)$/m)?.[1] ?? slug;
 	text = text.replace(/^# .+\n+/m, '');
 	text = text

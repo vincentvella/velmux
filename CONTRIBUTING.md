@@ -66,9 +66,13 @@ screens, a fake `gh` for PR status) and writes each view as SVG to
 
 ## Releasing
 
-1. Bump `version` in the workspace `Cargo.toml` (and `cargo build` to update
+1. Move what's under **Unreleased** in `CHANGELOG.md` to a new version heading
+   (and add its link at the bottom). Add to **Unreleased** as you go, so this is
+   just a rename.
+2. Bump `version` in the workspace `Cargo.toml` (and `cargo build` to update
    `Cargo.lock`), commit, push.
-2. Tag it: `git tag v0.2.0 && git push origin v0.2.0`.
+3. Tag it: `git tag v0.2.0 && git push origin v0.2.0`, and paste the version's
+   changelog section into the GitHub release's notes.
 
 The release workflow builds macOS (arm64, x86_64) and static Linux (x86_64,
 arm64) binaries and publishes them with their checksums as a GitHub release.

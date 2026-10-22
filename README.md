@@ -66,6 +66,7 @@ Codex, Gemini CLI and opencode well.
 - [Configuration](docs/configuration.md)
 - [Command line](docs/cli.md)
 - [How it works](docs/how-it-works.md)
+- [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## License
