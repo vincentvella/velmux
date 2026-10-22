@@ -55,6 +55,21 @@ pub fn report_session(pane: u64, session: String) -> anyhow::Result<()> {
     }
 }
 
+/// `velmux claim` inside a pane: the server claims a slot, in `repo` (by
+/// name, or a path) when given, and puts it in `workstream` (or the
+/// workstream the pane is in); else this pane moves into it. Returns the
+/// slot's path, and the workstream it joined.
+pub fn claim_into(pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>) -> anyhow::Result<(String, Option<String>)> {
+    let reply = client::request(proto::ClientMsg::ClaimInto { pane, branch, repo, workstream })?;
+    if let Some(e) = reply.strip_prefix("error: ") {
+        anyhow::bail!("{e}");
+    }
+    Ok(match reply.split_once('\n') {
+        Some((path, ws)) => (path.to_string(), Some(ws.to_string())),
+        None => (reply, None),
+    })
+}
+
 /// `velmux release` inside a pane: release its slot, moving the pane back to base.
 pub fn release_for_pane(pane: u64) -> anyhow::Result<String> {
     let reply = client::request(proto::ClientMsg::ReleaseFor { pane })?;

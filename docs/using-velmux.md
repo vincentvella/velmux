@@ -18,11 +18,16 @@ From the top:
   every agent with where it is and what it's doing, the ones that need you
   first; click one to jump to it.
 
-The spaces view lists each **repo** with its checkout (`◆ base`) and its
-**claimed slots** (`▣`, branch first, slot number dimmed; free slots are a count
-on the repo's line). Below them, **parked** branches (`◌`) waiting to be
-resumed. Below a divider are **scratch sessions**: shells (or anything) outside
-any repo; the divider's `+` (or `<prefix> S`) starts one in your `scratch_dir`.
+The spaces view has three sections:
+
+- **Workstreams** (`◇`): work that spans repos, each with its slots from any of
+  them. The heading's `+` starts one; see [Workstreams](workstreams.md).
+- **Repos**: each repo with its checkout (`◆ base`) and its **claimed slots**
+  (`▣`, the branch on the first line, `@N`, how it stands against the base and
+  its PR on the second; free slots are a count on the repo's line), then
+  **parked** branches (`◌`) waiting to be resumed.
+- **Scratch**: shells (or anything) outside any repo; the heading's `+` (or
+  `<prefix> S`) starts one in your `scratch_dir`.
 
 Each row shows its agents' states on the right:
 

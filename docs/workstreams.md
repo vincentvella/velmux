@@ -1,0 +1,48 @@
+# Workstreams
+
+Some work spans repos: an API change and the app that uses it, a library and
+the services that depend on it. A **workstream** groups slots from one or more
+repos as one piece of work, with a place of its own where one agent can work
+across all of them.
+
+```
+WORKSTREAMS                +
+  ◇ checkout
+  ▣ feat/saved-cards       ●
+    @2 webapp · #142✓
+  ▣ feat/saved-cards
+    @1 api · ↓3
+```
+
+A workstream's slots are listed under it rather than under their repos (the
+repos keep their checkout, free slots and parked work).
+
+## Its place
+
+A workstream is a place like any other: open panes there, start a Claude there.
+Its folder (`.pools/.workstreams/<name>/`, next to the repos' pools) holds a link
+to each of its slots, named after the repo (`webapp/`, `api/`; `webapp-2/` for a
+second slot from the same repo), so an agent started there sees every repo as a
+subfolder, and has each slot in reach. It's told it's in a workstream: change
+code in those subfolders and commit in each repo's own git. Panes there get
+`$VELMUX_WORKSTREAM`.
+
+## Making one, adding slots
+
+- The `+` on the **Workstreams** heading starts an empty one (it asks for a name).
+- Right-click a slot: **add to workstream…** picks one, or **new workstream…**
+  starts one with it.
+- Drag a slot onto a workstream (its row or one of its slots); drag it back onto
+  the repos, or right-click it for **leave workstream**, to take it out.
+- From a workstream's place, an agent (or you) brings in another repo with
+  `velmux claim <branch> --repo <repo>` (the repo's name in velmux, or its path).
+  The slot is linked in the folder and the pane stays put. From a repo's
+  checkout, `velmux claim <branch> --workstream <name>` claims a slot into a
+  workstream (making it if needed) instead of moving there.
+
+## Done
+
+Right-click the workstream: **release workstream…** hands back every slot in
+it (unfinished work is parked, as a release does) and removes it. **remove
+workstream** only ungroups: its slots go back to their repos, still claimed.
+A slot released on its own leaves its workstream.

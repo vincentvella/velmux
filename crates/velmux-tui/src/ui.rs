@@ -47,8 +47,10 @@ pub fn content_rect(outer: Rect, titled: bool) -> Rect {
 /// One row of [`rows`] (navigation order) or of the sidebar.
 pub enum Row {
     Project(usize),
-    /// The rule above the scratch sessions, with a `+` for a new one.
+    /// The scratch sessions' heading, with a `+` for a new one.
     SessionsDivider,
+    /// The workstreams' heading, with a `+` for a new one.
+    WorkstreamsHeading,
     /// A parked branch: (project, index into its `parked`).
     Parked(usize, usize),
     Location(Loc),
@@ -167,7 +169,20 @@ pub fn rows(app: &App) -> Vec<Row> {
 pub fn display_rows(app: &App) -> Vec<Row> {
     let mut out = Vec::new();
     let repos: Vec<usize> = app.ordered_projects().into_iter().filter(|&p| !app.projects[p].is_unclassified()).collect();
+    // Workstreams first, each with its slots (from any repo); its `+` starts one.
     if !repos.is_empty() {
+        out.push(Row::WorkstreamsHeading);
+    }
+    for ws in app.workstreams() {
+        let members = app.members(&ws);
+        out.push(Row::Location(ws));
+        for m in members {
+            out.push(Row::Location(m.clone()));
+            out.push(Row::Detail(m));
+        }
+    }
+    if !repos.is_empty() {
+        out.push(Row::Blank);
         out.push(Row::Heading("REPOS"));
     }
     for p in repos {
@@ -175,7 +190,8 @@ pub fn display_rows(app: &App) -> Vec<Row> {
         out.push(Row::Location(Loc { project: p, slot: None }));
         for s in &app.projects[p].slots {
             let loc = Loc { project: p, slot: Some(s.id.clone()) };
-            if s.status == Status::InUse || app.views.contains_key(&loc) {
+            // A workstream's slots are listed under it instead.
+            if (s.status == Status::InUse || app.views.contains_key(&loc)) && app.workstream_of(&loc).is_none() {
                 out.push(Row::Location(loc.clone()));
                 out.push(Row::Detail(loc));
             }
@@ -187,9 +203,10 @@ pub fn display_rows(app: &App) -> Vec<Row> {
         .iter()
         .enumerate()
         .filter(|(_, p)| p.is_unclassified())
-        .flat_map(|(i, p)| p.folders.iter().map(move |f| Loc { project: i, slot: Some(f.id.clone()) }))
+        .flat_map(|(i, p)| p.folders.iter().filter(|f| f.members.is_none()).map(move |f| Loc { project: i, slot: Some(f.id.clone()) }))
         .collect();
     // Always there: its `+` starts a scratch session.
+    out.push(Row::Blank);
     out.push(Row::SessionsDivider);
     out.extend(folders.into_iter().map(Row::Location));
     out
@@ -341,6 +358,7 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     let name = app.views.get(loc).and_then(|v| v.name.clone());
     let (glyph, glyph_color, label, dirty) = match &loc.slot {
         None => (Some("◆"), t.base_glyph, name.unwrap_or_else(|| "base".into()), false),
+        Some(id) if app.is_workstream(loc) => (Some("◇"), t.accent, name.unwrap_or_else(|| id.clone()), false),
         Some(id) if project.is_unclassified() => (None, Color::Reset, name.unwrap_or_else(|| id.clone()), false),
         Some(id) => {
             let slot = project.slots.iter().find(|s| &s.id == id);
@@ -412,6 +430,10 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
     let dim = base.fg(t.dim);
     let piece = |text: String, style: Style| (text, style, None::<String>, false);
     let mut parts = vec![vec![piece(format!("@{}", id.trim_start_matches("slot-")), dim)]];
+    // In a workstream, slots come from different repos: say which.
+    if app.workstream_of(loc).is_some() {
+        parts[0].push(piece(project.name().to_string(), base.fg(t.text2)));
+    }
     // Renamed, the first line shows the name: the branch goes here.
     if let (Some(_), Some(branch)) = (app.views.get(loc).and_then(|v| v.name.as_ref()), slot.and_then(|s| s.branch.clone())) {
         parts[0].push(piece(branch, dim));
@@ -588,8 +610,9 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             Row::Divider => {
                 buf.set_string(1, y, "─".repeat(side.saturating_sub(2) as usize), dim);
             }
-            Row::SessionsDivider => {
-                buf.set_string(1, y, "─".repeat(side.saturating_sub(5) as usize), dim);
+            Row::SessionsDivider | Row::WorkstreamsHeading => {
+                let title = if matches!(row, Row::SessionsDivider) { "SCRATCH" } else { "WORKSTREAMS" };
+                buf.set_stringn(1, y, title, side.saturating_sub(4) as usize, dim.add_modifier(Modifier::BOLD));
                 buf.set_string(side.saturating_sub(3), y, "+", Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
             }
             Row::Project(p) => {
@@ -1063,6 +1086,21 @@ pub fn empty_screen(app: &App, loc: Option<&Loc>) -> (String, Vec<&'static str>,
                 "worktree with its dependencies already installed) to work in.",
             ],
             vec![item('n', "add a repo", A::NewSpace), item('s', "start a scratch session", A::NewSession), item('?', "every key", A::Help)],
+        ),
+        Some(l) if app.is_workstream(l) => (
+            app.loc_name(l),
+            vec![
+                "a workstream: slots from one or more repos, worked on together.",
+                "Its folder links to each slot (one subfolder per repo), so an agent",
+                "here reaches them all. Add a slot from its right-click menu, or let",
+                "the agent claim one: velmux claim <branch> --repo <repo>.",
+            ],
+            vec![
+                item('a', "Claude here", A::AgentHere),
+                item('c', "shell here", A::NewShell),
+                item('w', "go somewhere else", A::LocationPicker),
+                item('x', "remove this workstream", A::RemovePlace),
+            ],
         ),
         Some(l) if app.projects[l.project].is_unclassified() => (
             app.loc_name(l),

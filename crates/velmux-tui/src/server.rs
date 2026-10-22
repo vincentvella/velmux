@@ -26,6 +26,8 @@ use crate::proto::{ClientMsg, ServerMsg};
 use crate::session::{self, Saved, SavedFolder, SavedPane, SavedTab, SavedView};
 use crate::{paths, ui};
 
+mod workstream;
+
 
 /// One project's slots, parked work and checkout, as a background refresh found them.
 pub struct PoolHealth {
@@ -95,6 +97,9 @@ pub struct Project {
 pub struct Folder {
     pub id: String,
     pub path: PathBuf,
+    /// A workstream: slots from one or more repos, worked on together from
+    /// this place (its folder links to each). `None`: a scratch session.
+    pub members: Option<Vec<session::Member>>,
 }
 
 impl Project {
@@ -194,6 +199,8 @@ enum Drag {
 pub enum Grab {
     Repo(usize),
     Folder(String),
+    /// A repo's slot: dropped on a workstream it joins it; on the repos, it leaves its own.
+    Slot(Loc),
 }
 
 /// Overrides for a new pane (restore and import).
@@ -260,6 +267,8 @@ pub enum PromptFor {
     MoveToSlot(usize),
     RenameTab,
     RenameLocation,
+    /// A name for a new workstream, and the slot to put in it (if any).
+    NewWorkstream(Option<Loc>),
 }
 
 pub enum Confirm {
@@ -268,6 +277,7 @@ pub enum Confirm {
     DiscardParked { project: usize, branch: String },
     RemoveFolder(Loc),
     RemoveRepo(usize),
+    ReleaseWorkstream(Loc),
     Quit,
 }
 
@@ -356,6 +366,12 @@ pub struct App {
     named: HashMap<String, String>,
     /// Until when a repeatable key (resizing) works again without the prefix.
     repeat_until: Option<Instant>,
+    /// Claims (by job) whose slot goes into a workstream instead of moving the pane.
+    claim_into: HashMap<String, Loc>,
+    /// Menu labels made at runtime (workstream names), kept for the menus' `&'static str`.
+    interned: HashMap<String, &'static str>,
+    /// Where the menu that's running an item was, for a menu it opens.
+    menu_at: Option<(u16, u16)>,
     pub keymap: Keymap,
     pub theme: crate::theme::Theme,
     /// Per-role overrides from config, re-applied when the theme changes.
@@ -471,7 +487,8 @@ pub fn serve() -> Result<()> {
                     | ClientMsg::Debug
                     | ClientMsg::ClaimFor { .. }
                     | ClientMsg::ReleaseFor { .. }
-                    | ClientMsg::ReportSession { .. } => Event::Control(stream, first),
+                    | ClientMsg::ReportSession { .. }
+                    | ClientMsg::ClaimInto { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -598,6 +615,9 @@ impl App {
             mode: Mode::Normal,
             prefix,
             repeat_until: None,
+            claim_into: HashMap::new(),
+            interned: HashMap::new(),
+            menu_at: None,
             named: crate::paths::state_dir().ok().and_then(|d| std::fs::read_to_string(d.join("conversation-names.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
             keymap,
             theme: crate::theme::builtin("default").unwrap(),
@@ -737,7 +757,7 @@ impl App {
             id = format!("scratch-{n}");
             n += 1;
         }
-        folders.push(Folder { id: id.clone(), path: dir });
+        folders.push(Folder { id: id.clone(), path: dir, members: None });
         self.spawn(Loc { project, slot: Some(id) }, Kind::Shell, None);
         self.save();
     }
@@ -841,7 +861,7 @@ impl App {
             id = format!("{wanted_id}-{n}");
             n += 1;
         }
-        folders.push(Folder { id: id.clone(), path: path.to_path_buf() });
+        folders.push(Folder { id: id.clone(), path: path.to_path_buf(), members: None });
         Loc { project, slot: Some(id) }
     }
 
@@ -895,6 +915,9 @@ impl App {
                         };
                         self.claim_in(project, branch, Some((pane, stream)));
                         return;
+                    }
+                    ClientMsg::ClaimInto { pane, branch, repo, workstream } => {
+                        return self.claim_into_for(pane, branch, repo, workstream, stream);
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
                     ClientMsg::ReportSession { pane, session } => match self.panes.iter_mut().find(|p| p.id == pane) {
@@ -965,6 +988,16 @@ impl App {
                         self.say(format!("claimed {}", slot.id));
                         self.spawn(loc, Kind::Shell, None);
                     }
+                    (Ok(slot), Some((_, mut stream))) if self.claim_into.contains_key(&job) => {
+                        // For a workstream: the slot joins it; the pane stays put.
+                        let ws = self.claim_into.remove(&job).unwrap();
+                        let loc = Loc { project, slot: Some(slot.id.clone()) };
+                        self.add_to_workstream(&ws, &loc);
+                        let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
+                        let name = ws.slot.clone().unwrap_or_default();
+                        self.say(format!("claimed {}{branch} into {name}", slot.id));
+                        let _ = ServerMsg::Reply(format!("{}\n{name}", slot.path.display())).write(&mut stream);
+                    }
                     (Ok(slot), Some((pane, mut stream))) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.move_pane(pane, loc);
@@ -974,6 +1007,7 @@ impl App {
                     }
                     (Err(e), None) => self.say(format!("claim failed: {e}")),
                     (Err(e), Some((_, mut stream))) => {
+                        self.claim_into.remove(&job);
                         let _ = ServerMsg::Reply(format!("error: {e}")).write(&mut stream);
                     }
                 }
@@ -1012,6 +1046,7 @@ impl App {
                     }
                 }
                 self.name_conversations();
+                self.prune_workstreams();
                 self.dirty = true;
             }
             Event::Prs(fresh) => {
@@ -1143,7 +1178,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } => {}
         }
     }
 
@@ -1270,7 +1305,7 @@ impl App {
                 .projects
                 .iter()
                 .flat_map(|p| &p.folders)
-                .map(|f| SavedFolder { id: f.id.clone(), path: f.path.clone() })
+                .map(|f| SavedFolder { id: f.id.clone(), path: f.path.clone(), members: f.members.clone() })
                 .collect(),
             views,
         }
@@ -1413,7 +1448,10 @@ impl App {
         }
         for f in &saved.folders {
             if f.path.is_dir() {
-                self.folder_loc(&f.id, &f.path);
+                let loc = self.folder_loc(&f.id, &f.path);
+                if let Some(folder) = self.folder_mut(&loc) {
+                    folder.members = f.members.clone();
+                }
             }
         }
         self.refresh_slots();
@@ -1679,7 +1717,8 @@ impl App {
             (true, _, _) | (false, true, _) => loc,
             (false, false, Some(branch)) => {
                 let branch = branch.clone();
-                return self.claim_resuming(loc.project, Some(branch), None, vec![doc.id.clone()]);
+                self.claim_resuming(loc.project, Some(branch), None, vec![doc.id.clone()]);
+                return;
             }
             (false, false, None) => Loc { project: loc.project, slot: None },
         };
@@ -2347,8 +2386,12 @@ impl App {
                 }
                 if ev.is_motion() {
                     moved |= ev.y != start.1;
-                    let gap = if moved { self.drop_gap(&grab, ev.y) } else { None };
-                    self.sidebar_drag = gap.map(|(_, line)| (grab.clone(), line));
+                    let line = match (&grab, moved) {
+                        (_, false) => None,
+                        (Grab::Slot(slot), true) => self.slot_drop(slot, ev.y).map(|(_, line)| line),
+                        (_, true) => self.drop_gap(&grab, ev.y).map(|(_, line)| line),
+                    };
+                    self.sidebar_drag = line.map(|line| (grab.clone(), line));
                 }
                 self.drag = Some(Drag::Sidebar { grab, start, moved });
             }
@@ -2430,6 +2473,7 @@ impl App {
         match ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y)?.1 {
             ui::Row::Project(p) => Some(Grab::Repo(p)),
             ui::Row::Location(loc) if self.projects[loc.project].is_unclassified() => loc.slot.map(Grab::Folder),
+            ui::Row::Location(loc) | ui::Row::Detail(loc) if loc.slot.is_some() => Some(Grab::Slot(loc)),
             _ => None,
         }
     }
@@ -2485,8 +2529,35 @@ impl App {
         Some((gap, line))
     }
 
+    /// Where a dragged slot lands with the pointer on line `y`: into the
+    /// workstream there (its heading row or one of its slots), or, over the
+    /// repos, out of its own workstream; and the line to mark.
+    fn slot_drop(&self, slot: &Loc, y: u16) -> Option<(Option<Loc>, u16)> {
+        let (_, row) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y)?;
+        let current = self.workstream_of(slot);
+        let target = match row {
+            ui::Row::Location(l) if self.is_workstream(&l) => Some(l),
+            ui::Row::Location(l) | ui::Row::Detail(l) if self.workstream_of(&l).is_some() => self.workstream_of(&l),
+            ui::Row::Project(_) | ui::Row::Parked(..) | ui::Row::Heading("REPOS") => None,
+            ui::Row::Location(l) | ui::Row::Detail(l) if !self.projects[l.project].is_unclassified() => None,
+            _ => return None,
+        };
+        (target != current).then_some((target, y))
+    }
+
     /// Move `grab` into the gap under the pointer.
     fn drop_on(&mut self, grab: &Grab, y: u16) {
+        if let Grab::Slot(slot) = grab {
+            match self.slot_drop(slot, y) {
+                Some((Some(ws), _)) => {
+                    self.add_to_workstream(&ws, slot);
+                    self.toast(&format!("added to {}", ws.slot.unwrap_or_default()));
+                }
+                Some((None, _)) => self.remove_from_workstream(slot),
+                None => {}
+            }
+            return;
+        }
         let Some((gap, _)) = self.drop_gap(grab, y) else { return };
         let ids: Vec<Grab> = self.drag_items(grab).into_iter().map(|(g, ..)| g).collect();
         let Some(from) = ids.iter().position(|g| g == grab) else { return };
@@ -2507,6 +2578,7 @@ impl App {
                     self.projects[p].folders.sort_by_key(|f| rank(&f.id));
                 }
             }
+            Grab::Slot(_) => unreachable!("handled above"),
         }
         self.save();
         self.dirty = true;
@@ -2558,10 +2630,16 @@ impl App {
                 self.full_redraw = true;
                 return;
             }
-            // The `+` at the right of the sessions divider.
+            // The `+` at the right of the scratch and workstreams headings.
             ui::Row::SessionsDivider => {
                 if x + 4 >= side {
                     self.new_session();
+                }
+                return;
+            }
+            ui::Row::WorkstreamsHeading => {
+                if x + 4 >= side {
+                    self.mode = Mode::Prompt { label: "name for the workstream".into(), input: String::new(), purpose: PromptFor::NewWorkstream(None) };
                 }
                 return;
             }
@@ -2648,6 +2726,12 @@ impl App {
                     items.push(("release (PR merged)", Action::RemovePlace));
                 }
                 items.push(("sync with base", Action::SyncSlot));
+                // Workstreams: join one (or start one) with this slot, or leave its own.
+                if self.workstream_of(&target).is_some() {
+                    items.push(("leave workstream", Action::LeaveWorkstream));
+                } else {
+                    items.push(("add to workstream…", Action::AddToWorkstream(u8::MAX)));
+                }
                 match pr {
                     Some(p) => {
                         items.push(("open PR", Action::OpenPr));
@@ -2672,6 +2756,16 @@ impl App {
                 }
                 items
             }
+            (true, _) if self.is_workstream(&target) => vec![
+                ("claude here", Action::AgentHere),
+                ("shell here", Action::NewShell),
+                ("new tab", Action::NewTab),
+                ("open in editor", Action::NewEditor),
+                ("copy path", Action::CopyPath),
+                ("rename workstream", Action::RenameLocation),
+                ("release workstream…", Action::ReleaseWorkstream),
+                ("remove workstream", Action::RemovePlace),
+            ],
             (true, _) => vec![
                 ("claude here", Action::AgentHere),
                 ("shell here", Action::NewShell),
@@ -2692,10 +2786,14 @@ impl App {
         match context {
             Some(c) => {
                 let Some(&(_, action)) = c.items.get(i) else { return };
+                // A menu this opens (a picker) shows where this one was.
+                self.menu_at = Some(c.at);
                 if let Some(branch) = c.parked {
                     let project = c.target.project;
                     return match action {
-                        Action::ResumeParked => self.claim_in(project, Some(branch), None),
+                        Action::ResumeParked => {
+                            self.claim_in(project, Some(branch), None);
+                        }
                         _ => {
                             self.mode = Mode::Confirm {
                                 label: format!("discard the parked changes on {branch}? commits on the branch are kept"),
@@ -2711,6 +2809,7 @@ impl App {
                     self.go_to(c.target);
                 }
                 self.run(action);
+                self.menu_at = None;
             }
             None => {
                 if let Some(&(_, action)) = ui::MENU.get(i) {
@@ -2923,6 +3022,15 @@ impl App {
                         Err(e) => self.say(format!("couldn't move them: {e:#}")),
                     }
                 }
+                PromptFor::NewWorkstream(slot) => match self.new_workstream(&answer) {
+                    Some(ws) => {
+                        if let Some(slot) = slot {
+                            self.add_to_workstream(&ws, &slot);
+                        }
+                        self.go_to(ws);
+                    }
+                    None => self.say("a workstream needs a name"),
+                },
                 PromptFor::RenameTab => {
                     if let Some(view) = self.current_loc().and_then(|l| self.views.get_mut(&l)) {
                         // `View` derefs to its active tab: this names the tab.
@@ -3169,7 +3277,7 @@ impl App {
                 let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
                 self.mode = Mode::Menu {
                     selected: 0,
-                    context: Some(MenuContext { target, parked: None, title: "new conversation with…".into(), items, at: (side + 2, 2) }),
+                    context: Some(MenuContext { target, parked: None, title: "new conversation with…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
                 };
             }
             Action::AgentWith(n) => {
@@ -3179,6 +3287,46 @@ impl App {
                     self.spawn_with(loc, Kind::Agent, None, LaunchOpts { agent: Some(agent), ..LaunchOpts::default() });
                 }
             }
+            // `u8::MAX`: pick a workstream for the slot here (a menu of them).
+            Action::AddToWorkstream(u8::MAX) => {
+                let Some(target) = self.current_loc() else { return };
+                let mut items: Vec<(&'static str, Action)> = Vec::new();
+                for (i, ws) in self.workstreams().iter().enumerate().take(200) {
+                    let name = self.intern(ws.slot.as_deref().unwrap_or_default());
+                    items.push((name, Action::AddToWorkstream(i as u8)));
+                }
+                items.push(("new workstream…", Action::NewWorkstream));
+                let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
+                self.mode = Mode::Menu {
+                    selected: 0,
+                    context: Some(MenuContext { target, parked: None, title: "add to workstream…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                };
+            }
+            Action::AddToWorkstream(n) => {
+                let (Some(slot), Some(ws)) = (self.current_loc(), self.workstreams().get(n as usize).cloned()) else { return };
+                if slot.slot.is_some() && !self.projects[slot.project].is_unclassified() {
+                    self.add_to_workstream(&ws, &slot);
+                    self.toast(&format!("added to {}", ws.slot.unwrap_or_default()));
+                }
+            }
+            Action::NewWorkstream => {
+                // From a repo's slot, it starts the workstream with it.
+                let slot = self.current_loc().filter(|l| l.slot.is_some() && !self.projects[l.project].is_unclassified());
+                self.mode = Mode::Prompt { label: "name for the workstream".into(), input: String::new(), purpose: PromptFor::NewWorkstream(slot) };
+            }
+            Action::LeaveWorkstream => {
+                if let Some(slot) = self.current_loc() {
+                    self.remove_from_workstream(&slot);
+                }
+            }
+            Action::ReleaseWorkstream => match self.current_loc().filter(|l| self.is_workstream(l)) {
+                Some(ws) => {
+                    let n = self.members(&ws).len();
+                    let label = format!("release {} and its {n} slot(s)? unfinished work is parked", ws.slot.clone().unwrap_or_default());
+                    self.mode = Mode::Confirm { label, action: Confirm::ReleaseWorkstream(ws) };
+                }
+                None => self.say("go to a workstream to release it"),
+            },
             Action::AgentHere => {
                 if let Some(loc) = self.current_loc() {
                     let loc = self.agent_loc(loc);
@@ -3500,6 +3648,19 @@ impl App {
         use crate::agents::Agent;
         let project = &self.projects[loc.project];
         let mut ctx = crate::agents::Context { claude_dir: self.claude_dir.clone(), ..Default::default() };
+        // A workstream: every slot in it in reach, and how to work there.
+        if self.is_workstream(loc) {
+            let name = loc.slot.clone().unwrap_or_default();
+            let prompt = workstream::PROMPT.replace("{name}", &name);
+            ctx.pool_dirs = self.members(loc).iter().filter_map(|m| self.loc_cwd(m)).collect();
+            if agent == Agent::Opencode {
+                ctx.prompt_file = crate::paths::state_dir().ok().map(|d| d.join("instructions").join(format!("workstream-{name}.md"))).filter(|f| {
+                    std::fs::create_dir_all(f.parent().unwrap()).is_ok() && std::fs::write(f, &prompt).is_ok()
+                });
+            }
+            ctx.prompt = Some(prompt);
+            return ctx;
+        }
         let Some(pool) = project.pool.as_ref() else { return ctx };
         if loc.slot.is_none() {
             let _ = std::fs::create_dir_all(&pool.dir);
@@ -3904,6 +4065,12 @@ impl App {
                 }
                 self.refresh_slots();
             }
+            Confirm::ReleaseWorkstream(loc) => self.release_workstream(loc),
+            Confirm::RemoveFolder(loc) if self.is_workstream(&loc) => {
+                let name = loc.slot.clone().unwrap_or_default();
+                self.remove_workstream(loc);
+                self.say(format!("removed {name}; its slots are back with their repos"));
+            }
             Confirm::RemoveFolder(loc) => {
                 self.close_panes_where(|p| p.loc == loc);
                 if let (Some(id), Some(project)) = (&loc.slot, self.projects.get_mut(loc.project)) {
@@ -4041,27 +4208,29 @@ impl App {
 
     /// Claim a slot in `project` (in the background). With `for_pane`, that pane
     /// moves into the slot and the stream gets its path, instead of a new pane.
-    fn claim_in(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>) {
+    fn claim_in(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>) -> Option<String> {
         // Claiming a parked branch yourself resumes it: its Claude comes back too.
         let resume = match (&branch, &for_pane) {
             (Some(b), None) => self.projects[project].parked.iter().find(|p| &p.branch == b).map(|p| p.sessions.clone()).unwrap_or_default(),
             _ => Vec::new(),
         };
-        self.claim_resuming(project, branch, for_pane, resume);
+        self.claim_resuming(project, branch, for_pane, resume)
     }
 
     /// [`claim_in`](Self::claim_in), bringing back the Claude `resume` sessions in the slot.
-    fn claim_resuming(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) {
+    fn claim_resuming(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) -> Option<String> {
         let Some(pool) = self.projects[project].pool.clone() else {
             if let Some((_, mut stream)) = for_pane {
                 let _ = ServerMsg::Reply("error: this folder isn't a git repo, so it has no slots".into()).write(&mut stream);
             }
-            return self.say("scratch sessions aren't git repos, so they have no slots");
+            self.say("scratch sessions aren't git repos, so they have no slots");
+            return None;
         };
         let tx = self.events.clone();
         self.job_seq += 1;
         let job = format!("claim {}", self.job_seq);
         self.jobs.push((job.clone(), format!("claiming {}", branch.as_deref().unwrap_or("a slot"))));
+        let id = job.clone();
         std::thread::spawn(move || {
             let progress = {
                 let (tx, job) = (tx.clone(), job.clone());
@@ -4079,6 +4248,7 @@ impl App {
             .map_err(|e| format!("{e:#}"));
             let _ = tx.send(Event::Claimed { project, job, result, for_pane, resume });
         });
+        Some(id)
     }
 
     /// The pane where conversation `id` is running right now (Claude in the
@@ -4204,6 +4374,7 @@ impl App {
                 ("VELMUX_BASE".to_string(), pool.base.to_string_lossy().into_owned()),
                 ("VELMUX_POOL_DIR".to_string(), pool.dir.to_string_lossy().into_owned()),
             ],
+            (None, Some(id)) if self.is_workstream(loc) => vec![("VELMUX_WORKSTREAM".to_string(), id.clone())],
             (None, _) => Vec::new(),
         };
         env.extend(agent_env);

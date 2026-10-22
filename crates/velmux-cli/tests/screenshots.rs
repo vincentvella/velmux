@@ -129,7 +129,7 @@ fn screenshots() {
     agent(&env, &ui, "feat/rate-limits", "rate-limit the public endpoints, and the checkout webhook | Added a token bucket per API key (60/min, burst 20) in front of /v1/* and the checkout webhook, with a 429 and Retry-After.", IDLE, "✳ Rate limits");
 
     // A scratch session.
-    let y = ui.find("──── +").map(|(_, y)| y).unwrap();
+    let y = ui.find("SCRATCH").map(|(_, y)| y).unwrap();
     ui.send(format!("\x1b[<0;30;{}M\x1b[<0;30;{}m", y + 1, y + 1).as_bytes());
     ui.wait_for("scratch ·");
 

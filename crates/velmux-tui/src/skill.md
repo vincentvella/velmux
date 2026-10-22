@@ -16,6 +16,7 @@ its dependencies installed between tasks, so claiming one is fast.
 - `$VELMUX_PANE` set: you're in a velmux pane.
 - `$VELMUX_SLOT` set (e.g. `slot-2`): you're in that slot, on its own branch.
 - Only `$VELMUX_BASE` set: you're in the base checkout.
+- `$VELMUX_WORKSTREAM` set: you're in that workstream (see below).
 
 ## In the base checkout: plan, then claim
 
@@ -45,6 +46,22 @@ parked changes restored.
   dev servers on it, not on a hard-coded port. `velmux env` prints them.
 - For a PR: push the branch and use `gh pr create`. If CI fails, `gh pr checks`
   and `gh run view --log-failed` show why.
+
+## In a workstream
+
+Work that spans repos (an API change and the app that uses it) can be a
+**workstream**: slots from one or more repos, grouped. In one
+(`$VELMUX_WORKSTREAM`), each subfolder of your folder is a link to one of its
+slots, named after the repo, each a worktree on its own branch.
+
+- Make changes inside those subfolders, and commit in each repo's own git.
+- To bring in another repo: `velmux claim <short-branch-name> --repo <repo>`
+  (its name in velmux, or its path). The slot is linked here as `<repo>/`, and
+  your pane stays where it is.
+- From a repo's checkout, `velmux claim <branch> --workstream <name>` claims a
+  slot into a workstream (making it if needed) instead of moving you there.
+- Don't release a workstream's slots yourself; the user releases the workstream
+  when it's done.
 
 ## Done: release
 

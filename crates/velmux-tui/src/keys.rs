@@ -27,6 +27,11 @@ pub enum Action {
     AgentPicker,
     /// A conversation with `agents::ALL[n]` (here in a slot, else the repo's checkout).
     AgentWith(u8),
+    /// Workstreams: put the slot in workstream N (menu order), a new one, or out of its own.
+    AddToWorkstream(u8),
+    NewWorkstream,
+    LeaveWorkstream,
+    ReleaseWorkstream,
     /// Update velmux (checking first if no update is known).
     Update,
     /// Sync every claimed slot that's behind the base.

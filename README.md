@@ -62,6 +62,7 @@ Codex, Gemini CLI and opencode well.
 - [Getting started](docs/getting-started.md)
 - [Using velmux](docs/using-velmux.md): the sidebar, tabs, keys, mouse, copying, themes
 - [Working in slots](docs/slots.md): claiming, parked work, syncing, ports, pull requests
+- [Workstreams](docs/workstreams.md): slots from several repos, worked on together
 - [Agents](docs/agents.md): Claude Code, Codex, Gemini CLI, opencode
 - [Configuration](docs/configuration.md)
 - [Command line](docs/cli.md)

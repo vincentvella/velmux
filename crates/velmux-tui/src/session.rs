@@ -30,6 +30,16 @@ pub struct Saved {
 pub struct SavedFolder {
     pub id: String,
     pub path: PathBuf,
+    /// A workstream's slots (`None`: a scratch session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<Member>>,
+}
+
+/// A slot in a workstream: its repo's checkout and the slot's id.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub base: PathBuf,
+    pub slot: String,
 }
 
 #[derive(Serialize, Deserialize)]

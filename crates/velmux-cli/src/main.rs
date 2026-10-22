@@ -28,6 +28,10 @@ enum Cmd {
         /// Who holds the slot (agent name, session id, …).
         #[arg(long)]
         by: Option<String>,
+        /// Put the slot in this workstream (made if needed) rather than move
+        /// this pane into it; in velmux only. In a workstream, it's that one.
+        #[arg(long)]
+        workstream: Option<String>,
         #[arg(long)]
         no_fetch: bool,
         #[arg(long)]
@@ -147,6 +151,8 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // `--repo` in a workstream: a path (a subfolder links to a slot) or a repo's name.
+    let repo_arg = cli.repo.as_ref().map(|p| p.canonicalize().map(|c| c.display().to_string()).unwrap_or_else(|_| p.display().to_string()));
     let cwd = match cli.repo {
         Some(p) => p,
         None => std::env::current_dir()?,
@@ -167,6 +173,18 @@ fn run() -> Result<()> {
         Some(Cmd::ImportHerdr { file, session, with_latest_claude, dry_run }) => {
             return velmux_tui::import_herdr(file, session.as_deref(), with_latest_claude, dry_run)
         }
+        // Inside a velmux pane: the server claims (it knows the pane's place:
+        // a workstream there, or a repo whose slot this pane moves into).
+        Some(Cmd::Claim { branch, workstream, json: false, .. }) if velmux_tui::current_pane().is_some() => {
+            let (path, ws) = velmux_tui::claim_into(velmux_tui::current_pane().unwrap(), branch, repo_arg, workstream)?;
+            match ws {
+                Some(ws) => eprintln!("claimed a slot into the workstream {ws}; it's linked in its folder"),
+                None => eprintln!("claimed a slot; work in it from here (this pane now lives there in velmux)"),
+            }
+            println!("{path}");
+            return Ok(());
+        }
+        Some(Cmd::Claim { workstream: Some(_), .. }) => bail!("--workstream works inside velmux (a pane), where workstreams live"),
         Some(cmd) => cmd,
     };
     let pool = Pool::discover(Env::from_process()?, &cwd)?;
@@ -181,16 +199,10 @@ fn run() -> Result<()> {
                 eprintln!("tip: `velmux skill install` teaches Claude to claim and release slots itself");
             }
         }
-        // Inside a velmux pane: let the server claim, so this pane moves to the slot.
-        Cmd::Claim { branch, json: false, .. } if velmux_tui::current_pane().is_some() => {
-            let path = velmux_tui::claim_for_pane(velmux_tui::current_pane().unwrap(), branch)?;
-            eprintln!("claimed a slot; work in it from here (this pane now lives there in velmux)");
-            println!("{path}");
-        }
         Cmd::Release { slot: None, force: false } if velmux_tui::current_pane().is_some() => {
             eprintln!("{}", velmux_tui::release_for_pane(velmux_tui::current_pane().unwrap())?);
         }
-        Cmd::Claim { branch, by, no_fetch, no_install, json } => {
+        Cmd::Claim { branch, by, no_fetch, no_install, json, .. } => {
             let opts = ClaimOpts { branch, by, fetch: !no_fetch, install: !no_install };
             let slot = pool.claim(&opts, &report)?;
             if json {

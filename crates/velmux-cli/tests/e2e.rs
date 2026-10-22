@@ -216,9 +216,9 @@ fn new_space_and_new_session_buttons() {
     ui.wait_for("added other");
     ui.wait_for("other › base");
 
-    // The divider's +: a shell in the scratch dir, as its own session.
+    // The scratch heading's +: a shell in the scratch dir, as its own session.
     let plus = || {
-        let y = ui.find("──── +").map(|(_, y)| y).expect("sessions divider");
+        let y = ui.find("SCRATCH").map(|(_, y)| y).expect("the scratch heading");
         ui.send(format!("\x1b[<0;30;{}M\x1b[<0;30;{}m", y + 1, y + 1).as_bytes());
     };
     plus();
@@ -517,6 +517,85 @@ fn next_and_previous_place_follow_the_sidebar() {
     }
     ui.send(b"\x1b[91;13u");
     ui.wait_for("app › slot-2");
+}
+
+#[test]
+fn a_workstream_groups_slots_from_several_repos() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for repo in [&app, &api] {
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    assert!(env.velmux(&app, &["claim", "feat/a", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&app);
+    // Start one from a slot's menu: the slot moves under it.
+    ui.click_on("feat/a", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("checkout");
+    ui.wait_for("WORKSTREAMS");
+    ui.wait_for("◇ checkout");
+    ui.wait_for("@1 app");
+    let dir = env.root.join("pools/.workstreams/checkout");
+    let app_slot = env.slot(&app, "slot-1")["path"].as_str().unwrap().to_string();
+    env.until("the folder to link the app's slot", || std::fs::read_link(dir.join("app")).is_ok_and(|t| t.to_string_lossy() == app_slot));
+    // From a shell in the workstream, claim a slot in another repo into it.
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.line(&format!("velmux claim feat/b --repo {} --no-fetch", api.display()));
+    ui.wait_for("into the workstream checkout");
+    ui.wait_for("@1 api");
+    let api_slot = env.slot(&api, "slot-1");
+    assert_eq!(api_slot["status"], "inuse");
+    env.until("the folder to link the api's slot too", || std::fs::read_link(dir.join("api")).is_ok());
+    // Releasing it hands every slot back and removes it.
+    ui.click_on("◇ checkout", true);
+    ui.click_on("release workstream…", false);
+    ui.wait_for("y yes");
+    ui.send(b"y");
+    env.until("both slots to be free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
+    ui.wait_gone_text("◇ checkout");
+    assert!(!dir.exists(), "its folder goes");
+}
+
+#[test]
+fn slots_drag_into_a_workstream_and_leave_it() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/drag", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&app);
+    ui.wait_for("feat/drag");
+    // `+` on the heading starts an empty one.
+    let (_, y) = ui.find("WORKSTREAMS").unwrap();
+    let plus = ui.screen().lines().nth(y as usize).unwrap().chars().take(32).collect::<String>().rfind('+').unwrap();
+    ui.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", plus + 1, y + 1, plus + 1, y + 1).as_bytes());
+    ui.wait_for("name for the workstream");
+    ui.line("dragged");
+    ui.wait_for("◇ dragged");
+    // Drag the slot onto it (SGR: press, move, release).
+    let (sx, sy) = ui.find("feat/drag").unwrap();
+    let (_, wy) = ui.find("◇ dragged").unwrap();
+    ui.send(format!("\x1b[<0;{};{}M", sx + 2, sy + 1).as_bytes());
+    ui.send(format!("\x1b[<32;{};{}M", sx + 2, sy).as_bytes());
+    ui.send(format!("\x1b[<32;{};{}M", sx + 2, wy + 1).as_bytes());
+    ui.send(format!("\x1b[<0;{};{}m", sx + 2, wy + 1).as_bytes());
+    ui.wait_for("@1 app");
+    // It's all still there after the server stops and starts again.
+    env.stop(&app);
+    drop(ui);
+    let ui = env.attach(&app);
+    ui.wait_for("◇ dragged");
+    ui.wait_for("@1 app");
+    // Its menu takes it out again: back under its repo.
+    ui.click_on("feat/drag", true);
+    ui.click_on("leave workstream", false);
+    env.until("the slot to be back with its repo", || {
+        let (repos, slot) = (ui.find("REPOS"), ui.find("▣ feat/drag"));
+        !ui.screen().contains("@1 app") && matches!((repos, slot), (Some((_, r)), Some((_, s))) if r < s)
+    });
 }
 
 #[test]

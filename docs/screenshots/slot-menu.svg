@@ -39,12 +39,12 @@
 <text x="293.2" y="117.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
 <text x="301.6" y="117.5" fill="#cdd6f4" xml:space="preserve" textLength="722.4" lengthAdjust="spacingAndGlyphs"> I'll start with the cart store and the payment client.                               </text>
 
-<text x="24.4" y="135.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs" font-weight="bold">REPOS</text>
+<text x="24.4" y="135.5" fill="#585b70" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">WORKSTREAMS</text>
+
+<text x="259.6" y="135.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">+</text>
 
 <text x="284.8" y="135.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-
-<text x="24.4" y="153.5" fill="#a6adc8" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs" font-weight="bold">storefront</text>
 
 <text x="284.8" y="153.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="153.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
@@ -52,62 +52,56 @@
 <text x="310.0" y="153.5" fill="#cdd6f4" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs" font-weight="bold">Read</text>
 <text x="343.6" y="153.5" fill="#cdd6f4" xml:space="preserve" textLength="680.4" lengthAdjust="spacingAndGlyphs">(src/cart/store.ts)                                                              </text>
 
-<text x="41.2" y="171.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
-
-<text x="58.0" y="171.5" fill="#bac2de" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">base</text>
+<text x="24.4" y="171.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs" font-weight="bold">REPOS</text>
 
 <text x="284.8" y="171.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="293.2" y="171.5" fill="#cdd6f4" xml:space="preserve" textLength="730.8" lengthAdjust="spacingAndGlyphs">  ⎿  Read 142 lines                                                                    </text>
 
-<text x="41.2" y="189.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
-
-<text x="58.0" y="189.5" fill="#bac2de" xml:space="preserve" textLength="151.2" lengthAdjust="spacingAndGlyphs">fix/search-flicker</text>
-
-<text x="268.0" y="189.5" fill="#f38ba8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">▲</text>
+<text x="24.4" y="189.5" fill="#a6adc8" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs" font-weight="bold">storefront</text>
 
 <text x="284.8" y="189.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="58.0" y="207.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
-<text x="66.4" y="207.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╭ storefront › slot-1 · fix/search-flicker╮</text>
-<text x="427.6" y="207.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">nts/client.ts)                                                         </text>
-<rect x="16.0" y="212.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="225.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
-<rect x="24.4" y="212.0" width="16.8" height="18" fill="#303030"/>
-<rect x="41.2" y="212.0" width="8.4" height="18" fill="#303030"/><text x="41.2" y="225.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
-<rect x="49.6" y="212.0" width="8.4" height="18" fill="#303030"/>
-<rect x="58.0" y="212.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="225.5" fill="#a6adc8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">f</text>
-<text x="66.4" y="225.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
-<rect x="74.8" y="212.0" width="8.4" height="18" fill="#303030"/><text x="74.8" y="225.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
-<rect x="83.2" y="212.0" width="8.4" height="18" fill="#303030"/>
-<rect x="91.6" y="212.0" width="117.6" height="18" fill="#303030"/><text x="91.6" y="225.5" fill="#a6adc8" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs" font-weight="bold">sync with base</text>
-<rect x="209.2" y="212.0" width="210.0" height="18" fill="#303030"/>
-<text x="419.2" y="225.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
-<text x="427.6" y="225.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">es                                                                     </text>
-<rect x="16.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="243.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
-<rect x="24.4" y="230.0" width="33.6" height="18" fill="#303030"/>
-<rect x="58.0" y="230.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
-<text x="66.4" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="41.2" y="207.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
 
-<text x="91.6" y="243.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">open PR</text>
+<text x="58.0" y="207.5" fill="#bac2de" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs">base</text>
 
-<text x="419.2" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="284.8" y="207.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="293.2" y="207.5" fill="#a6e3a1" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
 
+<text x="310.0" y="207.5" fill="#cdd6f4" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs" font-weight="bold">Read</text>
+<text x="343.6" y="207.5" fill="#cdd6f4" xml:space="preserve" textLength="680.4" lengthAdjust="spacingAndGlyphs">(src/payments/client.ts)                                                         </text>
 
-<text x="41.2" y="261.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◌</text>
+<text x="41.2" y="225.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
 
-<text x="58.0" y="261.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-style="italic">f</text>
+<text x="58.0" y="225.5" fill="#bac2de" xml:space="preserve" textLength="151.2" lengthAdjust="spacingAndGlyphs">fix/search-flicker</text>
+
+<text x="268.0" y="225.5" fill="#f38ba8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">▲</text>
+
+<text x="284.8" y="225.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="293.2" y="225.5" fill="#cdd6f4" xml:space="preserve" textLength="730.8" lengthAdjust="spacingAndGlyphs">  ⎿  Read 88 lines                                                                     </text>
+
+<text x="58.0" y="243.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
+<text x="66.4" y="243.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╭ storefront › slot-1 · fix/search-flicker╮</text>
+
+<rect x="16.0" y="248.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="261.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
+<rect x="24.4" y="248.0" width="16.8" height="18" fill="#303030"/>
+<rect x="41.2" y="248.0" width="8.4" height="18" fill="#303030"/><text x="41.2" y="261.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+<rect x="49.6" y="248.0" width="8.4" height="18" fill="#303030"/>
+<rect x="58.0" y="248.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="261.5" fill="#a6adc8" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-weight="bold">f</text>
 <text x="66.4" y="261.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
-
-<text x="91.6" y="261.5" fill="#bac2de" xml:space="preserve" textLength="193.2" lengthAdjust="spacingAndGlyphs">send failures to Claude</text>
-
+<rect x="74.8" y="248.0" width="8.4" height="18" fill="#303030"/><text x="74.8" y="261.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
+<rect x="83.2" y="248.0" width="8.4" height="18" fill="#303030"/>
+<rect x="91.6" y="248.0" width="117.6" height="18" fill="#303030"/><text x="91.6" y="261.5" fill="#a6adc8" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs" font-weight="bold">sync with base</text>
+<rect x="209.2" y="248.0" width="210.0" height="18" fill="#303030"/>
 <text x="419.2" y="261.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="261.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">ckout/CheckoutScreen.tsx)                                              </text>
-
-<text x="24.4" y="279.5" fill="#bac2de" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">api</text>
-
+<rect x="16.0" y="266.0" width="8.4" height="18" fill="#303030"/><text x="16.0" y="279.5" fill="#00afff" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▌</text>
+<rect x="24.4" y="266.0" width="33.6" height="18" fill="#303030"/>
+<rect x="58.0" y="266.0" width="8.4" height="18" fill="#303030"/><text x="58.0" y="279.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
 <text x="66.4" y="279.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="279.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">open checks</text>
+<text x="91.6" y="279.5" fill="#bac2de" xml:space="preserve" textLength="151.2" lengthAdjust="spacingAndGlyphs">add to workstream…</text>
 
 <text x="419.2" y="279.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="279.5" fill="#cdd6f4" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">h </text>
@@ -116,46 +110,49 @@
 <text x="587.2" y="279.5" fill="#f38ba8" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">4 removals</text>
 
 
-<text x="41.2" y="297.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
+<text x="41.2" y="297.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◌</text>
 
-<text x="58.0" y="297.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">b</text>
+<text x="58.0" y="297.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs" font-style="italic">f</text>
 <text x="66.4" y="297.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="297.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">copy PR link</text>
+<text x="91.6" y="297.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">open PR</text>
 
 <text x="419.2" y="297.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="41.2" y="315.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+<text x="24.4" y="315.5" fill="#bac2de" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs" font-weight="bold">api</text>
 
-<text x="58.0" y="315.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">f</text>
 <text x="66.4" y="315.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="315.5" fill="#bac2de" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">open in browser</text>
+<text x="91.6" y="315.5" fill="#bac2de" xml:space="preserve" textLength="193.2" lengthAdjust="spacingAndGlyphs">send failures to Claude</text>
 
 <text x="419.2" y="315.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="315.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">src/checkout)                                                          </text>
 
-<text x="58.0" y="333.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
+<text x="41.2" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◆</text>
+
+<text x="58.0" y="333.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">b</text>
 <text x="66.4" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="333.5" fill="#bac2de" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">shell here</text>
+<text x="91.6" y="333.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">open checks</text>
 
 <text x="419.2" y="333.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="24.4" y="351.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">─────</text>
+<text x="41.2" y="351.5" fill="#94e2d5" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">▣</text>
+
+<text x="58.0" y="351.5" fill="#bac2de" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">f</text>
 <text x="66.4" y="351.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="351.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">new tab</text>
+<text x="91.6" y="351.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">copy PR link</text>
 
 <text x="419.2" y="351.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="41.2" y="369.5" fill="#bac2de" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">scr</text>
+<text x="58.0" y="369.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">@</text>
 <text x="66.4" y="369.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="369.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">open in editor</text>
+<text x="91.6" y="369.5" fill="#bac2de" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">open in browser</text>
 
 <text x="419.2" y="369.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="369.5" fill="#ff875f" xml:space="preserve" textLength="302.4" lengthAdjust="spacingAndGlyphs">saved-cards list… (esc to interrupt)</text>
@@ -163,35 +160,49 @@
 
 <text x="66.4" y="387.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="387.5" fill="#bac2de" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">copy path</text>
+<text x="91.6" y="387.5" fill="#bac2de" xml:space="preserve" textLength="84.0" lengthAdjust="spacingAndGlyphs">shell here</text>
 
 <text x="419.2" y="387.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
+<text x="24.4" y="405.5" fill="#585b70" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs" font-weight="bold">SCRAT</text>
 <text x="66.4" y="405.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="405.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">rename slot</text>
+<text x="91.6" y="405.5" fill="#bac2de" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">new tab</text>
 
 <text x="419.2" y="405.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="405.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">──────────────────────────────────────────────────────────────╮        </text>
 
+<text x="41.2" y="423.5" fill="#bac2de" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">scr</text>
 <text x="66.4" y="423.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
-<text x="91.6" y="423.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">release slot</text>
+<text x="91.6" y="423.5" fill="#bac2de" xml:space="preserve" textLength="117.6" lengthAdjust="spacingAndGlyphs">open in editor</text>
 
 <text x="419.2" y="423.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="423.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">                                                              │        </text>
 
-<text x="66.4" y="441.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╰─────────────────────────────────────────╯</text>
+<text x="66.4" y="441.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+
+<text x="91.6" y="441.5" fill="#bac2de" xml:space="preserve" textLength="75.6" lengthAdjust="spacingAndGlyphs">copy path</text>
+
+<text x="419.2" y="441.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 <text x="427.6" y="441.5" fill="#cdd6f4" xml:space="preserve" textLength="596.4" lengthAdjust="spacingAndGlyphs">──────────────────────────────────────────────────────────────╯        </text>
 
-<text x="284.8" y="459.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="66.4" y="459.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+
+<text x="91.6" y="459.5" fill="#bac2de" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">rename slot</text>
+
+<text x="419.2" y="459.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="284.8" y="477.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="66.4" y="477.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+
+<text x="91.6" y="477.5" fill="#bac2de" xml:space="preserve" textLength="100.8" lengthAdjust="spacingAndGlyphs">release slot</text>
+
+<text x="419.2" y="477.5" fill="#f5c2e7" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
 
 
-<text x="284.8" y="495.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="66.4" y="495.5" fill="#f5c2e7" xml:space="preserve" textLength="361.2" lengthAdjust="spacingAndGlyphs">╰─────────────────────────────────────────╯</text>
 
 
 <text x="284.8" y="513.5" fill="#585b70" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>

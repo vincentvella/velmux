@@ -5,6 +5,23 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- **Workstreams**: slots from one or more repos grouped as one piece of work,
+  in their own section of the sidebar, with a place where one agent reaches
+  every slot (its folder links to each, one subfolder per repo). Start one from
+  the heading's `+` or a slot's **add to workstream…**, drag slots in and out,
+  and let an agent bring in another repo with
+  `velmux claim <branch> --repo <repo>`. **release workstream…** hands back all
+  of its slots.
+
+### Changed
+
+- The sidebar has three sections: Workstreams, Repos and Scratch (the scratch
+  sessions' divider is now a heading).
+- A menu opened from another menu (the agent and workstream pickers) appears
+  where that one was.
+
 ## [0.6.0] - 2026-10-21
 
 ### Added

@@ -22,6 +22,10 @@ pub enum ClientMsg {
     ClaimFor { pane: u64, branch: Option<String> },
     /// One-shot: release the slot that pane is in, moving it back to the base.
     ReleaseFor { pane: u64 },
+    /// One-shot: `velmux claim` in a pane, saying which repo (`--repo`) and
+    /// which workstream (`--workstream`, or the one the pane is in) when it's
+    /// for one. Without either, the same as `ClaimFor`.
+    ClaimInto { pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String> },
     /// One-shot: an agent's hook says which session that pane's agent is in
     /// (a session reference, see `agents`).
     ReportSession { pane: u64, session: String },
@@ -86,6 +90,11 @@ impl ClientMsg {
                 write_frame(w, 6, &p)
             }
             ClientMsg::ReleaseFor { pane } => write_frame(w, 7, &pane.to_be_bytes()),
+            ClientMsg::ClaimInto { pane, branch, repo, workstream } => {
+                let mut p = pane.to_be_bytes().to_vec();
+                p.extend_from_slice(serde_json::json!({ "branch": branch, "repo": repo, "workstream": workstream }).to_string().as_bytes());
+                write_frame(w, 11, &p)
+            }
             ClientMsg::ReportSession { pane, session } => {
                 let mut p = pane.to_be_bytes().to_vec();
                 p.extend_from_slice(session.as_bytes());
@@ -123,6 +132,11 @@ impl ClientMsg {
                 })
             }
             7 if p.len() >= 8 => Ok(ClientMsg::ReleaseFor { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
+            11 if p.len() > 8 => {
+                let v: serde_json::Value = serde_json::from_slice(&p[8..]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let text = |k: &str| v[k].as_str().map(String::from);
+                Ok(ClientMsg::ClaimInto { pane: u64::from_be_bytes(p[..8].try_into().unwrap()), branch: text("branch"), repo: text("repo"), workstream: text("workstream") })
+            }
             10 if p.len() > 8 => Ok(ClientMsg::ReportSession {
                 pane: u64::from_be_bytes(p[..8].try_into().unwrap()),
                 session: String::from_utf8_lossy(&p[8..]).into_owned(),
