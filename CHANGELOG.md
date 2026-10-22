@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- A pane's right-click menu: split right, split down, zoom / unzoom, copy mode,
+  close pane. In an app that takes the mouse itself (vim), its title bar
+  gives the menu.
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

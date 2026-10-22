@@ -170,6 +170,8 @@ pub const SESSION_HITS: usize = 200;
 /// A right-click menu: actions for one place, run there.
 #[derive(Debug, Clone)]
 pub struct MenuContext {
+    /// The pane it's for (a right-click on a pane): focused before its action runs.
+    pub pane: Option<u64>,
     pub target: Loc,
     /// The parked branch it's for, when opened on one.
     pub parked: Option<String>,
@@ -2296,6 +2298,15 @@ impl App {
             self.focus = Some(id);
         }
         let inner = ui::content_rect(outer, titled);
+        // Right-click: the pane's menu, unless it's in the content of an app
+        // that takes the mouse itself (vim); its title bar always gives the menu.
+        if ev.is_press() && ev.is_right() {
+            let copying = self.copy.as_ref().is_some_and(|c| c.pane == id);
+            let app_mouse = self.pane(id).is_some_and(|p| p.parser.screen().mouse_protocol_mode() != MouseProtocolMode::None);
+            if !(inner.contains(at) && app_mouse && !copying) {
+                return self.open_pane_menu(id, ev.x, ev.y);
+            }
+        }
         if !inner.contains(at) {
             return; // title bar: focusing was all
         }
@@ -2692,7 +2703,7 @@ impl App {
         if let ui::Row::Parked(p, i) = row {
             let Some(branch) = self.projects[p].parked.get(i).map(|v| v.branch.clone()) else { return };
             let items = vec![("resume in a slot", Action::ResumeParked), ("discard changes…", Action::DiscardParked)];
-            let context = MenuContext { target: Loc { project: p, slot: None }, parked: Some(branch.clone()), title: format!("parked · {branch}"), items, at: (x, y) };
+            let context = MenuContext { pane: None, target: Loc { project: p, slot: None }, parked: Some(branch.clone()), title: format!("parked · {branch}"), items, at: (x, y) };
             self.mode = Mode::Menu { selected: 0, context: Some(context) };
             return;
         }
@@ -2791,7 +2802,25 @@ impl App {
             ],
         };
         let title = self.loc_name(&target);
-        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { target, parked: None, title, items, at: (x, y) }) };
+        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { pane: None, target, parked: None, title, items, at: (x, y) }) };
+    }
+
+    /// A pane's right-click menu: split it, zoom it, copy from it, close it.
+    fn open_pane_menu(&mut self, id: u64, x: u16, y: u16) {
+        let (Some(loc), Some(pane)) = (self.current_loc(), self.pane(id)) else { return };
+        let title = ui::pane_label(self, pane);
+        let view = self.views.get(&loc);
+        let zoomed = view.is_some_and(|v| v.zoomed == Some(id));
+        let split = view.is_some_and(|v| v.layout.leaves().len() > 1);
+        let mut items: Vec<(&'static str, Action)> = vec![("split right", Action::SplitRight), ("split down", Action::SplitDown)];
+        if zoomed {
+            items.push(("unzoom", Action::Zoom));
+        } else if split {
+            items.push(("zoom", Action::Zoom));
+        }
+        items.extend([("copy mode", Action::CopyMode), ("close pane", Action::ClosePane)]);
+        self.focus = Some(id);
+        self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { pane: Some(id), target: loc, parked: None, title, items, at: (x, y) }) };
     }
 
     /// Run menu row `i`: the global menu's action here, or a context menu's
@@ -2821,6 +2850,9 @@ impl App {
                         self.exit_copy();
                     }
                     self.go_to(c.target);
+                }
+                if let Some(id) = c.pane.filter(|id| self.pane(*id).is_some()) {
+                    self.focus = Some(id);
                 }
                 self.run(action);
                 self.menu_at = None;
@@ -3296,7 +3328,7 @@ impl App {
                 let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
                 self.mode = Mode::Menu {
                     selected: 0,
-                    context: Some(MenuContext { target, parked: None, title: "new conversation with…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                    context: Some(MenuContext { pane: None, target, parked: None, title: "new conversation with…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
                 };
             }
             Action::AgentWith(n) => {
@@ -3318,7 +3350,7 @@ impl App {
                 let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
                 self.mode = Mode::Menu {
                     selected: 0,
-                    context: Some(MenuContext { target, parked: None, title: "add to workstream…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                    context: Some(MenuContext { pane: None, target, parked: None, title: "add to workstream…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
                 };
             }
             Action::AddToWorkstream(n) => {
@@ -3349,7 +3381,7 @@ impl App {
                         let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
                         self.mode = Mode::Menu {
                             selected: 0,
-                            context: Some(MenuContext { target: ws, parked: None, title: "a slot in…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                            context: Some(MenuContext { pane: None, target: ws, parked: None, title: "a slot in…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
                         };
                     }
                 }

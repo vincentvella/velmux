@@ -740,6 +740,48 @@ fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
 }
 
 #[test]
+fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for("$");
+    let right_click = |x: u16, y: u16| ui.send(format!("\x1b[<2;{x};{y}M\x1b[<2;{x};{y}m").as_bytes());
+    let count = |needle: &str| ui.screen().matches(needle).count();
+    // Right-click in the pane: its menu; the first item splits it.
+    right_click(70, 12);
+    ui.wait_for("split right");
+    ui.wait_for("close pane");
+    ui.send(b"\r");
+    // Split panes get a title bar each.
+    let titles = || ui.screen().lines().nth(1).map_or(0, |l| l.matches("   shell").count());
+    env.until("two panes, each with a title", || titles() == 2);
+    // Now it can zoom (and unzoom) from the menu too.
+    right_click(110, 12);
+    ui.wait_for("zoom");
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains(" zoom")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    env.until("one pane shown, zoomed", || titles() <= 1);
+    right_click(70, 12);
+    ui.wait_for("unzoom");
+    // And close it: back to one pane.
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("close pane")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    env.until("one pane left", || {
+        let s = ui.screen();
+        titles() == 0 && !s.contains("close pane") && count("$") >= 1
+    });
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");
