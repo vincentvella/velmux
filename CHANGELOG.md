@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
 ### Added
 
 - **Workstreams**: slots from one or more repos grouped as one piece of work,
@@ -137,7 +139,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/vincentvella/velmux/releases/tag/v0.7.0
 [0.6.0]: https://github.com/vincentvella/velmux/releases/tag/v0.6.0
 [0.5.0]: https://github.com/vincentvella/velmux/releases/tag/v0.5.0
 [0.4.0]: https://github.com/vincentvella/velmux/releases/tag/v0.4.0
