@@ -175,9 +175,28 @@ impl App {
         }
     }
 
+    /// A pane's program is working in `dir` (or under it).
+    fn in_use(&self, dir: &Path) -> bool {
+        self.panes.iter().any(|p| p.fg.cwd.as_ref().is_some_and(|c| c.starts_with(dir)))
+    }
+
+    /// Empty folders left in the workstreams' folder by removed workstreams,
+    /// once nothing runs in them.
+    fn sweep_workstream_dirs(&self) {
+        let root = self.workstreams_root();
+        let ours: Vec<PathBuf> = self.workstreams().iter().filter_map(|w| self.folder(w).map(|f| f.path.clone())).collect();
+        for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            let dir = entry.path();
+            if dir.is_dir() && !ours.contains(&dir) && !self.in_use(&dir) {
+                let _ = std::fs::remove_dir(&dir); // only if it's empty
+            }
+        }
+    }
+
     /// After a refresh: slots that were released (or are gone) leave their
     /// workstream. Repos whose slots aren't known yet are left alone.
     pub(super) fn prune_workstreams(&mut self) {
+        self.sweep_workstream_dirs();
         for ws in self.workstreams() {
             let before = self.folder(&ws).and_then(|f| f.members.clone()).unwrap_or_default();
             let keep: Vec<session::Member> = before
@@ -211,8 +230,20 @@ impl App {
     pub(super) fn release_workstream(&mut self, ws: Loc) {
         let members = self.members(&ws);
         let n = members.len();
+        // The workstream's own panes (the conversation that worked across the
+        // repos) go to its first repo's checkout, still running.
+        let to = members.first().map(|m| Loc { project: m.project, slot: None });
         for slot in members {
             self.release_moving_panes(slot);
+        }
+        if let Some(to) = to {
+            let own: Vec<u64> = self.panes.iter().filter(|p| p.loc == ws).map(|p| p.id).collect();
+            for id in &own {
+                self.move_pane(*id, to.clone());
+            }
+            if !own.is_empty() && self.current.as_ref() == Some(&ws) {
+                self.go_to(to);
+            }
         }
         self.remove_workstream(ws.clone());
         self.say(format!("released {n} slot(s) and removed {}", ws.slot.unwrap_or_default()));
@@ -226,10 +257,12 @@ impl App {
             f.members = Some(Vec::new());
         }
         self.link_workstream(&ws);
-        if let Some(dir) = dir {
+        self.close_panes_where(|p| p.loc == ws);
+        // Its folder goes once nothing runs in it (a pane moved out may still);
+        // `prune_workstreams` takes it then.
+        if let Some(dir) = dir.filter(|d| !self.in_use(d)) {
             let _ = std::fs::remove_dir(dir);
         }
-        self.close_panes_where(|p| p.loc == ws);
         if let (Some(id), Some(project)) = (&ws.slot, self.projects.get_mut(ws.project)) {
             project.folders.retain(|f| &f.id != id);
         }

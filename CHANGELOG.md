@@ -13,6 +13,12 @@ What changed in each release of velmux. Each version links to its release
   (their permission prompts, spinners, titles and progress reports), instead of
   just "working while output flows". They show as blocked when they ask you.
 
+### Changed
+
+- Releasing a workstream keeps its own conversation: its panes move to its
+  first repo's checkout, still running, instead of closing. Its folder goes
+  once nothing is working in it.
+
 ## [0.7.1] - 2026-10-22
 
 ### Added

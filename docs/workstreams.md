@@ -48,7 +48,8 @@ code in those subfolders and commit in each repo's own git. Panes there get
 Right-click the workstream: **release workstream…** hands back every slot in
 it (unfinished work is parked, as a release does) and removes it. Panes open in
 its slots move back to their repo's checkout, still running (their
-conversations are kept with the parked work too); the workstream's own panes
-close with it. **remove
+conversations are kept with the parked work too), and the workstream's own
+panes (the conversation that worked across the repos) move to its first repo's
+checkout. Its folder goes once nothing is working in it any more. **remove
 workstream** only ungroups: its slots go back to their repos, still claimed.
 A slot released on its own leaves its workstream.

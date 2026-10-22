@@ -568,13 +568,21 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.send(b"y");
     env.until("both slots to be free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
     ui.wait_gone_text("◇ checkout");
-    assert!(!dir.exists(), "its folder goes");
-    // …and the shell is still running, back in app's checkout.
+    // …the shells (the slot's, and the workstream's own) are still running, in
+    // app's checkout…
     ui.click_on("◆ base", false);
     ui.wait_for("app › base · shell");
     ui.wait_for("still-here");
+    ui.wait_for("into the workstream checkout");
     ui.line("echo alive");
     ui.wait_for("alive");
+    // …and its folder, emptied of links, goes once nothing works in it.
+    assert!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) == 0, "no links left");
+    // (Both shells are in the checkout now: leave the folder in each.)
+    ui.line("cd /");
+    ui.prefix("j");
+    ui.line("cd /");
+    env.until("its folder to go", || !dir.exists());
 }
 
 #[test]
