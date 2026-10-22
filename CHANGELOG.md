@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-22
+
 ### Fixed
 
 - Dragging a selection down to the bottom of a pane scrolls (a pane at the foot
@@ -196,7 +198,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/vincentvella/velmux/releases/tag/v0.9.2
 [0.9.1]: https://github.com/vincentvella/velmux/releases/tag/v0.9.1
 [0.9.0]: https://github.com/vincentvella/velmux/releases/tag/v0.9.0
 [0.8.0]: https://github.com/vincentvella/velmux/releases/tag/v0.8.0
