@@ -13,6 +13,12 @@ What changed in each release of velmux. Each version links to its release
   (their permission prompts, spinners, titles and progress reports), instead of
   just "working while output flows". They show as blocked when they ask you.
 
+### Fixed
+
+- Copying from an agent's pane also rejoins lines it wrapped at a space
+  (Claude's paragraphs, and commands it broke before a flag), putting the
+  space back; list items, boxes and code keep their line breaks.
+
 ### Changed
 
 - Releasing a workstream keeps its own conversation: its panes move to its

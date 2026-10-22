@@ -287,10 +287,11 @@ impl Copy {
 
     /// Text between two positions (inclusive), rejoining soft-wrapped lines:
     /// ones the terminal wrapped, and in an agent's pane (`rewrap`) ones the
-    /// agent broke itself, which reach its right edge and carry on, indented,
-    /// on the next line (Claude Code lays a long command out like that).
+    /// agent wrapped itself to fit (see [`agent_join`]), Claude Code laying out
+    /// a long command or a paragraph over several lines.
     fn extract<CB: vt100::Callbacks>(&self, p: &mut vt100::Parser<CB>, a: Pos, b: Pos) -> String {
-        let (_, _, cols) = dims(p);
+        // The width the agent wraps at: its longest line around here.
+        let width = if self.rewrap { wrap_width(p, a.0, b.0) } else { 0 };
         let mut out = String::new();
         let mut joined = false;
         for abs in a.0..=b.0 {
@@ -307,10 +308,14 @@ impl Copy {
             } else {
                 out.push_str(piece.trim_end());
                 if abs != b.0 {
-                    if self.rewrap && agent_wrapped(&cells.concat(), &line_cells(p, abs + 1).0.concat(), cols) {
-                        joined = true;
-                    } else {
-                        out.push('\n');
+                    match self.rewrap.then(|| agent_join(&cells.concat(), &line_cells(p, abs + 1).0.concat(), width)).flatten() {
+                        Some(space) => {
+                            joined = true;
+                            if space {
+                                out.push(' ');
+                            }
+                        }
+                        None => out.push('\n'),
                     }
                 }
             }
@@ -319,15 +324,46 @@ impl Copy {
     }
 }
 
-/// An agent broke `line` to fit and `next` carries on: `line` reaches the
-/// agent's right edge (within a few columns: its margin) and isn't a rule,
-/// and `next` is indented text.
-fn agent_wrapped(line: &str, next: &str, cols: u16) -> bool {
+/// The width an agent wraps its text at, from its longest line within a
+/// screenful of lines `a..=b`.
+fn wrap_width<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, a: usize, b: usize) -> usize {
+    let (sb, rows, _) = dims(p);
+    let last = sb + rows as usize - 1;
+    (a.saturating_sub(rows as usize)..=(b + rows as usize).min(last)).map(|abs| line_cells(p, abs).0.concat().trim_end().chars().count()).max().unwrap_or(0)
+}
+
+/// Whether an agent wrapped `line` into `next` itself (the terminal didn't),
+/// and if so whether a space goes between them: `Some(false)` when `line`
+/// runs to the agent's width ending in a long word (a path broken where it
+/// hit the edge), `Some(true)` when it was wrapped at a space (`next` starts
+/// with a word that wouldn't have fit). `None`: a real line break: `next`
+/// is blank, starts a list item, bullet or box, or its first word would have
+/// fit.
+fn agent_join(line: &str, next: &str, width: usize) -> Option<bool> {
     let text = line.trim_end();
-    let filled = text.chars().count() + 3 >= cols as usize;
-    let rule = text.trim().chars().all(|c| matches!(c, '─' | '━' | '═' | '-' | '│' | '╭' | '╮' | '╰' | '╯'));
-    let continues = next.starts_with(' ') && !next.trim().is_empty();
-    filled && !rule && continues
+    let rest = next.trim();
+    let box_char = |c: char| "─━═│┃╭╮╰╯├┤┌┐└┘".contains(c);
+    if text.trim().is_empty() || rest.is_empty() || text.trim().chars().all(|c| box_char(c) || c == '-') {
+        return None;
+    }
+    let starts_item = ["- ", "* ", "+ ", "• "].iter().any(|m| rest.starts_with(m))
+        || rest.starts_with(['⏺', '⎿', '>', '#', '|'])
+        || rest.starts_with(box_char)
+        || rest.split_once(['.', ')']).is_some_and(|(n, _)| !n.is_empty() && n.len() <= 3 && n.chars().all(|c| c.is_ascii_digit()));
+    // Code keeps its lines: statements and blocks end where they end.
+    let code = text.ends_with([';', '{', '}']) || rest.starts_with('}');
+    if starts_item || code || width < 20 {
+        return None;
+    }
+    let len = text.chars().count();
+    let first = rest.split_whitespace().next().unwrap_or_default().chars().count();
+    if len + 1 < width && len + 1 + first <= width {
+        return None; // its first word would have fit: a real break
+    }
+    // A long word (a path, a flag-laden command) broken where it hit the edge
+    // carries on with no space; words wrapped at a space get it back.
+    let last = text.split_whitespace().last().map_or(0, |w| w.chars().count());
+    Some(last * 2 <= width)
 }
 
 /// OSC 52 sequence that asks the outer terminal to set its clipboard.
@@ -379,6 +415,38 @@ mod tests {
             "  indented, but the line above was short",
         ];
         assert_eq!(all, want.join("\n"));
+        // Words wrapped at a space (Claude's prose and commands): the space comes back.
+        let rule = "─".repeat(78);
+        let lines = [
+            "  I could force a PTY to auto-answer that, but it's a billing prompt that exists",
+            "  so a human sees the change — so it's yours to confirm. Two lines, and the !",
+            "  prefix runs them here:",
+            "",
+            "  ! cd /Users/vince/OSS/basalt/website && npx vercel project update basalt",
+            "  --build-machine basic",
+            "  - a list item",
+            "  - another",
+            rule.as_str(),
+        ];
+        let mut p2 = vt100::Parser::new(std::num::NonZero::new(10).unwrap(), std::num::NonZero::new(82).unwrap(), 0);
+        p2.process(lines.join("\r\n").as_bytes());
+        let mut c2 = Copy::enter(1, &p2);
+        c2.rewrap = true;
+        let want = [
+            "  I could force a PTY to auto-answer that, but it's a billing prompt that exists so a human sees the change — so it's yours to confirm. Two lines, and the ! prefix runs them here:",
+            "",
+            "  ! cd /Users/vince/OSS/basalt/website && npx vercel project update basalt --build-machine basic",
+            "  - a list item",
+            "  - another",
+        ];
+        assert_eq!(c2.extract(&mut p2, (0, 0), (7, 81)), want.join("\n"));
+        // Code that happens to run long keeps its lines.
+        let code = ["  let total = items.iter().map(|item| item.price * item.quantity).sum::<u64>();", "  return total;", rule.as_str()];
+        let mut p3 = vt100::Parser::new(std::num::NonZero::new(4).unwrap(), std::num::NonZero::new(82).unwrap(), 0);
+        p3.process(code.join("\r\n").as_bytes());
+        let mut c3 = Copy::enter(1, &p3);
+        c3.rewrap = true;
+        assert_eq!(c3.extract(&mut p3, (0, 0), (1, 81)), code[..2].join("\n"));
         // A shell's lines are only joined where the terminal wrapped them.
         c.rewrap = false;
         assert!(c.extract(&mut p, (1, 0), (3, 39)).contains("over-\n  the-lazy"));
