@@ -5,6 +5,11 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- A workstream whose PRs have all merged says so (a notification) and shows
+  **⏏ release** on its row; a click releases it.
+
 ## [0.11.0] - 2026-10-22
 
 ### Added

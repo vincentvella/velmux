@@ -111,6 +111,7 @@ impl Env {
             ("VELMUX_BIN", VELMUX.into()),
             ("FAKE_GH_PRS", self.root.join("prs.json").display().to_string()),
             ("BROWSER", self.root.join("bin/browser").display().to_string()),
+            ("VELMUX_PR_EVERY", "1".into()),
             ("GIT_TERMINAL_PROMPT", "0".into()),
             ("ENV", String::new()),
         ]

@@ -893,6 +893,14 @@ fn a_workstream_sums_up_its_prs_and_opens_them() {
         let t = std::fs::read_to_string(&opened).unwrap_or_default();
         t.contains("acme/app/pull/11") && t.contains("acme/api/pull/22")
     });
+    // Both merge: it's done, says so, and `⏏ release` on its row hands it all back.
+    std::fs::write(env.root.join("prs.json"), prs.replace("\"OPEN\"", "\"MERGED\"")).unwrap();
+    ui.wait_for("all 2 PRs merged");
+    ui.wait_for("⏏ release");
+    ui.click_on("⏏ release", false);
+    ui.wait_for("y yes");
+    ui.send(b"y");
+    env.until("both slots to be free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
 }
 
 #[test]

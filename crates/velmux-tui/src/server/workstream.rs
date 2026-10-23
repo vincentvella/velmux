@@ -74,6 +74,14 @@ impl App {
             .collect()
     }
 
+    /// Every slot in the workstream has a PR, and all of them have merged:
+    /// it's done, and ready to release.
+    pub fn workstream_ready(&self, ws: &Loc) -> bool {
+        let members = self.members(ws);
+        let prs = self.workstream_prs(ws);
+        !members.is_empty() && prs.len() == members.len() && prs.iter().all(|p| p.state == velmux_pool::gh::PrState::Merged)
+    }
+
     /// The workstream a repo's slot is in, if any.
     pub fn workstream_of(&self, slot: &Loc) -> Option<Loc> {
         let base = self.projects.get(slot.project)?.base()?;

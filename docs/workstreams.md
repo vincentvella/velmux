@@ -18,7 +18,8 @@ A workstream's slots are listed under it rather than under their repos (the
 repos keep their checkout, free slots and parked work). Its own row sums up
 their pull requests: `3 PR ✗1 …1 ⇡1` (how many, failing checks, checks still
 running, merged), or `✓` when every open one passes; its menu's **open all
-PRs** opens each in your browser.
+PRs** opens each in your browser. Once every slot's PR has merged, it says so
+(a notification) and its row shows **⏏ release**: a click hands it all back.
 
 ## Its place
 

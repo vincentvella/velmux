@@ -376,8 +376,10 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     if loc.slot.is_none() && project.base_changes > 0 {
         marks.push((format!("✎{}", project.base_changes), Style::new().fg(t.alert).add_modifier(Modifier::BOLD)));
     }
-    // A workstream: its slots' PRs at a glance (`3 PR ✗1 …1 ⇡1`, `✓` when all pass).
-    if app.is_workstream(loc) {
+    // A workstream: its slots' PRs at a glance (`3 PR ✗1 …1 ⇡1`, `✓` when all
+    // pass), or, all merged, `⏏ release` (after its agents' states, below).
+    let ready = app.is_workstream(loc) && app.workstream_ready(loc);
+    if app.is_workstream(loc) && !ready {
         use velmux_pool::gh::{Checks, PrState};
         let prs = app.workstream_prs(loc);
         if !prs.is_empty() {
@@ -402,6 +404,9 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     }
     for (g, n, style) in rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc)) {
         marks.push((if n > 1 { format!("{g}{n}") } else { g.to_string() }, style));
+    }
+    if ready {
+        marks.push((RELEASE.into(), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
     }
     let badge_w = marks.iter().map(|(m, _)| m.chars().count() as u16).sum::<u16>() + marks.len().saturating_sub(1) as u16;
     let right_edge = side.saturating_sub(1);
@@ -539,6 +544,20 @@ fn draw_location_detail(app: &App, loc: &Loc, y: u16, side: u16, selected: bool,
     for p in detail_pieces(app, loc, side, selected) {
         buf.set_string(p.x, y, &p.text, p.style);
     }
+}
+
+/// A done workstream's mark: at the right end of its row; a click releases it.
+const RELEASE: &str = "⏏ release";
+
+/// The workstream whose `⏏ release` is at sidebar column `x`, row `y`, if any.
+pub fn release_at(app: &App, cols: u16, rows: u16, x: u16, y: u16) -> Option<Loc> {
+    let side = sidebar_width(cols, app.sidebar_hidden, app.sidebar_cols);
+    let right = side.saturating_sub(1);
+    let left = right.saturating_sub(RELEASE.chars().count() as u16);
+    sidebar_rows(app, rows).into_iter().find_map(|(ry, row)| match row {
+        Row::Location(loc) if ry == y && (left..right).contains(&x) && app.is_workstream(&loc) && app.workstream_ready(&loc) => Some(loc),
+        _ => None,
+    })
 }
 
 /// The slot whose `⏏ free` is at sidebar column `x`, row `y`, if any.

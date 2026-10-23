@@ -1082,11 +1082,20 @@ impl App {
             }
             Event::Prs(fresh) => {
                 self.checking_prs = false;
+                let ready: Vec<Loc> = self.workstreams().into_iter().filter(|w| self.workstream_ready(w)).collect();
                 for (p, prs) in fresh {
                     self.pr_changes(p, &prs);
                     if let Some(project) = self.projects.get_mut(p) {
                         project.prs = prs;
                     }
+                }
+                // A workstream whose last PR just merged: done, say so.
+                let done: Vec<Loc> = self.workstreams().into_iter().filter(|w| !ready.contains(w) && self.workstream_ready(w)).collect();
+                for ws in done {
+                    let n = self.members(&ws).len();
+                    let body = format!("{}: all {n} PRs merged — release it (⏏ release on its row)", ws.slot.clone().unwrap_or_default());
+                    self.toast(&body);
+                    self.notify_text(&body, true);
                 }
                 self.dirty = true;
             }

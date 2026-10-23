@@ -6,7 +6,9 @@ impl App {
     /// Check PRs for every GitHub repo with claimed or parked branches, about
     /// once a minute (sooner after opening one), in the background.
     pub(super) fn refresh_prs_bg(&mut self) {
-        if self.checking_prs || self.prs_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(60)) || !velmux_pool::gh::available() {
+        // About once a minute (`VELMUX_PR_EVERY` seconds, for tests).
+        let every = std::env::var("VELMUX_PR_EVERY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        if self.checking_prs || self.prs_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(every)) || !velmux_pool::gh::available() {
             return;
         }
         let work: Vec<(usize, Arc<Pool>)> = self

@@ -463,6 +463,11 @@ impl App {
     }
 
     pub(super) fn sidebar_click(&mut self, x: u16, y: u16) {
+        // `⏏ release` on a done workstream releases it (asking first).
+        if let Some(ws) = ui::release_at(self, self.size.0, self.size.1, x, y) {
+            self.go_to(ws);
+            return self.run(Action::ReleaseWorkstream);
+        }
         // `⏏ free` on a merged slot hands it back (asking first).
         if let Some(loc) = ui::free_at(self, self.size.0, self.size.1, x, y) {
             self.go_to(loc);
