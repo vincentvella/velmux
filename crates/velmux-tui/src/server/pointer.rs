@@ -526,7 +526,7 @@ impl App {
                 }
                 return;
             }
-            ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
+            ui::Row::Heading(_) | ui::Row::AgentGroup(_) | ui::Row::Divider | ui::Row::Blank => return,
             ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } | ui::Row::Parked(..) | ui::Row::ParkedWorkstream(_) => unreachable!("handled above"),
             ui::Row::Location(loc) | ui::Row::Detail(loc) => loc,
             ui::Row::Project(p) => {

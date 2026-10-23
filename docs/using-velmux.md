@@ -15,8 +15,9 @@ From the top:
 - **`≡ menu`**: a short menu of app-wide actions (themes, settings, restart,
   detach, stop). Also `<prefix> m`.
 - **`spaces · agents`** switches views (`<prefix> g`). The agents view lists
-  every agent with where it is and what it's doing, the ones that need you
-  first; click one to jump to it.
+  every agent with where it is, what it's doing, and for how long (`blocked
+  4m`): the ones that need you first, under **Needs you**, then the rest under
+  their workstream or repo. Click one to jump to it.
 
 The spaces view has three sections:
 

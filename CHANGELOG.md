@@ -11,6 +11,9 @@ What changed in each release of velmux. Each version links to its release
   and the repo's menu can discard it all at once (**discard parked work older
   than 30 days…**; commits stay on the branches). `velmux gc
   --parked-older-than <days>` does it from the command line.
+- The agents view puts the agents that need you under **Needs you**, groups
+  the rest under their workstream or repo, and says how long each has been in
+  its state (`blocked 4m`, `working 12m`).
 
 ## [0.13.0] - 2026-10-23
 

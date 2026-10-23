@@ -71,6 +71,9 @@ pub enum Row {
     Blank,
     /// Sidebar agents view: an agent's two lines (location, then agent and task).
     Agent { pane: usize, second: bool },
+    /// Sidebar agents view: the heading over a group of agents (a workstream,
+    /// a repo, scratch sessions, or the ones that need you).
+    AgentGroup(String),
 }
 
 /// Which list the sidebar shows.
@@ -248,8 +251,10 @@ pub fn sidebar_rows(app: &App, height: u16) -> Vec<(u16, Row)> {
         .collect()
 }
 
-/// Every agent, the ones needing you first (blocked, finished unseen, working,
-/// idle), then in sidebar order. Two rows each.
+/// Every agent: the ones that need you (blocked, or finished while you
+/// weren't looking) first, under NEEDS YOU; then the rest grouped by where
+/// they are (each workstream, each repo, scratch sessions) in sidebar order,
+/// working before idle. Two rows each, under a heading per group.
 pub fn agent_rows(app: &App) -> Vec<Row> {
     let order: Vec<usize> = rows(app)
         .into_iter()
@@ -259,18 +264,45 @@ pub fn agent_rows(app: &App) -> Vec<Row> {
         })
         .filter(|&i| app.panes[i].agent.is_some() || app.panes[i].kind == Kind::Agent)
         .collect();
-    let rank = |i: usize| {
+    let needs = |i: usize| {
         let p = &app.panes[i];
-        match (p.state, p.unseen_done) {
-            (Some(AgentState::Blocked), _) => 0,
-            (_, true) => 1,
-            (Some(AgentState::Working), _) => 2,
-            _ => 3,
+        p.unseen_done || p.state == Some(AgentState::Blocked)
+    };
+    let two = |i: usize| [Row::Agent { pane: i, second: false }, Row::Agent { pane: i, second: true }];
+    let mut out = Vec::new();
+    // Blocked ones before finished ones.
+    let mut urgent: Vec<usize> = order.iter().copied().filter(|&i| needs(i)).collect();
+    urgent.sort_by_key(|&i| app.panes[i].state != Some(AgentState::Blocked));
+    if !urgent.is_empty() {
+        out.push(Row::AgentGroup("NEEDS YOU".into()));
+        out.extend(urgent.iter().flat_map(|&i| two(i)));
+    }
+    // The rest, by group, in the order the groups first appear.
+    let group_of = |i: usize| -> String {
+        let loc = &app.panes[i].loc;
+        let project = &app.projects[loc.project];
+        match app.workstream_of(loc).or_else(|| app.is_workstream(loc).then(|| loc.clone())) {
+            Some(ws) => ws.slot.unwrap_or_default(),
+            None if project.is_unclassified() => "scratch".into(),
+            None => project.name().to_string(),
         }
     };
-    let mut sorted: Vec<(usize, usize)> = order.into_iter().enumerate().collect();
-    sorted.sort_by_key(|&(n, i)| (rank(i), n));
-    sorted.into_iter().flat_map(|(_, i)| [Row::Agent { pane: i, second: false }, Row::Agent { pane: i, second: true }]).collect()
+    let rest: Vec<usize> = order.iter().copied().filter(|&i| !needs(i)).collect();
+    let mut groups: Vec<String> = Vec::new();
+    for &i in &rest {
+        let g = group_of(i);
+        if !groups.contains(&g) {
+            groups.push(g);
+        }
+    }
+    for g in groups {
+        let mut members: Vec<usize> = rest.iter().copied().filter(|&i| group_of(i) == g).collect();
+        members.sort_by_key(|&i| app.panes[i].state != Some(AgentState::Working));
+        out.push(Row::Blank);
+        out.push(Row::AgentGroup(g.to_uppercase()));
+        out.extend(members.iter().flat_map(|&i| two(i)));
+    }
+    out
 }
 
 /// A location as a short label: `caliburr › feat/auth`, `kino › base`, `Helm`.
@@ -753,8 +785,24 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                     let glyph = if glyph == " " { "○" } else { glyph };
                     buf.set_string(1, y, glyph, gstyle.patch(base));
                     let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2).add_modifier(Modifier::BOLD) };
-                    buf.set_stringn(3, y, short_loc(app, &p.loc), side.saturating_sub(4) as usize, text);
+                    // How long it's been like this, on the right.
+                    let doing = match (p.state, p.unseen_done) {
+                        (_, true) => "done",
+                        (Some(AgentState::Blocked), _) => "blocked",
+                        (Some(AgentState::Working), _) => "working",
+                        _ => "idle",
+                    };
+                    let since = format!("{doing} {}", ago(p.state_since.elapsed().as_secs()));
+                    let sw = since.chars().count() as u16;
+                    let room = side.saturating_sub(4).saturating_sub(sw + 1) as usize;
+                    buf.set_stringn(3, y, short_loc(app, &p.loc), room, text);
+                    if sw + 10 < side {
+                        buf.set_string(side.saturating_sub(sw + 1), y, &since, base.fg(t.dim));
+                    }
                 }
+            }
+            Row::AgentGroup(title) => {
+                buf.set_stringn(1, y, &title, side.saturating_sub(2) as usize, dim.add_modifier(Modifier::BOLD));
             }
         }
     }

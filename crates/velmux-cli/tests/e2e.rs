@@ -1121,6 +1121,35 @@ fn old_parked_work_is_flagged_and_discarded_from_the_repos_menu() {
 }
 
 #[test]
+fn the_agents_view_puts_what_needs_you_first_then_groups_the_rest() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    drop(env.attach(&api));
+    let ui = env.attach(&app);
+    // A Claude in each repo's checkout.
+    ui.prefix("a");
+    ui.claude_id();
+    ui.click_on("api", false);
+    ui.wait_for("api › base");
+    ui.send(b"a");
+    ui.claude_id();
+    ui.prefix("g");
+    ui.wait_for("APP");
+    ui.wait_for("API");
+    assert!(!ui.screen().contains("NEEDS YOU"));
+    // api's asks for permission: it moves up, under NEEDS YOU, saying for how long.
+    let ask = env.root.join("ask.ans");
+    std::fs::write(&ask, "Bash command\n  rm -rf dist\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n").unwrap();
+    ui.line(&format!("show {}", ask.display()));
+    ui.wait_for("NEEDS YOU");
+    ui.wait_for("blocked");
+    let (needs, apps) = (ui.find("NEEDS YOU").unwrap().1, ui.find("APP").unwrap().1);
+    let api_row = ui.find("api › base").unwrap().1;
+    assert!(needs < api_row && api_row < apps, "the blocked one first:\n{}", ui.screen());
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

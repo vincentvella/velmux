@@ -106,6 +106,8 @@ pub struct Pane {
     /// Foreground program and its working directory, for the label.
     pub fg: detect::Foreground,
     pub state: Option<AgentState>,
+    /// When `state` last changed (how long it's been blocked, working…).
+    pub state_since: Instant,
     idle_streak: u8,
     /// Agent finished while the pane wasn't focused.
     pub unseen_done: bool,
@@ -312,6 +314,7 @@ impl Pane {
             agent: None,
             fg: detect::Foreground::default(),
             state: None,
+            state_since: Instant::now(),
             idle_streak: 0,
             unseen_done: false,
             last_output: Instant::now(),
@@ -483,6 +486,9 @@ impl Pane {
         }
         let changed = agent != self.agent || state != self.state || fg_changed;
         self.agent = agent;
+        if state != self.state {
+            self.state_since = Instant::now();
+        }
         self.state = state;
         changed
     }
