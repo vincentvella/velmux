@@ -1,6 +1,12 @@
+import type { Metadata } from 'next';
 import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
 import { Inter } from 'next/font/google';
+
+// Absolute URLs for link previews (og:image), instead of localhost.
+export const metadata: Metadata = {
+  metadataBase: new URL('https://velmux.com'),
+};
 
 const inter = Inter({
   subsets: ['latin'],
