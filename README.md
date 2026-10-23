@@ -3,7 +3,7 @@
 **A terminal workspace for running many coding agents at once — on warm git
 worktrees that never go cold.**
 
-![velmux: two repos with claimed slots (a Claude working, one blocked on a permission prompt, one idle), PR status, parked work and a scratch session](docs/screenshots/overview.svg)
+![velmux: a workstream across two repos, claimed slots (a Claude working, one blocked on a permission prompt, one idle), PR status, parked work and a scratch session](docs/screenshots/overview.svg)
 
 Parallel agents need parallel checkouts. The usual answer, a fresh worktree per
 task, pays for a cold `install` every time and leaves a trail of abandoned
@@ -21,6 +21,9 @@ caches and all kept warm. Claiming one takes about a second.
 - **Agents that manage their own worktrees.** Start a Claude in your repo; it
   plans there, claims a slot on its own branch when it's ready to change code,
   and hands it back when it's done.
+- **Workstreams across repos.** Group slots from several repos (an API change
+  and the app that uses it) as one piece of work, with a place where one agent
+  reaches every one of them, and release it all together when it's done.
 - **Every agent at a glance.** One sidebar for every repo, slot and session, with
   each agent's state: working, blocked on you, finished. Desktop notifications
   (and a sound) when one needs you.
@@ -54,8 +57,9 @@ Then press `ctrl+b a` to start a Claude in your repo, and ask it for something.
 [Getting started](docs/getting-started.md) covers the rest, including the
 ⌘ shortcuts for Ghostty.
 
-Runs on macOS and Linux. Works with any agent CLI, and knows Claude Code,
-Codex, Gemini CLI and opencode well.
+Runs on macOS and Linux. Works with any agent CLI: it knows Claude Code, Codex,
+Gemini CLI and opencode well, and follows and resumes 15 more (Copilot, Cursor
+Agent, Droid, Qwen Code, Kimi, pi…). See [Agents](docs/agents.md).
 
 ## Documentation
 

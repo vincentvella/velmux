@@ -3,10 +3,12 @@ import { Install } from '@/components/install';
 
 const features = [
   ['Agents that manage their own worktrees', "Start a Claude in your repo; it plans there, claims a slot on its own branch when it's ready to change code, and hands it back when it's done."],
+  ['Workstreams across repos', 'Group slots from several repos, like an API change and the app that uses it, as one piece of work. One agent there reaches every slot, and it all releases together.'],
   ['Every agent at a glance', 'One sidebar for every repo, slot and session, with each agent’s state: working, blocked on you, finished. A notification and a sound when one needs you.'],
   ['Nothing lost', 'Hand a slot back mid-task and its work is parked, ready to resume, Claude conversation included. Quit, crash or reboot and every pane comes back, scrollback and all.'],
   ['Slots that stay healthy', 'Your checkout fast-forwards on its own; see which slots fell behind, sync them in one step, and give each its own ports.'],
   ['Pull requests in the loop', "PR and CI status on every slot: open it, check it, and hand failing checks straight to the slot's Claude."],
+  ['The agents you already use', 'Claude Code, Codex, Gemini CLI and opencode are followed closely; 15 more, from Copilot to pi, are tracked and resumed after a restart.'],
   ['A proper multiplexer', 'Tabs, splits, copy mode, mouse, themes, ⌘ shortcuts, conversation search, and live restarts that keep everything running.'],
 ];
 
@@ -41,7 +43,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <Shot name="overview" alt="velmux: two repos with claimed slots (a Claude working, one blocked on a permission prompt, one idle), PR status, parked work and a scratch session" />
+      <Shot name="overview" alt="velmux: a workstream across two repos, claimed slots (a Claude working, one blocked on a permission prompt, one idle), PR status, parked work and a scratch session" />
 
       <section className="my-12 grid gap-8 md:grid-cols-2 md:items-start">
         <p className="text-lg leading-relaxed text-fd-muted-foreground">
@@ -62,7 +64,7 @@ export default function HomePage() {
       </section>
 
       <h2 className="mb-6 text-2xl font-semibold">What you get</h2>
-      <section className="mb-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="mb-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {features.map(([title, body]) => (
           <div key={title} className="rounded-xl border bg-fd-card p-5">
             <h3 className="mb-2 font-semibold">{title}</h3>
@@ -80,9 +82,9 @@ export default function HomePage() {
       <p className="text-sm text-fd-muted-foreground">
         Runs on macOS and Linux. Works with any agent CLI, and knows{' '}
         <Link href="/docs/agents" className="underline">
-          Claude Code, Codex, Gemini CLI and opencode
+          19 of them
         </Link>{' '}
-        well. Free and open source (MIT).
+        by name. Free and open source (MIT).
       </p>
     </main>
   );
