@@ -87,5 +87,7 @@ velmux keys --ghostty --install
 
 ## Next
 
+- [Working with velmux](workflow.md): a day with several agents going, from
+  starting work to putting it away
 - [Using velmux](using-velmux.md): the sidebar, tabs, keys, mouse, copying, themes
 - [Working in slots](slots.md): parked work, syncing, ports, pull requests

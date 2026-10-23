@@ -10,7 +10,7 @@ const docs = join(repo, 'docs');
 const out = new URL('../content/docs', import.meta.url).pathname;
 const github = 'https://github.com/vincentvella/velmux/blob/main';
 // Sidebar order; anything else follows alphabetically.
-const order = ['getting-started', 'using-velmux', 'slots', 'workstreams', 'agents', 'configuration', 'cli', 'how-it-works', 'changelog'];
+const order = ['getting-started', 'workflow', 'using-velmux', 'slots', 'workstreams', 'agents', 'configuration', 'cli', 'how-it-works', 'changelog'];
 // Pages from outside docs/: the repo's CHANGELOG.md, as /docs/changelog.
 const extra = { changelog: join(repo, 'CHANGELOG.md') };
 

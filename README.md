@@ -64,6 +64,7 @@ Agent, Droid, Qwen Code, Kimi, pi…). See [Agents](docs/agents.md).
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
+- [Working with velmux](docs/workflow.md): a day with several agents going
 - [Using velmux](docs/using-velmux.md): the sidebar, tabs, keys, mouse, copying, themes
 - [Working in slots](docs/slots.md): claiming, parked work, syncing, ports, pull requests
 - [Workstreams](docs/workstreams.md): slots from several repos, worked on together
