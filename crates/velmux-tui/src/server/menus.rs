@@ -126,6 +126,11 @@ impl App {
         let zoomed = view.is_some_and(|v| v.zoomed == Some(id));
         let split = view.is_some_and(|v| v.layout.leaves().len() > 1);
         let mut items: Vec<(&'static str, Action)> = vec![("split right", Action::SplitRight), ("split down", Action::SplitDown)];
+        // A second conversation beside this one.
+        items.push(("conversation to the right", Action::SplitConversation));
+        if crate::agents::ALL.iter().filter(|a| a.installed()).count() > 1 {
+            items.push(("agent to the right…", Action::SplitAgent(u8::MAX)));
+        }
         if zoomed {
             items.push(("unzoom", Action::Zoom));
         } else if split {

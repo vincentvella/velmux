@@ -12,6 +12,8 @@ What changed in each release of velmux. Each version links to its release
   from before velmux kept track, is only flagged, once per version, and in
   `velmux doctor`), and so are its instructions in Codex's, Gemini's and
   opencode's files.
+- **conversation to the right** and **agent to the right…** in a pane's menu:
+  a new conversation split beside the pane, right where it is.
 
 ## [0.10.0] - 2026-10-22
 

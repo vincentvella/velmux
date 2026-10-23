@@ -874,6 +874,31 @@ fn a_workstream_sums_up_its_prs_and_opens_them() {
 }
 
 #[test]
+fn a_conversation_to_the_right_starts_beside_the_pane() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    assert!(env.velmux(&repo, &["claim", "feat/side", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&repo);
+    ui.click_on("feat/side", false);
+    ui.wait_for("app › slot-1");
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.send(b"\x1b[<2;70;12M\x1b[<2;70;12m");
+    ui.wait_for("conversation to the right");
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("conversation to the right")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    // A Claude beside the shell, in the slot (you chose the spot), not the checkout.
+    ui.wait_for("FAKE-CLAUDE id=");
+    ui.wait_for("app › slot-1");
+    assert!(!ui.screen().contains("app › base"), "{}", ui.screen());
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

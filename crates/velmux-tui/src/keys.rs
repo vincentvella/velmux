@@ -36,6 +36,11 @@ pub enum Action {
     ClaimIntoWorkstream(u8),
     /// Open every PR of the workstream's slots in the browser.
     OpenWorkstreamPrs,
+    /// A new conversation split to the right of the focused pane, right
+    /// there (not in the checkout): with the configured agent, or with
+    /// agent N (in `agents::ALL`), or pick one (`u8::MAX`).
+    SplitConversation,
+    SplitAgent(u8),
     /// Update velmux (checking first if no update is known).
     Update,
     /// Sync every claimed slot that's behind the base.

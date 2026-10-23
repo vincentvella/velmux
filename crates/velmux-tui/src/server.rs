@@ -2439,6 +2439,33 @@ impl App {
             Action::NewShell => self.spawn_here(Kind::Shell, None),
             Action::NewEditor => self.spawn_here(Kind::Editor, None),
             Action::SplitRight => self.spawn_here(Kind::Shell, Some(Dir::Right)),
+            // From a pane's menu: where you are, since you chose the spot.
+            Action::SplitConversation => {
+                if let Some(loc) = self.current_loc() {
+                    self.spawn_with(loc, Kind::Agent, Some(Dir::Right), LaunchOpts::default());
+                }
+            }
+            Action::SplitAgent(n) => {
+                let Some(loc) = self.current_loc() else { return };
+                let installed: Vec<crate::agents::Agent> = crate::agents::ALL.into_iter().filter(|a| a.installed()).collect();
+                match n {
+                    u8::MAX => {
+                        let items: Vec<(&'static str, Action)> = installed
+                            .iter()
+                            .filter_map(|a| crate::agents::ALL.iter().position(|x| x == a).map(|i| (a.label(), Action::SplitAgent(i as u8))))
+                            .collect();
+                        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
+                        self.mode = Mode::Menu {
+                            selected: 0,
+                            context: Some(MenuContext { pane: self.focus, target: loc, parked: None, title: "agent to the right…".into(), items, at: self.menu_at.take().unwrap_or((side + 2, 2)) }),
+                        };
+                    }
+                    n => {
+                        let agent = crate::agents::ALL.get(n as usize).copied();
+                        self.spawn_with(loc, Kind::Agent, Some(Dir::Right), LaunchOpts { agent, ..LaunchOpts::default() });
+                    }
+                }
+            }
             Action::SplitDown => self.spawn_here(Kind::Shell, Some(Dir::Down)),
             Action::NextPane => self.cycle(1),
             Action::PrevPane => self.cycle(-1),

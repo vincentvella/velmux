@@ -131,7 +131,9 @@ Rebind anything in the [config](configuration.md#keys).
 
 Click a pane to focus it, a sidebar row to go there, a tab to switch, a slot's
 PR number (`#142✓`) to open the PR. Right-click a pane for its menu: **split
-right**, **split down**, **zoom**, **copy mode**, **close pane** (in an app that
+right**, **split down**, **conversation to the right** (or **agent to the
+right…**, which starts right there, beside the pane), **zoom**, **copy mode**,
+**close pane** (in an app that
 takes the mouse itself, like vim, right-click its title bar instead; agents'
 panes always give the menu). Drag a
 divider to resize, or the sidebar's edge to make it wider or narrower (it
