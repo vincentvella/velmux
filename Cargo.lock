@@ -1800,7 +1800,7 @@ dependencies = [
 
 [[package]]
 name = "velmux-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "velmux-pool"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1826,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "velmux-tui"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "crossterm",
