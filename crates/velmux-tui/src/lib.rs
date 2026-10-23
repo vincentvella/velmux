@@ -71,6 +71,45 @@ pub fn claim_into(pane: u64, branch: Option<String>, repo: Option<String>, works
     })
 }
 
+/// A workstream as `velmux workstream` shows it: its name, its folder, and
+/// each slot (repo, slot id, path, and the slot's state from its pool).
+#[derive(Debug, serde::Serialize)]
+pub struct WorkstreamInfo {
+    pub name: String,
+    pub folder: std::path::PathBuf,
+    pub slots: Vec<WorkstreamSlot>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WorkstreamSlot {
+    pub repo: String,
+    pub base: std::path::PathBuf,
+    #[serde(flatten)]
+    pub slot: velmux_pool::SlotView,
+}
+
+/// Every workstream, as velmux last saved them (it saves on every change).
+pub fn workstreams() -> anyhow::Result<Vec<WorkstreamInfo>> {
+    let Some(saved) = session::load() else { return Ok(Vec::new()) };
+    let env = velmux_pool::Env::from_process()?;
+    Ok(saved
+        .folders
+        .into_iter()
+        .filter_map(|f| {
+            let members = f.members?;
+            let slots = members
+                .into_iter()
+                .filter_map(|m| {
+                    let pool = velmux_pool::Pool::discover(env.clone(), &m.base).ok()?;
+                    let slot = pool.view(&m.slot).ok()?;
+                    Some(WorkstreamSlot { repo: pool.name.clone(), base: m.base, slot })
+                })
+                .collect();
+            Some(WorkstreamInfo { name: f.id, folder: f.path, slots })
+        })
+        .collect())
+}
+
 /// `velmux release` inside a pane: release its slot, moving the pane back to base.
 pub fn release_for_pane(pane: u64) -> anyhow::Result<String> {
     let reply = client::request(proto::ClientMsg::ReleaseFor { pane })?;

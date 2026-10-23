@@ -559,6 +559,16 @@ fn a_workstream_groups_slots_from_several_repos() {
     let api_slot = env.slot(&api, "slot-1");
     assert_eq!(api_slot["status"], "inuse");
     env.until("the folder to link the api's slot too", || std::fs::read_link(dir.join("api")).is_ok());
+    // `velmux workstream`: from anywhere by name (JSON for scripts)…
+    env.until("velmux workstream to list both slots", || {
+        let w = env.json(&app, &["workstream", "checkout", "--json"]);
+        let slots = w["slots"].as_array().cloned().unwrap_or_default();
+        let has = |repo: &str, branch: &str| slots.iter().any(|s| s["repo"] == repo && s["branch"] == branch);
+        w["name"] == "checkout" && has("app", "feat/a") && has("api", "feat/b")
+    });
+    // …and, inside it, the one you're in.
+    ui.line("velmux workstream");
+    ui.wait_for("checkout  (");
     // A shell open in one of its slots…
     ui.click_on("feat/a", false);
     ui.wait_for("app › slot-1");

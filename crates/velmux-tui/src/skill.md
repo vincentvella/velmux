@@ -54,6 +54,8 @@ Work that spans repos (an API change and the app that uses it) can be a
 (`$VELMUX_WORKSTREAM`), each subfolder of your folder is a link to one of its
 slots, named after the repo, each a worktree on its own branch.
 
+- `velmux workstream` lists its slots (repo, branch, path, dirty, ↓ behind /
+  ↑ ahead the base; `--json` for the details).
 - Make changes inside those subfolders, and commit in each repo's own git.
 - To bring in another repo: `velmux claim <short-branch-name> --repo <repo>`
   (its name in velmux, or its path). The slot is linked here as `<repo>/`, and

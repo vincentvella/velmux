@@ -47,6 +47,13 @@ code in those subfolders and commit in each repo's own git. Panes there get
   checkout, `velmux claim <branch> --workstream <name>` claims a slot into a
   workstream (making it if needed) instead of moving there.
 
+## From the command line
+
+`velmux workstream` shows the one you're in (or `velmux workstream <name>`, or
+all of them): each slot's repo, slot, branch, path, and how it stands (`*`
+uncommitted changes, `↓` behind / `↑` ahead its base). `--json` for scripts and
+agents.
+
 ## Done
 
 Right-click the workstream: **release workstream…** hands back every slot in

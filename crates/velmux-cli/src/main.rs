@@ -39,6 +39,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Workstreams (slots from several repos, worked on together): the one
+    /// you're in (`$VELMUX_WORKSTREAM`), or `name`, else all of them.
+    Workstream {
+        name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Park a slot's work (stash if dirty) and return it to the pool clean.
     Release {
         /// Slot id; defaults to the slot containing the current directory.
@@ -185,6 +192,7 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Claim { workstream: Some(_), .. }) => bail!("--workstream works inside velmux (a pane), where workstreams live"),
+        Some(Cmd::Workstream { name, json }) => return workstream(name, json),
         Some(cmd) => cmd,
     };
     let pool = Pool::discover(Env::from_process()?, &cwd)?;
@@ -291,7 +299,7 @@ fn run() -> Result<()> {
             pool.gc(&report)?;
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -595,6 +603,48 @@ fn print_parked(parked: &[ParkedView]) {
         };
         println!("  {:<28} {:<20} {age}, from {}", p.branch, p.what(), p.slot);
     }
+}
+
+/// `velmux workstream [name] [--json]`.
+fn workstream(name: Option<String>, json: bool) -> Result<()> {
+    let all = velmux_tui::workstreams()?;
+    let wanted = name.or_else(|| std::env::var("VELMUX_WORKSTREAM").ok().filter(|n| !n.is_empty()));
+    let shown: Vec<&velmux_tui::WorkstreamInfo> = match &wanted {
+        Some(n) => match all.iter().find(|w| &w.name == n) {
+            Some(w) => vec![w],
+            None => bail!("no workstream {n:?}{}", if all.is_empty() { String::new() } else { format!(" (there's {})", all.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", ")) }),
+        },
+        None => all.iter().collect(),
+    };
+    if json {
+        // One workstream asked for: just it; else the list.
+        let v = match (&wanted, shown.as_slice()) {
+            (Some(_), [w]) => serde_json::to_value(w)?,
+            _ => serde_json::to_value(&shown)?,
+        };
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    if shown.is_empty() {
+        eprintln!("no workstreams (start one in velmux: the + on its Workstreams heading)");
+    }
+    for w in shown {
+        println!("{}  ({})", w.name, w.folder.display());
+        if w.slots.is_empty() {
+            println!("  no slots yet");
+        }
+        for s in &w.slots {
+            let mut marks = if s.slot.dirty { " *".to_string() } else { String::new() };
+            if s.slot.behind > 0 {
+                marks.push_str(&format!(" ↓{}", s.slot.behind));
+            }
+            if s.slot.ahead > 0 {
+                marks.push_str(&format!(" ↑{}", s.slot.ahead));
+            }
+            println!("  {:<12} {:<7} {}{marks}  {}", s.repo, s.slot.id, s.slot.branch.as_deref().unwrap_or("-"), s.slot.path.display());
+        }
+    }
+    Ok(())
 }
 
 fn print_table(pool: &Pool, slots: &[SlotView]) {
