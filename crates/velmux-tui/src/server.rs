@@ -2473,6 +2473,13 @@ impl App {
                     self.say(format!("forgot {}; its branches stay parked in their repos", gone.name));
                 }
             }
+            Action::ContextMenu => self.open_focused_menu(),
+            Action::PlaceMenu => {
+                if let Some(loc) = self.current_loc() {
+                    let at = self.menu_at.take().unwrap_or((ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols) + 2, 2));
+                    self.open_place_menu(loc, at);
+                }
+            }
             Action::SplitConversation => {
                 if let Some(loc) = self.current_loc() {
                     self.spawn_with(loc, Kind::Agent, Some(Dir::Right), LaunchOpts::default());

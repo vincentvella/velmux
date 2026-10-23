@@ -28,6 +28,13 @@ impl App {
             ui::Row::Agent { pane, .. } => self.panes[pane].loc.clone(),
             _ => return,
         };
+        self.open_place_menu(target, (x, y));
+    }
+
+    /// A place's menu (a repo's checkout, a slot, a workstream, a scratch
+    /// session), at `at`.
+    pub(super) fn open_place_menu(&mut self, target: Loc, at: (u16, u16)) {
+        let (x, y) = at;
         let folder = self.projects[target.project].is_unclassified();
         let items: Vec<(&'static str, Action)> = match (folder, target.slot.is_some()) {
             // The space: start work (Claude plans in the base and claims its
@@ -146,6 +153,8 @@ impl App {
             items.push(("zoom", Action::Zoom));
         }
         items.extend([("copy mode", Action::CopyMode), ("close pane", Action::ClosePane)]);
+        // And the place it's in (its slot's, repo's or workstream's menu).
+        items.push((self.intern(&format!("{}…", self.loc_name(&loc))), Action::PlaceMenu));
         self.focus = Some(id);
         self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { pane: Some(id), target: loc, parked: None, title, items, at: (x, y) }) };
     }
@@ -217,5 +226,17 @@ impl App {
             _ => {}
         }
         used
+    }
+
+    /// `<prefix> space`: the menu for what's focused, from the keyboard: the
+    /// focused pane's (it leads on to its place's), else the place's.
+    pub(super) fn open_focused_menu(&mut self) {
+        let side = ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols);
+        let at = (side + 2, 2);
+        match (self.focus, self.current_loc()) {
+            (Some(id), _) => self.open_pane_menu(id, at.0, at.1),
+            (None, Some(loc)) => self.open_place_menu(loc, at),
+            (None, None) => self.mode = Mode::Menu { selected: 0, context: None },
+        }
     }
 }

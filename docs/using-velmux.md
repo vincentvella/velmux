@@ -88,6 +88,7 @@ press next:
 | `alt+1`–`9`, `,` / `.` | place N, previous / next place |
 | `o` | jump to the next agent that needs you |
 | `X` | remove this place (or release it, in a slot) |
+| `space` | the menu for what's focused: the pane's (which leads to its place's), else the place's |
 | `b` | hide / show the sidebar |
 | `<` / `>` | sidebar narrower / wider |
 | `[` / `]` | copy mode / the pane's whole history in `$EDITOR` |

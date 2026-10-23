@@ -991,6 +991,34 @@ fn a_released_workstream_comes_back_whole() {
 }
 
 #[test]
+fn prefix_space_opens_the_menu_for_whats_focused() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    assert!(env.velmux(&repo, &["claim", "feat/keys", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&repo);
+    ui.click_on("feat/keys", false);
+    ui.wait_for("app › slot-1");
+    // An empty place: its own menu.
+    ui.prefix(" ");
+    ui.wait_for("release slot");
+    ui.send(b"\x1b");
+    ui.wait_gone_text("release slot");
+    // A pane: the pane's menu, whose last item is its place's.
+    ui.send(b"c");
+    ui.wait_for("$");
+    ui.prefix(" ");
+    ui.wait_for("split right");
+    let menu = ui.screen();
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap();
+    for _ in 0..at {
+        ui.send(b"j");
+    }
+    ui.send(b"\r");
+    ui.wait_for("release slot");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

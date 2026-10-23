@@ -11,6 +11,9 @@ What changed in each release of velmux. Each version links to its release
   (`◌ checkout · 2 branches`), and **resume workstream** brings it all back:
   its branches claimed back into it with their work and conversations, and its
   own conversation too.
+- `<prefix> space` opens the menu for what's focused, from the keyboard: the
+  focused pane's (whose last item opens its slot's, repo's or workstream's), or
+  the place's when there's no pane.
 
 ## [0.12.0] - 2026-10-23
 

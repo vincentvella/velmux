@@ -40,6 +40,10 @@ pub enum Action {
     /// there (not in the checkout): with the configured agent, or with
     /// agent N (in `agents::ALL`), or pick one (`u8::MAX`).
     SplitConversation,
+    /// The menu for what's focused (the pane's, else the place's): `<prefix> space`.
+    ContextMenu,
+    /// The current place's menu (from a pane's).
+    PlaceMenu,
     /// A parked workstream (N in `App::parked_workstreams`): bring it back, or forget it.
     ResumeParkedWorkstream(u8),
     ForgetParkedWorkstream(u8),
@@ -182,6 +186,7 @@ const NAMES: &[(&str, Action)] = &[
     ("last_tab", Action::LastTab),
     ("tab", Action::Tab(0)),
     ("toggle_sidebar", Action::ToggleSidebar),
+    ("context_menu", Action::ContextMenu),
     ("sidebar_wider", Action::SidebarWider),
     ("sidebar_narrower", Action::SidebarNarrower),
     ("location_picker", Action::LocationPicker),
@@ -290,6 +295,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (RestartServer, &["prefix+ctrl+r"]),
         (Redraw, &["prefix+ctrl+l"]),
         (Menu, &["prefix+m"]),
+        (ContextMenu, &["prefix+space"]),
         (RemovePlace, &["prefix+X", "super+shift+backspace"]),
         (SidebarView, &["prefix+g"]),
         (ThemePicker, &["prefix+ctrl+t"]),
@@ -632,6 +638,7 @@ impl Keymap {
                 "velmux",
                 vec![
                     (one(Menu), "menu"),
+                    (one(ContextMenu), "menu for what's focused"),
                     (one(Attention), "next waiting"),
                     (one(ToggleSidebar), "sidebar"),
                     (vec![SidebarNarrower, SidebarWider], "sidebar narrower / wider"),
