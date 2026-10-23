@@ -381,6 +381,8 @@ pub struct App {
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
     menu_at: Option<(u16, u16)>,
+    /// When each repo's slots were last checked in the background.
+    refreshed: HashMap<usize, Instant>,
     /// Workstreams released with work still parked (see `workstream`).
     pub parked_workstreams: Vec<session::ParkedWorkstream>,
     /// Conversations' transcripts (by session), and Claude's titles in them
@@ -638,6 +640,7 @@ impl App {
             claim_into: HashMap::new(),
             interned: HashMap::new(),
             menu_at: None,
+            refreshed: HashMap::new(),
             parked_workstreams: Vec::new(),
             transcripts: Default::default(),
             ai_titles: Default::default(),
@@ -1615,7 +1618,10 @@ impl App {
         if self.refreshing {
             return;
         }
-        self.refreshing = true;
+        // git status in a big repo takes a few hundred ms per slot: check the
+        // repos you're looking at, or that have an agent working, every time
+        // (every 2s); the rest every 30s, and any whose fetch is due.
+        let hot = self.hot_projects();
         let mut work = Vec::new();
         for (i, project) in self.projects.iter().enumerate() {
             let Some(pool) = project.pool.clone() else { continue };
@@ -1624,11 +1630,20 @@ impl App {
             }
             let every = project.cfg.fetch_every;
             let due = every > 0 && self.fetched.get(&i).is_none_or(|t| t.elapsed() >= Duration::from_secs(every * 60));
+            let stale = self.refreshed.get(&i).is_none_or(|t| t.elapsed() >= Duration::from_secs(30));
+            if !(due || stale || hot.contains(&i)) {
+                continue;
+            }
             if due {
                 self.fetched.insert(i, Instant::now());
             }
+            self.refreshed.insert(i, Instant::now());
             work.push((i, pool, due));
         }
+        if work.is_empty() {
+            return;
+        }
+        self.refreshing = true;
         let (tx, gen) = (self.events.clone(), self.slots_gen);
         std::thread::spawn(move || {
             let fresh = work
@@ -1641,6 +1656,21 @@ impl App {
                 .collect();
             let _ = tx.send(Event::Pools { gen, fresh });
         });
+    }
+
+    /// The repos worth checking every time: the one you're in (or, in a
+    /// workstream, each of its repos) and any with an agent working.
+    fn hot_projects(&self) -> Vec<usize> {
+        let mut hot: Vec<usize> = self.panes.iter().filter(|p| p.state == Some(crate::detect::AgentState::Working)).map(|p| p.loc.project).collect();
+        if let Some(loc) = self.current_loc() {
+            hot.push(loc.project);
+            if self.is_workstream(&loc) {
+                hot.extend(self.members(&loc).iter().map(|m| m.project));
+            }
+        }
+        hot.sort_unstable();
+        hot.dedup();
+        hot
     }
 
     /// Repaint everything, and squeeze every pane a column narrower for a

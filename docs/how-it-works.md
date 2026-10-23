@@ -48,3 +48,12 @@ from each pane's foreground process and the bottom of its screen.
 - `crates/velmux-pool`: pools, slots, git, dependencies, parked work, PRs (via `gh`), Claude linking
 - `crates/velmux-tui`: the server, panes, rendering, and the client
 - `crates/velmux-cli`: the `velmux` binary
+
+## Keeping up
+
+The sidebar's slot states (branch, uncommitted changes, behind / ahead the
+base) come from git. Checking a slot in a big repo takes a few hundred
+milliseconds, so velmux checks the repo you're in (and, in a workstream, its
+repos) and any repo with an agent working every 2 seconds, and the rest every 30.
+Fetches run on their own schedule (`fetch_every`), pull requests about once a
+minute.

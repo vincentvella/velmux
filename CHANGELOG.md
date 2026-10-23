@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Changed
+
+- Lighter in the background: slots are checked every 2s only in the repo
+  you're in (or your workstream's repos) and repos with an agent working; the
+  rest every 30s. In big repos (a few hundred ms of `git status` per slot) this
+  was close to a CPU core, all the time.
+
 ## [0.14.0] - 2026-10-23
 
 ### Added
