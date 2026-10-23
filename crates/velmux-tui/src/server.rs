@@ -286,6 +286,7 @@ pub enum Confirm {
     RemoveFolder(Loc),
     RemoveRepo(usize),
     ReleaseWorkstream(Loc),
+    DiscardOldParked(usize),
     Quit,
 }
 
@@ -2479,6 +2480,16 @@ impl App {
                 }
             }
             Action::ContextMenu => self.open_focused_menu(),
+            Action::DiscardOldParked => {
+                let Some(project) = self.current_loc().map(|l| l.project) else { return };
+                let now = velmux_pool::state::now();
+                let old: Vec<String> = self.projects[project].parked.iter().filter(|p| p.is_old(now)).map(|p| p.branch.clone()).collect();
+                if old.is_empty() {
+                    return self.toast("no parked work older than 30 days");
+                }
+                let label = format!("discard the parked changes on {}? commits on the branches are kept", old.join(", "));
+                self.mode = Mode::Confirm { label, action: Confirm::DiscardOldParked(project) };
+            }
             Action::PlaceMenu => {
                 if let Some(loc) = self.current_loc() {
                     let at = self.menu_at.take().unwrap_or((ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols) + 2, 2));
@@ -3169,6 +3180,14 @@ impl App {
                 self.refresh_slots();
             }
             Confirm::ReleaseWorkstream(loc) => self.release_workstream(loc),
+            Confirm::DiscardOldParked(project) => {
+                let Some(pool) = self.projects[project].pool.clone() else { return };
+                match pool.discard_older_than(velmux_pool::OLD_DAYS) {
+                    Ok(gone) => self.say(format!("discarded the parked changes on {} (the branches are kept)", gone.join(", "))),
+                    Err(e) => self.say(format!("discard failed: {e:#}")),
+                }
+                self.refresh_slots();
+            }
             Confirm::RemoveFolder(loc) if self.is_workstream(&loc) => {
                 let name = loc.slot.clone().unwrap_or_default();
                 self.remove_workstream(loc);

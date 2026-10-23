@@ -90,6 +90,8 @@ pub enum Action {
     /// Resume / discard the parked branch a right-click menu was opened on.
     ResumeParked,
     DiscardParked,
+    /// Discard a repo's parked work older than `OLD_DAYS` days (asks first).
+    DiscardOldParked,
     /// Copy the current place's folder path.
     CopyPath,
     NewShell,

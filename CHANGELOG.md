@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- Parked work older than 30 days is flagged (its age in the warning colour),
+  and the repo's menu can discard it all at once (**discard parked work older
+  than 30 days…**; commits stay on the branches). `velmux gc
+  --parked-older-than <days>` does it from the command line.
+
 ## [0.13.0] - 2026-10-23
 
 ### Added

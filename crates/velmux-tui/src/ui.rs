@@ -349,7 +349,9 @@ fn draw_parked_row(app: &App, project: usize, parked: &velmux_pool::ParkedView, 
         parked.branch.clone()
     };
     buf.set_string(label_x, y, &shown, Style::new().fg(t.text2).add_modifier(Modifier::ITALIC));
-    buf.set_string(right_edge.saturating_sub(right_w as u16), y, &right, dim);
+    // Parked a long while: worth resuming, or discarding (the repo's menu).
+    let style = if parked.is_old(now) { Style::new().fg(t.alert) } else { dim };
+    buf.set_string(right_edge.saturating_sub(right_w as u16), y, &right, style);
 }
 
 /// `◌ checkout   2 branches · 3h`: a released workstream with work parked.

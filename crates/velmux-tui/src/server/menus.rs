@@ -59,6 +59,10 @@ impl App {
                 if p.slots.iter().any(|s| s.status == Status::InUse && s.behind > 0) {
                     items.insert(items.len() - 2, ("sync all slots", Action::SyncAll));
                 }
+                let now = velmux_pool::state::now();
+                if p.parked.iter().any(|w| w.is_old(now)) {
+                    items.insert(items.len() - 2, ("discard parked work older than 30 days…", Action::DiscardOldParked));
+                }
                 items
             }
             // A slot: work on what's already there, get it reviewed, hand it back.

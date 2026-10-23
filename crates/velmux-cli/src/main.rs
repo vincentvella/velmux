@@ -82,8 +82,13 @@ enum Cmd {
     Path { slot: String },
     /// Open a slot in your editor (`editor` in config, else $VISUAL / $EDITOR).
     Open { slot: Option<String> },
-    /// Prune dead worktrees and recreate missing slots.
-    Gc,
+    /// Prune dead worktrees and recreate missing slots; with
+    /// `--parked-older-than <days>`, also discard parked work that old
+    /// (its stashed changes; commits stay on the branch).
+    Gc {
+        #[arg(long, value_name = "DAYS")]
+        parked_older_than: Option<u64>,
+    },
     /// Import a herdr session: workspaces in git repos become velmux layouts.
     ImportHerdr {
         /// herdr session file (default: ~/.config/herdr/session.json).
@@ -295,8 +300,13 @@ fn run() -> Result<()> {
                 bail!("editor exited with {status}");
             }
         }
-        Cmd::Gc => {
+        Cmd::Gc { parked_older_than } => {
             pool.gc(&report)?;
+            if let Some(days) = parked_older_than {
+                for branch in pool.discard_older_than(days)? {
+                    eprintln!("discarded the parked changes on {branch} (the branch is kept)");
+                }
+            }
             print_table(&pool, &pool.status()?);
         }
         Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),

@@ -1094,6 +1094,33 @@ fn a_workstream_pushes_its_branches_for_prs() {
 }
 
 #[test]
+fn old_parked_work_is_flagged_and_discarded_from_the_repos_menu() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/stale", "--no-fetch", "--no-install"]).status.success());
+    let slot = env.slot(&app, "slot-1");
+    env.run_in(Path::new(slot["path"].as_str().unwrap()), "echo wip > wip.txt");
+    assert!(env.velmux(&app, &["release", "slot-1"]).status.success());
+    // Parked 40 days ago.
+    let state = env.root.join("pools/app/pool.json");
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    v["parked"][0]["parked_at"] = serde_json::json!(now - 40 * 86400);
+    std::fs::write(&state, v.to_string()).unwrap();
+    let ui = env.attach(&app);
+    ui.wait_for("◌ feat/stale");
+    ui.wait_for("40d");
+    // The repo's menu offers to clear it out.
+    ui.click_on("app", true);
+    ui.click_on("discard parked work older", false);
+    ui.wait_for("y yes");
+    ui.send(b"y");
+    ui.wait_gone_text("◌ feat/stale");
+    assert!(env.json(&app, &["parked", "--json"]).as_array().unwrap().is_empty());
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

@@ -94,6 +94,11 @@ impl ParkedView {
         parts.join(" · ")
     }
 
+    /// Parked more than [`OLD_DAYS`] days ago.
+    pub fn is_old(&self, now: u64) -> bool {
+        now.saturating_sub(self.parked_at) > OLD_DAYS * 86400
+    }
+
     /// How long ago it was parked: `now`, `5m`, `3h`, `2d`.
     pub fn age(&self, now: u64) -> String {
         let s = now.saturating_sub(self.parked_at);
@@ -105,6 +110,9 @@ impl ParkedView {
         }
     }
 }
+
+/// Parked work older than this many days is flagged as old.
+pub const OLD_DAYS: u64 = 30;
 
 /// `slot-3` → 3 (0 for anything else).
 pub fn slot_number(id: &str) -> u16 {
@@ -548,6 +556,17 @@ impl Pool {
 
     /// Throw parked work away: drop its stashes and forget it. The branch (and
     /// any commits on it) is kept; delete it with git if you mean to.
+    /// Discard every parked branch's stashed changes parked more than `days`
+    /// ago (their commits stay on the branch). Returns the branches.
+    pub fn discard_older_than(&self, days: u64) -> Result<Vec<String>> {
+        let cutoff = now().saturating_sub(days * 86400);
+        let old: Vec<String> = self.parked()?.into_iter().filter(|p| p.parked_at < cutoff).map(|p| p.branch).collect();
+        for branch in &old {
+            self.discard(branch)?;
+        }
+        Ok(old)
+    }
+
     pub fn discard(&self, branch: &str) -> Result<usize> {
         let stashes = git::stashes_with(&self.base, &stash_marker(branch));
         // Highest index first, so dropping doesn't renumber the rest.

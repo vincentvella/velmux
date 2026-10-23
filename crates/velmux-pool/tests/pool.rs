@@ -332,3 +332,27 @@ fn adopts_a_pool_laid_out_beside_the_repo() {
     let claimed = pool.claim(&opts(Some("next")), &quiet).unwrap();
     assert_eq!(claimed.path, ws.join("app-pool-1"));
 }
+
+#[test]
+fn old_parked_work_can_be_discarded_in_one_go() {
+    let f = fixture("slots = 2\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    for branch in ["feat/old", "feat/new"] {
+        let slot = pool.claim(&opts(Some(branch)), &quiet).unwrap();
+        std::fs::write(slot.path.join("wip.txt"), "wip").unwrap();
+        pool.release(&slot.id, false).unwrap();
+    }
+    // Make feat/old look parked 40 days ago.
+    let state = pool.dir.join("pool.json");
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    for p in v["parked"].as_array_mut().unwrap() {
+        if p["branch"] == "feat/old" {
+            p["parked_at"] = serde_json::json!(velmux_pool::state::now() - 40 * 86400);
+        }
+    }
+    std::fs::write(&state, serde_json::to_string(&v).unwrap()).unwrap();
+    assert_eq!(pool.discard_older_than(30).unwrap(), vec!["feat/old".to_string()]);
+    let left: Vec<String> = pool.parked().unwrap().into_iter().map(|p| p.branch).collect();
+    assert_eq!(left, vec!["feat/new".to_string()]);
+}

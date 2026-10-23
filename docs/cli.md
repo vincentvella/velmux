@@ -20,6 +20,7 @@ velmux env [slot]                # the slot's ports etc. as exports: eval "$(vel
 velmux path <slot>               # a slot's path
 velmux open [slot]               # open it in your editor
 velmux gc                        # prune dead worktrees, recreate missing slots
+velmux gc --parked-older-than 30 # …and discard parked work older than that (branches stay)
 
 # Parked work
 velmux parked [--json]           # branches released with work on them

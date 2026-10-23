@@ -84,6 +84,11 @@ Claiming the branch by name does the same. **Discard** drops its stashed changes
 (the branch and its commits are kept). From the command line: `velmux parked`,
 `velmux discard <branch>`.
 
+Parked work older than 30 days shows its age in the warning colour; the repo's
+right-click menu then has **discard parked work older than 30 days…** to clear
+it all out at once (the branches and their commits stay), and
+`velmux gc --parked-older-than <days>` does the same from the command line.
+
 Commits made on a detached slot are kept on a `velmux/rescue/*` branch and parked
 like any other.
 
