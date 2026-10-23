@@ -95,6 +95,13 @@ fn main() {
                 print!("\x1b[H\x1b[2J\x1b[3J{}", std::fs::read_to_string(rest).unwrap_or_default().replace('\n', "\r\n"));
                 prompt = false;
             }
+            // `aititle <text>`: the title Claude gives a conversation itself.
+            "aititle" => {
+                let line = serde_json::json!({"type": "ai-title", "aiTitle": rest, "sessionId": id});
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&transcript).unwrap();
+                writeln!(f, "{line}").unwrap();
+                println!("titled {rest}");
+            }
             // `mouse`: turn mouse reporting on, as Claude Code does.
             "mouse" => print!("\x1b[?1000h\x1b[?1002h\x1b[?1006h"),
             "title" => {

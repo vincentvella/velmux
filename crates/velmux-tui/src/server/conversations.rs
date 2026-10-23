@@ -4,26 +4,61 @@
 use super::*;
 
 impl App {
-    /// Name each slot's Claude conversations after the slot: its name if you
-    /// gave it one, else its branch, as `/rename` would (the `/resume` picker,
-    /// and the prompt box once resumed). Ones you've named yourself are left
+    /// Name Claude conversations after where they are, as `/rename` would
+    /// (the `/resume` picker, and the prompt box once resumed): a slot's after
+    /// its name if you gave it one, else its branch; a workstream's after it;
+    /// one in a repo's checkout `<repo> · <Claude's own title>`. Ones you've named yourself are left
     /// alone: velmux only renames a conversation that has no name, or still
     /// has the one velmux gave it.
+    /// A session's transcript, found once and remembered.
+    fn transcript_of(&self, session: &str) -> Option<PathBuf> {
+        let mut known = self.transcripts.borrow_mut();
+        if let Some(path) = known.get(session).filter(|p| p.is_file()) {
+            return Some(path.clone());
+        }
+        let path = claude::transcript(&self.claude_dir, session)?;
+        known.insert(session.to_string(), path.clone());
+        Some(path)
+    }
+
+    /// Claude's own title for a transcript, read again only when it's changed.
+    fn ai_title_of(&self, file: &Path) -> Option<String> {
+        let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
+        let mut known = self.ai_titles.borrow_mut();
+        if let Some((_, title)) = known.get(file).filter(|(at, _)| *at == modified) {
+            return title.clone();
+        }
+        let title = claude::ai_title(file);
+        known.insert(file.to_path_buf(), (modified, title.clone()));
+        title
+    }
+
     pub(super) fn name_conversations(&mut self) {
         let mut todo = Vec::new();
         for pane in &self.panes {
-            let (Some(session), Some("claude"), Some(slot)) = (&pane.session, pane.agent, &pane.loc.slot) else { continue };
+            let (Some(session), Some("claude")) = (&pane.session, pane.agent) else { continue };
             let project = &self.projects[pane.loc.project];
-            if project.is_unclassified() || !project.cfg.name_conversations {
+            if !project.cfg.name_conversations {
                 continue;
             }
-            let name = self.views.get(&pane.loc).and_then(|v| v.name.clone());
-            let Some(want) = name.or_else(|| project.slots.iter().find(|s| &s.id == slot).and_then(|s| s.branch.clone())) else { continue };
             // Its transcript appears with its first message: until then, next time.
+            let Some(file) = self.transcript_of(session) else { continue };
+            let name = self.views.get(&pane.loc).and_then(|v| v.name.clone());
+            let want = match &pane.loc.slot {
+                // A workstream's: its name, as a slot's is its branch.
+                Some(id) if self.is_workstream(&pane.loc) => Some(name.unwrap_or_else(|| id.clone())),
+                Some(_) if project.is_unclassified() => None, // a scratch session's
+                Some(slot) => name.or_else(|| project.slots.iter().find(|s| &s.id == slot).and_then(|s| s.branch.clone())),
+                // In a repo's checkout, where many conversations plan different
+                // things: the repo, then Claude's own title once it has one.
+                None => Some(match self.ai_title_of(&file) {
+                    Some(title) => format!("{} · {title}", project.name()),
+                    None => project.name().to_string(),
+                }),
+            };
+            let Some(want) = want else { continue };
             if self.named.get(session) != Some(&want) {
-                if let Some(file) = claude::transcript(&self.claude_dir, session) {
-                    todo.push((session.clone(), file, want, self.named.get(session).cloned()));
-                }
+                todo.push((session.clone(), file, want, self.named.get(session).cloned()));
             }
         }
         if todo.is_empty() {

@@ -14,7 +14,9 @@ later go beside them, as `shop-pool-N`.
 ![a slot's right-click menu](screenshots/slot-menu.svg)
 
 Claude conversations in a slot are named after it, the way `/rename` would:
-its branch, or the name you gave the slot (**rename**, `<prefix> W`). That's
+its branch, or the name you gave the slot (**rename**, `<prefix> W`). One in a
+workstream is named after the workstream, and one in a repo's checkout
+`<repo> · <Claude's own title>` (just the repo until Claude has titled it). That's
 what the `/resume` picker and velmux's conversation search show, and a resumed
 Claude shows it in its prompt box. One you've named yourself keeps your name.
 Turn it off with `name_conversations = false`.

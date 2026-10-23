@@ -380,6 +380,10 @@ pub struct App {
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
     menu_at: Option<(u16, u16)>,
+    /// Conversations' transcripts (by session), and Claude's titles in them
+    /// (by transcript, with when it was last changed), for naming them.
+    transcripts: std::cell::RefCell<HashMap<String, PathBuf>>,
+    ai_titles: std::cell::RefCell<HashMap<PathBuf, (SystemTime, Option<String>)>>,
     /// A selection being dragged at a pane's edge: which way it scrolls, the
     /// pointer's cell, and when it last scrolled.
     select_edge: Option<(isize, u16, u16, Instant)>,
@@ -631,6 +635,8 @@ impl App {
             claim_into: HashMap::new(),
             interned: HashMap::new(),
             menu_at: None,
+            transcripts: Default::default(),
+            ai_titles: Default::default(),
             select_edge: None,
             named: crate::paths::state_dir().ok().and_then(|d| std::fs::read_to_string(d.join("conversation-names.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
             keymap,

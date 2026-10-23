@@ -462,12 +462,17 @@ fn a_slots_conversations_are_named_after_it_unless_you_named_them() {
     ui.prefix("a");
     let id = ui.claude_id();
     ui.line("say hello");
-    ui.line("claim feat/names");
-    ui.wait_for("@1");
     let transcript = || {
         std::fs::read_dir(env.claude_dir.join("projects")).unwrap().flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()).unwrap()
     };
     let title = || velmux_pool::claude::custom_title(&transcript());
+    // In the checkout: the repo, then with Claude's own title once it has one.
+    env.until("a checkout conversation to be named after its repo", || title().as_deref() == Some("app"));
+    ui.line("aititle Plan the login flow");
+    ui.wait_for("titled ");
+    env.until("Claude's title to join it", || title().as_deref() == Some("app · Plan the login flow"));
+    ui.line("claim feat/names");
+    ui.wait_for("@1");
     env.until("the conversation to be named after the branch", || title().as_deref() == Some("feat/names"));
     // Renaming the slot renames it too.
     ui.prefix("W");
@@ -620,6 +625,23 @@ fn slots_drag_into_a_workstream_and_leave_it() {
     env.until("the slot to be back with its repo", || {
         let (repos, slot) = (ui.find("REPOS"), ui.find("▣ feat/drag"));
         !ui.screen().contains("@1 app") && matches!((repos, slot), (Some((_, r)), Some((_, s))) if r < s)
+    });
+    // A conversation in the workstream is named after it.
+    ui.click_on("◇ dragged", false);
+    ui.wait_for("a workstream:");
+    ui.send(b"a");
+    let id = ui.claude_id();
+    ui.line("say hi");
+    env.until("its conversation to be named after the workstream", || {
+        std::fs::read_dir(env.claude_dir.join("projects"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|d| d.path().join(format!("{id}.jsonl")))
+            .find(|p| p.is_file())
+            .and_then(|t| velmux_pool::claude::custom_title(&t))
+            .as_deref()
+            == Some("dragged")
     });
 }
 

@@ -14,6 +14,9 @@ What changed in each release of velmux. Each version links to its release
   opencode's files.
 - **conversation to the right** and **agent to the right…** in a pane's menu:
   a new conversation split beside the pane, right where it is.
+- Claude conversations in a workstream are named after it, and ones in a
+  repo's checkout `<repo> · <Claude's own title>`, as slots' already are after
+  their branch.
 
 ## [0.10.0] - 2026-10-22
 
