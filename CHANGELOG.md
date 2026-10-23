@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-22
+
 ### Added
 
 - velmux keeps what it installed up to date: after an update, the Claude skill
@@ -224,7 +226,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/vincentvella/velmux/releases/tag/v0.11.0
 [0.10.0]: https://github.com/vincentvella/velmux/releases/tag/v0.10.0
 [0.9.2]: https://github.com/vincentvella/velmux/releases/tag/v0.9.2
 [0.9.1]: https://github.com/vincentvella/velmux/releases/tag/v0.9.1
