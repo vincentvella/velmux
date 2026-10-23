@@ -569,6 +569,7 @@ pub fn serve() -> Result<()> {
         }
         None => app.restore(),
     }
+    app.refresh_installed();
     let (mut last_detect, mut last_slots, mut last_render, mut last_history) =
         (Instant::now(), Instant::now(), Instant::now(), Instant::now());
     loop {
@@ -1798,6 +1799,25 @@ impl App {
     }
 
     // ---- mouse ----
+
+    /// After starting (a new velmux, often): bring the skill and agent
+    /// instructions velmux installed up to date. A skill you've changed is
+    /// only mentioned, once per velmux version.
+    fn refresh_installed(&mut self) {
+        let said = crate::skill::refresh(&crate::skill::user_path(&self.claude_dir));
+        let noted = crate::paths::state_dir().ok().map(|d| d.join("skill-noticed"));
+        let version = crate::update::CURRENT;
+        let already = noted.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).is_some_and(|v| v.trim() == version);
+        let said: Vec<String> = said.into_iter().filter(|l| !(already && l.contains("out of date"))).collect();
+        if said.iter().any(|l| l.contains("out of date")) {
+            if let Some(f) = noted {
+                let _ = std::fs::write(f, version);
+            }
+        }
+        if !said.is_empty() {
+            self.say(said.join(" · "));
+        }
+    }
 
     /// Where a new agent starts for `loc`: a repo's checkout, even from one of
     /// its slots (it plans there and claims a slot of its own); a folder, there.

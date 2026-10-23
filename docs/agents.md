@@ -64,4 +64,5 @@ Gemini CLI and opencode that's set up on your machine, adds velmux's
 instructions to the file it reads for every project (`~/.codex/AGENTS.md`,
 `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`), between
 `velmux:start` / `velmux:end` markers so your own text is left alone.
-`velmux skill uninstall` takes them out again.
+`velmux skill uninstall` takes them out again. After an update, velmux brings
+them up to date itself (the skill too, if you haven't changed it).

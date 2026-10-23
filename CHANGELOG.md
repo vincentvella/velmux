@@ -5,6 +5,14 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- velmux keeps what it installed up to date: after an update, the Claude skill
+  is refreshed if it's still as velmux wrote it (one you've changed, or one
+  from before velmux kept track, is only flagged, once per version, and in
+  `velmux doctor`), and so are its instructions in Codex's, Gemini's and
+  opencode's files.
+
 ## [0.10.0] - 2026-10-22
 
 ### Added

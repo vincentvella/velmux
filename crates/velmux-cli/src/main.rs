@@ -505,7 +505,9 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
         }
         Err(e) => line(Some(false), &format!("config doesn't parse: {e:#}"), "fix it, or run `velmux` and press <prefix> s to edit it"),
     }
-    if skills::installed(&env.claude_dir, base.as_deref()) {
+    if skills::freshness(&skills::user_path(&env.claude_dir)) == skills::Freshness::Changed {
+        line(None, "Claude skill is out of date (or changed by you)", "velmux skill install");
+    } else if skills::installed(&env.claude_dir, base.as_deref()) {
         line(Some(true), "Claude skill installed", "");
     } else {
         line(Some(false), "Claude skill not installed", "velmux skill install (teaches Claude to claim and release slots)");
