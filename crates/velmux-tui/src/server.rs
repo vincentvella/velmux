@@ -2361,6 +2361,11 @@ impl App {
                 let label = format!("branch for a slot in {} (into {})", self.projects[project].name(), ws.slot.clone().unwrap_or_default());
                 self.mode = Mode::Prompt { label, input: String::new(), purpose: PromptFor::ClaimInto { ws, project } };
             }
+            Action::SyncWorkstream | Action::PushWorkstream => match self.current_loc().filter(|l| self.is_workstream(l)) {
+                Some(ws) if action == Action::SyncWorkstream => self.sync_workstream(&ws),
+                Some(ws) => self.push_workstream(&ws),
+                None => self.say("go to a workstream first"),
+            },
             Action::OpenWorkstreamPrs => {
                 let Some(ws) = self.current_loc().filter(|l| self.is_workstream(l)) else { return };
                 let urls: Vec<String> = self.workstream_prs(&ws).iter().map(|p| p.url.clone()).filter(|u| !u.is_empty() && !u.chars().any(char::is_control)).collect();

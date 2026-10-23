@@ -437,4 +437,64 @@ impl App {
             self.save();
         }
     }
+
+    /// Sync every slot in the workstream that's behind its base (rebase or
+    /// merge, as each repo's config says), one job for all.
+    pub(super) fn sync_workstream(&mut self, ws: &Loc) {
+        let work: Vec<(Arc<Pool>, String)> = self
+            .members(ws)
+            .into_iter()
+            .filter_map(|m| {
+                let project = &self.projects[m.project];
+                let slot = project.slots.iter().find(|s| Some(&s.id) == m.slot.as_ref())?;
+                (slot.behind > 0).then(|| Some((project.pool.clone()?, slot.id.clone())))?
+            })
+            .collect();
+        if work.is_empty() {
+            return self.toast("every slot in it is up to date");
+        }
+        self.job_seq += 1;
+        let job = format!("sync {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("syncing {} slots", work.len())));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let results: Vec<String> = work.iter().map(|(pool, id)| pool.sync(id, &|_| {}).unwrap_or_else(|e| format!("{}/{id}: {e:#}", pool.name))).collect();
+            let _ = tx.send(Event::Synced { job, result: Ok(results.join(" · ")) });
+        });
+    }
+
+    /// Push every slot in the workstream that has no PR yet and open one for
+    /// each (in the browser, to finish), one job for all.
+    pub(super) fn push_workstream(&mut self, ws: &Loc) {
+        if !velmux_pool::gh::available() {
+            return self.say("install the GitHub CLI (gh) for PRs");
+        }
+        let work: Vec<(PathBuf, String)> = self
+            .members(ws)
+            .into_iter()
+            .filter_map(|m| {
+                let project = &self.projects[m.project];
+                let slot = project.slots.iter().find(|s| Some(&s.id) == m.slot.as_ref())?;
+                let branch = slot.branch.clone()?;
+                (!project.prs.contains_key(&branch)).then(|| (slot.path.clone(), branch))
+            })
+            .collect();
+        if work.is_empty() {
+            return self.toast("every slot in it has a PR");
+        }
+        self.job_seq += 1;
+        let job = format!("pr {}", self.job_seq);
+        self.jobs.push((job.clone(), format!("pushing {} branches", work.len())));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let results: Vec<String> = work
+                .iter()
+                .map(|(dir, branch)| match velmux_pool::gh::push_and_open(dir, branch) {
+                    Ok(_) => format!("pushed {branch}"),
+                    Err(e) => format!("{branch}: {e:#}"),
+                })
+                .collect();
+            let _ = tx.send(Event::PrOpened { job, result: Ok(format!("{}; finish the PRs in your browser", results.join(" · "))) });
+        });
+    }
 }

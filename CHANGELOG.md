@@ -11,6 +11,8 @@ What changed in each release of velmux. Each version links to its release
   (`◌ checkout · 2 branches`), and **resume workstream** brings it all back:
   its branches claimed back into it with their work and conversations, and its
   own conversation too.
+- A workstream's menu: **sync all slots** (every slot behind its base) and
+  **push & open PRs** (every slot without a PR), one step for all its repos.
 - `velmux workstream [name] [--json]`: a workstream's slots (repo, branch,
   path, state) from the command line; inside one, the one you're in. The skill
   tells agents about it.

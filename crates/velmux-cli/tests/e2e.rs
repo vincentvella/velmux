@@ -1029,6 +1029,71 @@ fn prefix_space_opens_the_menu_for_whats_focused() {
 }
 
 #[test]
+fn a_workstream_syncs_all_its_slots() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/s", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&app);
+    ui.click_on("feat/s", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("syncs");
+    ui.wait_for("@1 app");
+    // main moves on: the slot falls behind…
+    env.run_in(&app, "echo more > more.txt && git add -A && git commit -qm more");
+    ui.wait_for("↓1");
+    // …and the workstream's menu brings every slot up to date.
+    ui.click_on("◇ syncs", true);
+    ui.click_on("sync all slots", false);
+    env.until("the slot to be up to date", || env.slot(&app, "slot-1")["behind"] == 0);
+    ui.wait_gone_text("↓1");
+}
+
+#[test]
+fn a_workstream_pushes_its_branches_for_prs() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for (repo, name) in [(&app, "app"), (&api, "api")] {
+        let bare = env.root.join(format!("remotes/{name}.git"));
+        env.run_in(repo, &format!("git clone -q --bare . {0} && git remote add origin {0} && git fetch -q origin", bare.display()));
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    for (repo, branch) in [(&app, "feat/p"), (&api, "feat/q")] {
+        assert!(env.velmux(repo, &["claim", branch, "--no-fetch", "--no-install"]).status.success());
+        let slot = env.slot(repo, "slot-1");
+        env.run_in(Path::new(slot["path"].as_str().unwrap()), "echo x > x && git add x && git commit -qm x");
+    }
+    drop(env.attach(&api));
+    let ui = env.attach(&app);
+    ui.wait_for("feat/q");
+    for branch in ["feat/p", "feat/q"] {
+        ui.click_on(branch, true);
+        ui.click_on("add to workstream…", false);
+        if branch == "feat/p" {
+            ui.click_on("new workstream…", false);
+            ui.wait_for("name for the workstream");
+            ui.line("both");
+        } else {
+            ui.wait_for("new workstream…");
+            ui.send(b"\r");
+        }
+    }
+    ui.wait_for("@1 api");
+    // One action pushes every slot without a PR and opens one for each.
+    ui.click_on("◇ both", true);
+    ui.click_on("push & open PRs", false);
+    let pushed = |name: &str, branch: &str| {
+        let out = Command::new("git").args(["ls-remote", "--heads"]).arg(env.root.join(format!("remotes/{name}.git"))).arg(branch).output().unwrap();
+        !out.stdout.is_empty()
+    };
+    env.until("both branches pushed", || pushed("app", "feat/p") && pushed("api", "feat/q"));
+    ui.wait_for("finish the PRs in your browser");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

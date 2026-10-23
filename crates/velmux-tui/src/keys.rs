@@ -36,6 +36,9 @@ pub enum Action {
     ClaimIntoWorkstream(u8),
     /// Open every PR of the workstream's slots in the browser.
     OpenWorkstreamPrs,
+    /// Every slot in the workstream: sync it with its base / push it and open its PR.
+    SyncWorkstream,
+    PushWorkstream,
     /// A new conversation split to the right of the focused pane, right
     /// there (not in the checkout): with the configured agent, or with
     /// agent N (in `agents::ALL`), or pick one (`u8::MAX`).

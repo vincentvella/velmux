@@ -107,6 +107,12 @@ impl App {
                 if !self.workstream_prs(&target).is_empty() {
                     items.push(("open all PRs", Action::OpenWorkstreamPrs));
                 }
+                if !self.members(&target).is_empty() {
+                    items.push(("sync all slots", Action::SyncWorkstream));
+                    if self.workstream_prs(&target).len() < self.members(&target).len() {
+                        items.push(("push & open PRs", Action::PushWorkstream));
+                    }
+                }
                 items.extend([
                 ("claude here", Action::AgentHere),
                 ("claude here", Action::AgentHere),
