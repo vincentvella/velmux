@@ -5,6 +5,11 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- A workstream's row sums up its slots' pull requests (`3 PR ✗1 …1 ⇡1`, or `✓`
+  when all pass), and its menu has **open all PRs**.
+
 ## [0.9.2] - 2026-10-22
 
 ### Fixed

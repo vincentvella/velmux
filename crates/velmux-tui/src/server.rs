@@ -2812,8 +2812,13 @@ impl App {
                 }
                 items
             }
-            (true, _) if self.is_workstream(&target) => vec![
-                ("claim a slot in a repo…", Action::ClaimIntoWorkstream(u8::MAX)),
+            (true, _) if self.is_workstream(&target) => {
+                let mut items = vec![("claim a slot in a repo…", Action::ClaimIntoWorkstream(u8::MAX))];
+                if !self.workstream_prs(&target).is_empty() {
+                    items.push(("open all PRs", Action::OpenWorkstreamPrs));
+                }
+                items.extend([
+                ("claude here", Action::AgentHere),
                 ("claude here", Action::AgentHere),
                 ("shell here", Action::NewShell),
                 ("new tab", Action::NewTab),
@@ -2822,7 +2827,9 @@ impl App {
                 ("rename workstream", Action::RenameLocation),
                 ("release workstream…", Action::ReleaseWorkstream),
                 ("remove workstream", Action::RemovePlace),
-            ],
+                ]);
+                items
+            }
             (true, _) => vec![
                 ("claude here", Action::AgentHere),
                 ("shell here", Action::NewShell),
@@ -3424,6 +3431,14 @@ impl App {
                 let Some(&project) = repos.get(n as usize) else { return };
                 let label = format!("branch for a slot in {} (into {})", self.projects[project].name(), ws.slot.clone().unwrap_or_default());
                 self.mode = Mode::Prompt { label, input: String::new(), purpose: PromptFor::ClaimInto { ws, project } };
+            }
+            Action::OpenWorkstreamPrs => {
+                let Some(ws) = self.current_loc().filter(|l| self.is_workstream(l)) else { return };
+                let urls: Vec<String> = self.workstream_prs(&ws).iter().map(|p| p.url.clone()).filter(|u| !u.is_empty() && !u.chars().any(char::is_control)).collect();
+                for url in &urls {
+                    self.open_url(url);
+                }
+                self.toast(&format!("opened {} PR(s)", urls.len()));
             }
             Action::LeaveWorkstream => {
                 if let Some(slot) = self.current_loc() {

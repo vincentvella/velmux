@@ -62,6 +62,18 @@ impl App {
             .collect()
     }
 
+    /// The pull requests of a workstream's slots (the ones that have one).
+    pub fn workstream_prs(&self, ws: &Loc) -> Vec<&velmux_pool::gh::Pr> {
+        self.members(ws)
+            .iter()
+            .filter_map(|m| {
+                let project = &self.projects[m.project];
+                let branch = project.slots.iter().find(|s| Some(&s.id) == m.slot.as_ref())?.branch.as_ref()?;
+                project.prs.get(branch)
+            })
+            .collect()
+    }
+
     /// The workstream a repo's slot is in, if any.
     pub fn workstream_of(&self, slot: &Loc) -> Option<Loc> {
         let base = self.projects.get(slot.project)?.base()?;

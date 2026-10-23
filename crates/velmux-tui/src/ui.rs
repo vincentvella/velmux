@@ -376,6 +376,30 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     if loc.slot.is_none() && project.base_changes > 0 {
         marks.push((format!("✎{}", project.base_changes), Style::new().fg(t.alert).add_modifier(Modifier::BOLD)));
     }
+    // A workstream: its slots' PRs at a glance (`3 PR ✗1 …1 ⇡1`, `✓` when all pass).
+    if app.is_workstream(loc) {
+        use velmux_pool::gh::{Checks, PrState};
+        let prs = app.workstream_prs(loc);
+        if !prs.is_empty() {
+            let open: Vec<_> = prs.iter().filter(|p| p.state == PrState::Open).collect();
+            let count = |c: Checks| open.iter().filter(|p| p.checks == c).count();
+            let (failing, pending, passing) = (count(Checks::Failing), count(Checks::Pending), count(Checks::Passing));
+            let merged = prs.iter().filter(|p| p.state == PrState::Merged).count();
+            marks.push((format!("{} PR", prs.len()), Style::new().fg(t.dim)));
+            if failing > 0 {
+                marks.push((format!("✗{failing}"), Style::new().fg(t.blocked)));
+            }
+            if pending > 0 {
+                marks.push((format!("…{pending}"), Style::new().fg(t.working)));
+            }
+            if passing > 0 && passing == open.len() && failing + pending == 0 {
+                marks.push(("✓".into(), Style::new().fg(t.done)));
+            }
+            if merged > 0 {
+                marks.push((format!("⇡{merged}"), Style::new().fg(t.accent)));
+            }
+        }
+    }
     for (g, n, style) in rollup_of(t, app.panes.iter().filter(|p| p.loc == *loc)) {
         marks.push((if n > 1 { format!("{g}{n}") } else { g.to_string() }, style));
     }

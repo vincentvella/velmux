@@ -830,6 +830,50 @@ fn dragging_a_selection_to_a_panes_edge_scrolls_both_ways() {
 }
 
 #[test]
+fn a_workstream_sums_up_its_prs_and_opens_them() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for (repo, name) in [(&app, "app"), (&api, "api")] {
+        env.run_in(repo, &format!("git remote add origin https://github.com/acme/{name}.git"));
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    assert!(env.velmux(&app, &["claim", "feat/a", "--no-fetch", "--no-install"]).status.success());
+    assert!(env.velmux(&api, &["claim", "feat/b", "--no-fetch", "--no-install"]).status.success());
+    let prs = r#"[
+      {"headRefName":"feat/a","number":11,"url":"https://github.com/acme/app/pull/11","state":"OPEN","isDraft":false,
+       "statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]},
+      {"headRefName":"feat/b","number":22,"url":"https://github.com/acme/api/pull/22","state":"OPEN","isDraft":false,
+       "statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+    ]"#;
+    std::fs::write(env.root.join("prs.json"), prs).unwrap();
+    drop(env.attach(&api));
+    let ui = env.attach(&app);
+    ui.wait_for("#11✗");
+    ui.wait_for("#22✓");
+    // Both slots into one workstream.
+    ui.click_on("feat/a", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("pair");
+    ui.click_on("feat/b", true);
+    ui.click_on("add to workstream…", false);
+    ui.wait_for("new workstream…");
+    ui.send(b"\r"); // its first item: the workstream "pair"
+    // Its row sums them up: two PRs, one failing.
+    ui.wait_for("2 PR ✗1");
+    // And opens them all.
+    ui.click_on("◇ pair", true);
+    ui.click_on("open all PRs", false);
+    let opened = env.root.join("opened.txt");
+    env.until("both PRs to open", || {
+        let t = std::fs::read_to_string(&opened).unwrap_or_default();
+        t.contains("acme/app/pull/11") && t.contains("acme/api/pull/22")
+    });
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");
