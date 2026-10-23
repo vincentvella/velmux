@@ -1134,10 +1134,14 @@ fn the_agents_view_puts_what_needs_you_first_then_groups_the_rest() {
     ui.wait_for("api › base");
     ui.send(b"a");
     ui.claude_id();
+    ui.line("usage 84000");
+    ui.wait_for("used 84000");
     ui.prefix("g");
     ui.wait_for("APP");
     ui.wait_for("API");
     assert!(!ui.screen().contains("NEEDS YOU"));
+    // How full each Claude's context is.
+    ui.wait_for("84k context");
     // api's asks for permission: it moves up, under NEEDS YOU, saying for how long.
     let ask = env.root.join("ask.ans");
     std::fs::write(&ask, "Bash command\n  rm -rf dist\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n").unwrap();

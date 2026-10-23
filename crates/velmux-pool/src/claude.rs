@@ -106,6 +106,26 @@ pub fn ai_title(transcript: &Path) -> Option<String> {
     })
 }
 
+/// How much context a conversation is using: its latest reply's input
+/// (fresh, cache-written and cache-read tokens together), from the end of its
+/// transcript.
+pub fn context_used(transcript: &Path) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(transcript).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(512 * 1024))).ok()?;
+    let mut tail = Vec::new();
+    f.read_to_end(&mut tail).ok()?;
+    let tail = String::from_utf8_lossy(&tail);
+    tail.lines().rev().filter(|l| l.contains("\"usage\"") && l.contains("\"assistant\"")).find_map(|l| {
+        let v: serde_json::Value = serde_json::from_str(l).ok()?;
+        let u = &v["message"]["usage"];
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let total = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+        (v["type"] == "assistant" && total > 0).then_some(total)
+    })
+}
+
 /// Name a conversation, the way `/rename` does: a `custom-title` (the
 /// `/resume` picker) and an `agent-name` (the prompt box) at the end of its
 /// transcript. A running Claude shows it once it's resumed.
@@ -232,6 +252,11 @@ mod tests {
         let mut f = std::fs::OpenOptions::new().append(true).open(&t).unwrap();
         std::io::Write::write_all(&mut f, b"{\"type\":\"ai-title\",\"aiTitle\":\"Fix the login flow\",\"sessionId\":\"s1\"}\n").unwrap();
         assert_eq!(ai_title(&t).as_deref(), Some("Fix the login flow"));
+        // The context its latest reply used.
+        assert_eq!(context_used(&t), None);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&t).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":500,\"cache_read_input_tokens\":83500,\"output_tokens\":10}}}\n").unwrap();
+        assert_eq!(context_used(&t), Some(84_002));
     }
 
     #[test]

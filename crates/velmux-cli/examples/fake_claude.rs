@@ -102,6 +102,14 @@ fn main() {
                 writeln!(f, "{line}").unwrap();
                 println!("titled {rest}");
             }
+            // `usage <n>`: a reply that used n tokens of context.
+            "usage" => {
+                let n: u64 = rest.parse().unwrap_or(0);
+                let line = serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": "ok", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": n.saturating_sub(2), "output_tokens": 1}}, "sessionId": id});
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&transcript).unwrap();
+                writeln!(f, "{line}").unwrap();
+                println!("used {n}");
+            }
             // `mouse`: turn mouse reporting on, as Claude Code does.
             "mouse" => print!("\x1b[?1000h\x1b[?1002h\x1b[?1006h"),
             "title" => {

@@ -5,6 +5,11 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- The agents view shows how full each Claude conversation's context is
+  (`claude · 84k context`), from its transcript.
+
 ### Changed
 
 - Lighter in the background: slots are checked every 2s only in the repo

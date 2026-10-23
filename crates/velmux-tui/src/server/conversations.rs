@@ -33,6 +33,21 @@ impl App {
         title
     }
 
+    /// How much context the Claude conversation in `pane` is using (read
+    /// again only when its transcript changes).
+    pub fn context_of(&self, pane: &Pane) -> Option<u64> {
+        let session = pane.session.as_ref().filter(|_| pane.agent == Some("claude"))?;
+        let file = self.transcript_of(session)?;
+        let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
+        let mut known = self.contexts.borrow_mut();
+        if let Some((_, used)) = known.get(&file).filter(|(at, _)| *at == modified) {
+            return *used;
+        }
+        let used = claude::context_used(&file);
+        known.insert(file, (modified, used));
+        used
+    }
+
     pub(super) fn name_conversations(&mut self) {
         let mut todo = Vec::new();
         for pane in &self.panes {

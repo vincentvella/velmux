@@ -16,7 +16,7 @@ From the top:
   detach, stop). Also `<prefix> m`.
 - **`spaces · agents`** switches views (`<prefix> g`). The agents view lists
   every agent with where it is, what it's doing, and for how long (`blocked
-  4m`): the ones that need you first, under **Needs you**, then the rest under
+  4m`), and for Claude how full its context is (`84k context`): the ones that need you first, under **Needs you**, then the rest under
   their workstream or repo. Click one to jump to it.
 
 The spaces view has three sections:

@@ -777,8 +777,10 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
                 }
                 if second {
                     let label = p.agent.unwrap_or("agent");
+                    // How full its context is (Claude), then what it's on.
+                    let context = app.context_of(p).map(|n| format!(" · {} context", tokens(n))).unwrap_or_default();
                     let task = useful_title(p).map(|t| format!(" · {t}")).unwrap_or_default();
-                    let text = format!("{label}{task}");
+                    let text = format!("{label}{context}{task}");
                     buf.set_stringn(3, y, text, side.saturating_sub(4) as usize, base.fg(t.dim));
                 } else {
                     let (glyph, gstyle) = state_glyph(&app.theme, p);
@@ -1568,6 +1570,15 @@ fn short_home(path: &std::path::Path) -> String {
     match path.strip_prefix(&home) {
         Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()).trim_end_matches('/').to_string(),
         _ => path.display().to_string(),
+    }
+}
+
+/// Tokens, short: `950`, `84k`, `1.2M`.
+fn tokens(n: u64) -> String {
+    match n {
+        0..1000 => n.to_string(),
+        1000..1_000_000 => format!("{}k", n / 1000),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
     }
 }
 

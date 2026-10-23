@@ -389,6 +389,8 @@ pub struct App {
     /// (by transcript, with when it was last changed), for naming them.
     transcripts: std::cell::RefCell<HashMap<String, PathBuf>>,
     ai_titles: std::cell::RefCell<HashMap<PathBuf, (SystemTime, Option<String>)>>,
+    /// The context each transcript's conversation is using, likewise.
+    contexts: std::cell::RefCell<HashMap<PathBuf, (SystemTime, Option<u64>)>>,
     /// A selection being dragged at a pane's edge: which way it scrolls, the
     /// pointer's cell, and when it last scrolled.
     select_edge: Option<(isize, u16, u16, Instant)>,
@@ -644,6 +646,7 @@ impl App {
             parked_workstreams: Vec::new(),
             transcripts: Default::default(),
             ai_titles: Default::default(),
+            contexts: Default::default(),
             select_edge: None,
             named: crate::paths::state_dir().ok().and_then(|d| std::fs::read_to_string(d.join("conversation-names.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
             keymap,
