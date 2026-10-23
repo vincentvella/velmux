@@ -64,6 +64,20 @@ builds a demo scene with the end-to-end harness (fake Claudes drawing mock
 screens, a fake `gh` for PR status) and writes each view as SVG to
 `docs/screenshots/`. Rerun it after UI changes.
 
+## Where things are
+
+- `crates/velmux-pool`: the pool itself, no UI: slots (`pool.rs`), git,
+  config, dependency installs (`deps.rs`), Claude transcripts (`claude.rs`),
+  `gh` (pull requests).
+- `crates/velmux-cli`: the `velmux` command (`main.rs`), and the tests.
+- `crates/velmux-tui`: the server and client. The server is `server.rs` (its
+  state, events, keys, layout) plus `server/`: `pointer.rs` (mouse and drags),
+  `menus.rs`, `slots.rs` (claim, release, sync), `prs.rs`,
+  `conversations.rs` (search, resume, naming) and `workstream.rs`. Beside it:
+  `ui.rs` draws everything, `pane.rs` runs a pane's pty and terminal,
+  `detect.rs` and `rules.rs` read agents' state, `agents.rs` and `hooks.rs`
+  launch and follow the agents, `copy.rs` is copy mode.
+
 ## Releasing
 
 1. Move what's under **Unreleased** in `CHANGELOG.md` to a new version heading
