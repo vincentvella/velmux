@@ -217,6 +217,7 @@ impl App {
     /// workstream. Repos whose slots aren't known yet are left alone.
     pub(super) fn prune_workstreams(&mut self) {
         self.sweep_workstream_dirs();
+        self.prune_parked_workstreams();
         for ws in self.workstreams() {
             let before = self.folder(&ws).and_then(|f| f.members.clone()).unwrap_or_default();
             let keep: Vec<session::Member> = before
@@ -250,6 +251,22 @@ impl App {
     pub(super) fn release_workstream(&mut self, ws: Loc) {
         let members = self.members(&ws);
         let n = members.len();
+        // Kept to bring it back as a whole: its branches (shown while any is
+        // still parked) and its own conversations.
+        let branches: Vec<(PathBuf, String)> = members
+            .iter()
+            .filter_map(|m| {
+                let project = &self.projects[m.project];
+                let branch = project.slots.iter().find(|s| Some(&s.id) == m.slot.as_ref())?.branch.clone()?;
+                Some((project.base()?.to_path_buf(), branch))
+            })
+            .collect();
+        let sessions: Vec<String> = self.panes.iter().filter(|p| p.loc == ws).filter_map(|p| p.session.clone()).collect();
+        if !branches.is_empty() {
+            let name = ws.slot.clone().unwrap_or_default();
+            self.parked_workstreams.retain(|p| p.name != name);
+            self.parked_workstreams.push(session::ParkedWorkstream { name, branches, sessions, parked_at: velmux_pool::state::now() });
+        }
         // The workstream's own panes (the conversation that worked across the
         // repos) go to its first repo's checkout, still running.
         let to = members.first().map(|m| Loc { project: m.project, slot: None });
@@ -356,5 +373,68 @@ impl App {
         self.projects.push(Project::repo(pool));
         self.refresh_slots();
         Some(self.projects.len() - 1)
+    }
+
+    /// A parked workstream's branches that are still parked: (repo, branch).
+    pub fn parked_branches(&self, i: usize) -> Vec<(usize, String)> {
+        let Some(pw) = self.parked_workstreams.get(i) else { return Vec::new() };
+        pw.branches
+            .iter()
+            .filter_map(|(base, branch)| {
+                let project = self.projects.iter().position(|p| !p.removed && p.base() == Some(base.as_path()))?;
+                self.projects[project].parked.iter().any(|p| &p.branch == branch).then(|| (project, branch.clone()))
+            })
+            .collect()
+    }
+
+    /// A repo's parked branch belongs to a parked workstream (and is listed there).
+    pub fn in_parked_workstream(&self, project: usize, branch: &str) -> bool {
+        let Some(base) = self.projects.get(project).and_then(|p| p.base()) else { return false };
+        self.parked_workstreams.iter().any(|pw| pw.branches.iter().any(|(b, br)| b == base && br == branch))
+    }
+
+    /// Bring a parked workstream back: a workstream of the same name, its
+    /// parked branches claimed into it (each with its conversations), and its
+    /// own conversations, moved in if they're still open, else resumed.
+    pub(super) fn resume_parked_workstream(&mut self, i: usize) {
+        let branches = self.parked_branches(i);
+        if i >= self.parked_workstreams.len() {
+            return;
+        }
+        let pw = self.parked_workstreams.remove(i);
+        let Some(ws) = self.new_workstream(&pw.name) else { return };
+        for (project, branch) in &branches {
+            if let Some(job) = self.claim_in(*project, Some(branch.clone()), None) {
+                self.claim_into.insert(job, ws.clone());
+            }
+        }
+        let open: Vec<String> = pw.sessions.iter().filter(|s| crate::agents::exists(s, &self.claude_dir) || self.live_session_pane(s, None).is_some()).cloned().collect();
+        self.go_to(ws.clone());
+        if !open.is_empty() {
+            self.resume_sessions(ws, &open);
+        }
+        self.save();
+        self.say(format!("resuming {}: {} branch(es)", pw.name, branches.len()));
+    }
+
+    /// Parked workstreams with nothing left parked (resumed or discarded one
+    /// by one, or merged) go. Repos whose parked work isn't known yet are
+    /// left alone.
+    pub(super) fn prune_parked_workstreams(&mut self) {
+        let before = self.parked_workstreams.len();
+        let loaded = |base: &Path| self.projects.iter().any(|p| !p.removed && p.base() == Some(base) && !p.slots.is_empty());
+        let keep: Vec<bool> = (0..before)
+            .map(|i| {
+                let pw = &self.parked_workstreams[i];
+                // Just released: its branches are still being parked.
+                let fresh = velmux_pool::state::now().saturating_sub(pw.parked_at) < 60;
+                fresh || !self.parked_branches(i).is_empty() || pw.branches.iter().any(|(b, _)| !loaded(b))
+            })
+            .collect();
+        let mut k = keep.into_iter();
+        self.parked_workstreams.retain(|_| k.next().unwrap_or(true));
+        if self.parked_workstreams.len() != before {
+            self.save();
+        }
     }
 }

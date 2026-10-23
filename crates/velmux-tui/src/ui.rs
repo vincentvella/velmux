@@ -53,6 +53,8 @@ pub enum Row {
     WorkstreamsHeading,
     /// A parked branch: (project, index into its `parked`).
     Parked(usize, usize),
+    /// A parked workstream (index into `App::parked_workstreams`).
+    ParkedWorkstream(usize),
     Location(Loc),
     /// A slot's second line: its number, how it stands against the base,
     /// its PR (the branch gets the whole first line).
@@ -181,6 +183,8 @@ pub fn display_rows(app: &App) -> Vec<Row> {
             out.push(Row::Detail(m));
         }
     }
+    // Released ones with work still parked, to bring back whole.
+    out.extend((0..app.parked_workstreams.len()).filter(|&i| !app.parked_branches(i).is_empty()).map(Row::ParkedWorkstream));
     if !repos.is_empty() {
         out.push(Row::Blank);
         out.push(Row::Heading("REPOS"));
@@ -196,7 +200,8 @@ pub fn display_rows(app: &App) -> Vec<Row> {
                 out.push(Row::Detail(loc));
             }
         }
-        out.extend((0..app.projects[p].parked.len()).map(|i| Row::Parked(p, i)));
+        // A parked workstream's branches are listed with it.
+        out.extend((0..app.projects[p].parked.len()).filter(|&i| !app.in_parked_workstream(p, &app.projects[p].parked[i].branch)).map(|i| Row::Parked(p, i)));
     }
     let folders: Vec<Loc> = app
         .projects
@@ -345,6 +350,32 @@ fn draw_parked_row(app: &App, project: usize, parked: &velmux_pool::ParkedView, 
     };
     buf.set_string(label_x, y, &shown, Style::new().fg(t.text2).add_modifier(Modifier::ITALIC));
     buf.set_string(right_edge.saturating_sub(right_w as u16), y, &right, dim);
+}
+
+/// `◌ checkout   2 branches · 3h`: a released workstream with work parked.
+fn draw_parked_workstream(app: &App, i: usize, y: u16, side: u16, buf: &mut Buffer) {
+    let t = &app.theme;
+    let dim = Style::new().fg(t.dim);
+    let Some(pw) = app.parked_workstreams.get(i) else { return };
+    let n = app.parked_branches(i).len();
+    let age = {
+        let s = velmux_pool::state::now().saturating_sub(pw.parked_at);
+        match s {
+            0..60 => "now".to_string(),
+            60..3600 => format!("{}m", s / 60),
+            3600..86400 => format!("{}h", s / 3600),
+            _ => format!("{}d", s / 86400),
+        }
+    };
+    let right = format!("{n} branch{} · {age}", if n == 1 { "" } else { "es" });
+    let right_edge = side.saturating_sub(1);
+    let rw = right.chars().count() as u16;
+    buf.set_string(3, y, "◌", dim);
+    let room = right_edge.saturating_sub(rw + 1).saturating_sub(5) as usize;
+    buf.set_stringn(5, y, &pw.name, room, Style::new().fg(t.text2).add_modifier(Modifier::ITALIC));
+    if rw + 8 < side {
+        buf.set_string(right_edge.saturating_sub(rw), y, &right, dim);
+    }
 }
 
 fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, buf: &mut Buffer) {
@@ -673,6 +704,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
             Row::Location(loc) => draw_location_row(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
             Row::Detail(loc) => draw_location_detail(app, &loc, y, side, current.as_ref() == Some(&loc), buf),
             Row::Parked(p, i) => draw_parked_row(app, p, &app.projects[p].parked[i], y, side, buf),
+            Row::ParkedWorkstream(i) => draw_parked_workstream(app, i, y, side, buf),
             Row::Pane(_) | Row::Blank => {}
             Row::TopBar => {
                 let gray = Style::new().fg(t.text2);

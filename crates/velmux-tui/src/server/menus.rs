@@ -6,6 +6,15 @@ impl App {
     /// Right-click on a sidebar row: the menu of things to do in that place.
     pub(super) fn open_context_menu(&mut self, x: u16, y: u16) {
         let Some((_, row)) = ui::sidebar_rows(self, self.size.1).into_iter().find(|(ry, _)| *ry == y) else { return };
+        if let ui::Row::ParkedWorkstream(i) = row {
+            let Some(pw) = self.parked_workstreams.get(i) else { return };
+            let items = vec![("resume workstream", Action::ResumeParkedWorkstream(i as u8)), ("forget it (branches stay parked)", Action::ForgetParkedWorkstream(i as u8))];
+            let first_repo = || self.projects.iter().position(|p| !p.removed && !p.is_unclassified()).map(|p| Loc { project: p, slot: None });
+            let Some(target) = self.current_loc().or_else(first_repo) else { return };
+            let title = format!("parked · {}", pw.name);
+            self.mode = Mode::Menu { selected: 0, context: Some(MenuContext { pane: None, target, parked: None, title, items, at: (x, y) }) };
+            return;
+        }
         if let ui::Row::Parked(p, i) = row {
             let Some(branch) = self.projects[p].parked.get(i).map(|v| v.branch.clone()) else { return };
             let items = vec![("resume in a slot", Action::ResumeParked), ("discard changes…", Action::DiscardParked)];

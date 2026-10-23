@@ -486,7 +486,7 @@ impl App {
                 return self.run(if x < side / 2 { Action::NewSpace } else { Action::Menu });
             }
             // A click on parked work offers resume / discard.
-            ui::Row::Parked(..) => return self.open_context_menu(x, y),
+            ui::Row::Parked(..) | ui::Row::ParkedWorkstream(_) => return self.open_context_menu(x, y),
             ui::Row::ViewTabs => {
                 self.sidebar_view = if x <= ui::VIEW_SPLIT_X { ui::SidebarView::Spaces } else { ui::SidebarView::Agents };
                 self.full_redraw = true;
@@ -527,7 +527,7 @@ impl App {
                 return;
             }
             ui::Row::Heading(_) | ui::Row::Divider | ui::Row::Blank => return,
-            ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } | ui::Row::Parked(..) => unreachable!("handled above"),
+            ui::Row::TopBar | ui::Row::ViewTabs | ui::Row::Agent { .. } | ui::Row::Parked(..) | ui::Row::ParkedWorkstream(_) => unreachable!("handled above"),
             ui::Row::Location(loc) | ui::Row::Detail(loc) => loc,
             ui::Row::Project(p) => {
                 // Open the project at its first location with panes, else its root.

@@ -929,6 +929,68 @@ fn a_conversation_to_the_right_starts_beside_the_pane() {
 }
 
 #[test]
+fn a_released_workstream_comes_back_whole() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for repo in [&app, &api] {
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    for (repo, branch) in [(&app, "feat/a"), (&api, "feat/b")] {
+        assert!(env.velmux(repo, &["claim", branch, "--no-fetch", "--no-install"]).status.success());
+        let slot = env.slot(repo, "slot-1");
+        env.run_in(Path::new(slot["path"].as_str().unwrap()), "echo wip > wip.txt");
+    }
+    drop(env.attach(&api));
+    let ui = env.attach(&app);
+    ui.wait_for("feat/b");
+    for branch in ["feat/a", "feat/b"] {
+        ui.click_on(branch, true);
+        ui.click_on("add to workstream…", false);
+        if branch == "feat/a" {
+            ui.click_on("new workstream…", false);
+            ui.wait_for("name for the workstream");
+            ui.line("pair");
+        } else {
+            ui.wait_for("new workstream…");
+            ui.send(b"\r");
+        }
+    }
+    ui.wait_for("@1 api");
+    // Released half-way: both branches park, and it's kept as one.
+    ui.click_on("◇ pair", true);
+    ui.click_on("release workstream…", false);
+    ui.wait_for("y yes");
+    ui.send(b"y");
+    env.until("both slots free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
+    ui.wait_for("◌ pair");
+    ui.wait_for("2 branches");
+    assert!(ui.find("◌ feat/a").is_none(), "its branches are listed with it, not their repos:\n{}", ui.screen());
+    // Still there after the server stops and starts again.
+    env.stop(&app);
+    drop(ui);
+    let ui = env.attach(&app);
+    ui.wait_for("◌ pair");
+    // Resume it: a workstream again, both branches claimed back with their work.
+    ui.click_on("◌ pair", false);
+    ui.wait_for("resume workstream");
+    ui.send(b"\r");
+    ui.wait_for("◇ pair");
+    // (In whichever slot each claim took.)
+    let slot_on = |repo: &Path, branch: &str| {
+        env.json(repo, &["status", "--json"]).as_array().unwrap().iter().find(|s| s["branch"] == branch && s["status"] == "inuse").cloned()
+    };
+    env.until("both branches back in slots", || slot_on(&app, "feat/a").is_some() && slot_on(&api, "feat/b").is_some());
+    ui.wait_for(" app");
+    ui.wait_for(" api");
+    for (repo, branch) in [(&app, "feat/a"), (&api, "feat/b")] {
+        let slot = slot_on(repo, branch).unwrap();
+        assert!(Path::new(slot["path"].as_str().unwrap()).join("wip.txt").exists(), "its uncommitted work came back");
+    }
+    ui.wait_gone_text("◌ pair");
+}
+
+#[test]
 fn focus_follows_the_mouse_when_turned_on() {
     let env = Env::new();
     let repo = env.repo("app");

@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- A workstream released with unfinished work is kept as one
+  (`◌ checkout · 2 branches`), and **resume workstream** brings it all back:
+  its branches claimed back into it with their work and conversations, and its
+  own conversation too.
+
 ## [0.12.0] - 2026-10-23
 
 ### Added

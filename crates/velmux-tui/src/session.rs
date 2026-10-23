@@ -24,6 +24,22 @@ pub struct Saved {
     /// The width you set the sidebar to.
     #[serde(default)]
     pub sidebar_width: Option<u16>,
+    /// Workstreams released with work still parked on their branches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parked_workstreams: Vec<ParkedWorkstream>,
+}
+
+/// A workstream released with unfinished work: its branches (each parked in
+/// its repo) and its own conversations, to bring back together.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ParkedWorkstream {
+    pub name: String,
+    /// (repo checkout, branch)
+    pub branches: Vec<(PathBuf, String)>,
+    /// The workstream's own conversations (session references).
+    #[serde(default)]
+    pub sessions: Vec<String>,
+    pub parked_at: u64,
 }
 
 #[derive(Serialize, Deserialize)]

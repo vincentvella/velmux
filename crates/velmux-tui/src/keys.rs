@@ -40,6 +40,9 @@ pub enum Action {
     /// there (not in the checkout): with the configured agent, or with
     /// agent N (in `agents::ALL`), or pick one (`u8::MAX`).
     SplitConversation,
+    /// A parked workstream (N in `App::parked_workstreams`): bring it back, or forget it.
+    ResumeParkedWorkstream(u8),
+    ForgetParkedWorkstream(u8),
     SplitAgent(u8),
     /// Update velmux (checking first if no update is known).
     Update,

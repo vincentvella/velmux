@@ -380,6 +380,8 @@ pub struct App {
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
     menu_at: Option<(u16, u16)>,
+    /// Workstreams released with work still parked (see `workstream`).
+    pub parked_workstreams: Vec<session::ParkedWorkstream>,
     /// Conversations' transcripts (by session), and Claude's titles in them
     /// (by transcript, with when it was last changed), for naming them.
     transcripts: std::cell::RefCell<HashMap<String, PathBuf>>,
@@ -635,6 +637,7 @@ impl App {
             claim_into: HashMap::new(),
             interned: HashMap::new(),
             menu_at: None,
+            parked_workstreams: Vec::new(),
             transcripts: Default::default(),
             ai_titles: Default::default(),
             select_edge: None,
@@ -1000,6 +1003,10 @@ impl App {
                         let ws = self.claim_into.remove(&job).unwrap();
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.add_to_workstream(&ws, &loc);
+                        // A parked branch coming back: its conversations too.
+                        if !resume.is_empty() {
+                            self.resume_sessions(loc.clone(), &resume);
+                        }
                         let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
                         self.say(format!("claimed {}{branch} into {}", slot.id, ws.slot.clone().unwrap_or_default()));
                     }
@@ -1335,6 +1342,7 @@ impl App {
         Saved {
             version: 1,
             sidebar_width: self.sidebar_cols,
+            parked_workstreams: self.parked_workstreams.clone(),
             // Saved in display order, so restore rebuilds that order.
             projects: self
                 .ordered_projects()
@@ -1479,6 +1487,7 @@ impl App {
     /// resume their conversation in the slot they ran in; slots released since are skipped.
     fn restore_projects(&mut self, saved: &Saved) {
         self.sidebar_cols = saved.sidebar_width;
+        self.parked_workstreams = saved.parked_workstreams.clone();
         let env = Env::from_process().ok();
         for base in &saved.projects {
             let Some(pool) = env.clone().and_then(|e| Pool::discover(e, base).ok()) else { continue };
@@ -2455,6 +2464,15 @@ impl App {
             Action::NewEditor => self.spawn_here(Kind::Editor, None),
             Action::SplitRight => self.spawn_here(Kind::Shell, Some(Dir::Right)),
             // From a pane's menu: where you are, since you chose the spot.
+            Action::ResumeParkedWorkstream(n) => self.resume_parked_workstream(n as usize),
+            Action::ForgetParkedWorkstream(n) => {
+                if (n as usize) < self.parked_workstreams.len() {
+                    let gone = self.parked_workstreams.remove(n as usize);
+                    self.save();
+                    self.full_redraw = true;
+                    self.say(format!("forgot {}; its branches stay parked in their repos", gone.name));
+                }
+            }
             Action::SplitConversation => {
                 if let Some(loc) = self.current_loc() {
                     self.spawn_with(loc, Kind::Agent, Some(Dir::Right), LaunchOpts::default());
