@@ -33,8 +33,9 @@ The suite has three layers:
   (`examples/fake_claude.rs`, installed as `…/claude/versions/9.9.9` so velmux
   detects it as Claude; it records sessions the way Claude does and takes
   commands like `claim`, `release`, `say`) and a fake `gh`. Each test gets its
-  own socket, state, config, Claude folder and `HOME`. The harness is in
-  `tests/common/`.
+  own socket, state, config, Claude folder and `HOME`, so they run four at a
+  time (about 25s; `VELMUX_E2E_JOBS=8` is faster on a bigger machine). The
+  harness is in `tests/common/`.
 
 ## A separate server
 

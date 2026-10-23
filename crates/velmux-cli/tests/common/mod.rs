@@ -16,8 +16,35 @@ pub const COLS: u16 = 120;
 pub const ROWS: u16 = 32;
 pub const WAIT: Duration = Duration::from_secs(25);
 
-/// One server at a time: they're heavy, and timing is easier to reason about.
-static SERIAL: Mutex<()> = Mutex::new(());
+/// A few servers at a time (`VELMUX_E2E_JOBS`; by default 4, or fewer on a
+/// smaller machine): each test has its own server, socket, state and HOME, so
+/// they don't meet, but they're heavy enough that too many makes timing flaky.
+static RUNNING: (Mutex<usize>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
+
+/// A place among the tests running at once, held for the test's life.
+pub struct Slot;
+
+impl Slot {
+    fn take() -> Slot {
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        let jobs = std::env::var("VELMUX_E2E_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(cores.min(4)).max(1);
+        let (count, freed) = &RUNNING;
+        let mut n = count.lock().unwrap_or_else(|e| e.into_inner());
+        while *n >= jobs {
+            n = freed.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+        *n += 1;
+        Slot
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let (count, freed) = &RUNNING;
+        *count.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        freed.notify_one();
+    }
+}
 
 pub struct Env {
     pub _tmp: tempfile::TempDir,
@@ -26,7 +53,7 @@ pub struct Env {
     pub claude_dir: PathBuf,
     pub state: PathBuf,
     pub path_var: String,
-    pub _lock: std::sync::MutexGuard<'static, ()>,
+    pub _lock: Slot,
 }
 
 pub fn sh(dir: &Path, cmd: &str) -> String {
@@ -48,7 +75,7 @@ pub fn fake_claude() -> PathBuf {
 
 impl Env {
     pub fn new() -> Env {
-        let lock = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = Slot::take();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let (home, bin, claude_dir, state) = (root.join("home"), root.join("bin"), root.join("claude"), root.join("state"));
