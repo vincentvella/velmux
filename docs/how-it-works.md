@@ -43,12 +43,6 @@ open, handing over each pane's screen, scrollback and the window size, so
 nothing on the other end notices. Agent state (working, blocked, idle) is read
 from each pane's foreground process and the bottom of its screen.
 
-## Code
-
-- `crates/velmux-pool`: pools, slots, git, dependencies, parked work, PRs (via `gh`), Claude linking
-- `crates/velmux-tui`: the server, panes, rendering, and the client
-- `crates/velmux-cli`: the `velmux` binary
-
 ## Keeping up
 
 The sidebar's slot states (branch, uncommitted changes, behind / ahead the
@@ -57,3 +51,9 @@ milliseconds, so velmux checks the repo you're in (and, in a workstream, its
 repos) and any repo with an agent working every 2 seconds, and the rest every 30.
 Fetches run on their own schedule (`fetch_every`), pull requests about once a
 minute.
+
+## Code
+
+- `crates/velmux-pool`: pools, slots, git, dependencies, parked work, PRs (via `gh`), Claude linking
+- `crates/velmux-tui`: the server, panes, rendering, and the client
+- `crates/velmux-cli`: the `velmux` binary
