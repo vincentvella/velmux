@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Arc;
@@ -7,6 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use velmux_pool::sys::Canonical as _;
 use velmux_pool::{claude, tui_settings, ClaimOpts, Config, Env, Pool, SlotView, Status, TuiSettings};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
@@ -15,6 +15,7 @@ use vt100::MouseProtocolMode;
 
 use crate::copy::{self, Action as CopyAction, Copy};
 use crate::herdr::{self, Plan, Target};
+use crate::ipc::{UnixListener, UnixStream};
 use crate::keys::{Action, Keymap};
 use crate::picker::{self, Picker};
 use crate::layout::{self, Dir, Layout, Toward};
@@ -131,6 +132,8 @@ impl Project {
 /// control (an interactive shell) could take yours, and stop the client
 /// you're using (`suspended (tty input)`).
 fn detach_terminal() {
+    // (On Windows the server is started with a hidden console of its own.)
+    #[cfg(unix)]
     if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty") {
         use std::os::fd::AsRawFd;
         unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCNOTTY) };
@@ -245,9 +248,10 @@ dedicated git worktree on that branch and prints its path. Do all edits, builds 
 (cd there in your shell; use its absolute paths for file edits). When the work is finished and committed, \
 you can run `velmux release` to hand the worktree back.";
 
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
+use velmux_pool::sys::quote as shell_quote;
+
+/// The editor when neither the config nor `$VISUAL` / `$EDITOR` names one.
+const DEFAULT_EDITOR: &str = if cfg!(windows) { "notepad" } else { "vi" };
 
 /// Written by `settings` when there's no config yet.
 const CONFIG_TEMPLATE: &str = r#"# velmux global config. Save and quit the editor to apply (settings reloads it).
@@ -530,7 +534,7 @@ pub fn serve() -> Result<()> {
                 notify: Default::default(),
                 theme: None,
                 theme_colors: Default::default(),
-                scratch_dir: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+                scratch_dir: velmux_pool::sys::home().unwrap_or_default(),
                 update_check: true,
             },
             Some(format!("config: {e:#}")),
@@ -578,7 +582,13 @@ pub fn serve() -> Result<()> {
             std::env::remove_var("VELMUX_HANDOFF");
             app.adopt(Path::new(&path));
         }
-        None => app.restore(),
+        None => {
+            app.restore();
+            if std::env::var_os("VELMUX_RESTARTED").is_some() {
+                std::env::remove_var("VELMUX_RESTARTED");
+                app.startup_warning = Some(format!("restarted Â· {} pane(s) started again", app.panes.len()));
+            }
+        }
     }
     app.refresh_installed();
     let (mut last_detect, mut last_slots, mut last_render, mut last_history) =
@@ -697,7 +707,7 @@ impl App {
             exe: std::env::var_os("VELMUX_EXE")
                 .map(PathBuf::from)
                 .filter(|p| p.exists())
-                .or_else(|| std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()))
+                .or_else(|| std::env::current_exe().ok().and_then(|p| p.canonical().ok()))
                 .map(|p| {
                 let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
                 (p, mtime)
@@ -764,7 +774,7 @@ impl App {
         if let Some(i) = self.projects.iter().position(Project::is_unclassified) {
             return i;
         }
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = velmux_pool::sys::home().unwrap_or_default();
         // Global settings (agent, editor) apply; a broken config falls back to defaults.
         let cfg = Env::from_process().and_then(|env| Config::load(&env, &home)).unwrap_or_else(|_| Config::defaults());
         self.projects.push(Project { pool: None, cfg, slots: Vec::new(), parked: Vec::new(), prs: HashMap::new(), base_changes: 0, base_said: None, folders: Vec::new(), removed: false });
@@ -811,7 +821,7 @@ impl App {
     pub fn space_matches(repos: &[PathBuf], query: &str) -> Vec<PathBuf> {
         let q = query.trim();
         if q.starts_with('/') || q.starts_with('~') {
-            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            let home = velmux_pool::sys::home().unwrap_or_default();
             let path = match q.strip_prefix('~') {
                 Some(rest) => home.join(rest.trim_start_matches('/')),
                 None => PathBuf::from(q),
@@ -964,7 +974,8 @@ impl App {
                         "stopping — panes and Claude sessions are restored next time you run velmux".into()
                     }
                     ClientMsg::Restart => {
-                        let _ = ServerMsg::Reply("restarting — panes keep running".into()).write(&mut stream);
+                        let reply = if cfg!(windows) { "restarting — panes start again (agents resume)" } else { "restarting — panes keep running" };
+                        let _ = ServerMsg::Reply(reply.into()).write(&mut stream);
                         drop(stream);
                         if let Err(e) = self.restart() {
                             self.say(format!("restart failed: {e:#}"));
@@ -1208,6 +1219,9 @@ impl App {
     fn say_bye(&mut self, reason: &str) {
         if let Some(mut old) = self.client.take() {
             let _ = ServerMsg::Bye(reason.into()).write(&mut old.stream);
+            // Close our side cleanly: on Windows, a socket closed with input
+            // unread is reset, and the client may lose the goodbye with it.
+            let _ = old.stream.shutdown(std::net::Shutdown::Write);
         }
     }
 
@@ -1369,6 +1383,7 @@ impl App {
     /// Restart in place: exec the (possibly rebuilt) binary, handing it every
     /// pane's open pty so shells and agents keep running and screens survive.
     /// The attached client reconnects by itself.
+    #[cfg(unix)]
     fn restart(&mut self) -> Result<()> {
         let exe = match &self.exe {
             Some((p, _)) => p.clone(),
@@ -1398,6 +1413,51 @@ impl App {
         Err(err.into())
     }
 
+    /// Windows can't exec in place or hand a pty to another process, so a
+    /// restart there is a stop and start: save, end the panes, and start the
+    /// new server, which restores them (agents resume their sessions). The
+    /// attached client reconnects by itself.
+    #[cfg(windows)]
+    fn restart(&mut self) -> Result<()> {
+        let exe = match &self.exe {
+            Some((p, _)) => p.clone(),
+            None => std::env::current_exe()?,
+        };
+        let ok = std::process::Command::new(&exe).arg("--version").output().is_ok_and(|o| o.status.success());
+        if !ok {
+            anyhow::bail!("{} doesn't run (still building?)", exe.display());
+        }
+        if self.copy.is_some() {
+            self.exit_copy();
+        }
+        self.save();
+        self.save_histories(true);
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(paths::log()?)?;
+        // (`VELMUX_EXE` carries over in the environment.)
+        let mut cmd = crate::client::server_command(&exe)?;
+        cmd.env("VELMUX_RESTARTED", "1").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(log);
+        velmux_pool::sys::detach(&mut cmd);
+        // Gone before the client is told to reconnect, so it can't reach this
+        // server again (and before the new one binds it).
+        let _ = std::fs::remove_file(paths::socket()?);
+        let client = self.client.as_ref().and_then(|c| c.stream.try_clone().ok());
+        self.say_bye("restarting");
+        for pane in &mut self.panes {
+            pane.kill();
+        }
+        cmd.spawn().context("starting the new server")?;
+        // Exiting with the client's input unread would reset the connection,
+        // and Windows drops what the client hasn't read yet with it (the
+        // goodbye that tells it to reconnect): read until it hangs up.
+        if let Some(mut stream) = client {
+            use std::io::Read;
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut buf = [0u8; 4096];
+            while stream.read(&mut buf).is_ok_and(|n| n > 0) {}
+        }
+        std::process::exit(0);
+    }
+
     /// Live-restart when the binary on disk changes (e.g. `cargo build`), once
     /// its mtime has held still between two looks so a half-written file is skipped.
     fn check_binary(&mut self) {
@@ -1419,6 +1479,10 @@ impl App {
             *seen = now;
         }
         self.exe_pending = None;
+        // A restart there starts every pane again: leave when to the user.
+        if cfg!(windows) {
+            return self.say("new velmux binary: `velmux restart` switches to it (panes start again, agents resume)");
+        }
         if let Err(e) = self.restart() {
             self.say(format!("new velmux binary, but restart failed: {e:#}"));
         }
@@ -1478,6 +1542,7 @@ impl App {
             }
         }
         // Anything left over has nowhere to live: let it go.
+        #[cfg(unix)]
         for l in live.into_values() {
             unsafe {
                 libc::kill(l.pid as libc::pid_t, libc::SIGHUP);
@@ -2764,7 +2829,7 @@ impl App {
             .ok()
             .or_else(|| std::env::var("EDITOR").ok())
             .or_else(|| self.projects[loc.project].cfg.editor.clone())
-            .unwrap_or_else(|| "vi".into());
+            .unwrap_or_else(|| DEFAULT_EDITOR.into());
         let program = editor.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
         let at_end = if matches!(program, "vi" | "vim" | "nvim") { " +" } else { "" };
         let opts = LaunchOpts { command: Some(format!("exec {editor}{at_end} {}", shell_quote(&path.display().to_string()))), ..LaunchOpts::default() };
@@ -2971,7 +3036,7 @@ impl App {
             .clone()
             .or_else(|| std::env::var("VISUAL").ok())
             .or_else(|| std::env::var("EDITOR").ok())
-            .unwrap_or_else(|| "vi".into());
+            .unwrap_or_else(|| DEFAULT_EDITOR.into());
         let quoted = format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
         // Plain exec: the pane closes with the editor, which triggers the reload.
         let opts = LaunchOpts { command: Some(format!("exec {editor} {quoted}")), ..LaunchOpts::default() };
@@ -3036,7 +3101,7 @@ impl App {
                 self.pending_out.extend_from_slice(self.mouse_mode());
             }
         }
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = velmux_pool::sys::home().unwrap_or_default();
         for project in &mut self.projects {
             match &project.pool {
                 Some(pool) => match Pool::discover(env.clone(), &pool.base) {
@@ -3342,7 +3407,7 @@ impl App {
                     .clone()
                     .or_else(|| std::env::var("VISUAL").ok())
                     .or_else(|| std::env::var("EDITOR").ok())
-                    .unwrap_or_else(|| "vi".into());
+                    .unwrap_or_else(|| DEFAULT_EDITOR.into());
                 Some(format!("{editor} ."))
             }
         };
@@ -3562,8 +3627,16 @@ impl App {
         std::thread::spawn(move || {
             let tools: &[&[&str]] = if cfg!(target_os = "macos") {
                 &[&["pbcopy"]]
+            } else if cfg!(windows) {
+                &[&["clip"]]
             } else {
                 &[&["wl-copy"], &["xclip", "-selection", "clipboard"]]
+            };
+            // clip.exe reads its input as the console's code page, unless it's UTF-16 with a BOM.
+            let bytes = if cfg!(windows) {
+                std::iter::once(0xfeff).chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect()
+            } else {
+                text.into_bytes()
             };
             for tool in tools {
                 let child = std::process::Command::new(tool[0])
@@ -3575,7 +3648,7 @@ impl App {
                 if let Ok(mut child) = child {
                     if let Some(mut stdin) = child.stdin.take() {
                         use std::io::Write;
-                        let _ = stdin.write_all(text.as_bytes());
+                        let _ = stdin.write_all(&bytes);
                     }
                     if child.wait().is_ok_and(|s| s.success()) {
                         return;

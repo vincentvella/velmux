@@ -7,6 +7,7 @@ use crate::config::{Config, Env, SyncMode};
 use crate::deps::{self, Outcome};
 use crate::git::{self, git};
 use crate::state::{now, Parked, Slot, Status, Store};
+use crate::sys::Canonical as _;
 use crate::claude;
 
 /// A repo's base checkout (the "space") and its pool of worktree slots.
@@ -186,7 +187,7 @@ impl Pool {
         self.store.with(&self.base, |st| {
             let mut adopted = 0;
             for (n, path) in siblings {
-                let Ok(path) = path.canonicalize() else { continue };
+                let Ok(path) = path.canonical() else { continue };
                 if st.slots.iter().any(|s| s.path == path) {
                     continue;
                 }
@@ -248,7 +249,7 @@ impl Pool {
                     git(&self.base, &["worktree", "add", "--detach", &p, &self.base_ref])?;
                     created.push(id.clone());
                 }
-                let path = path.canonicalize()?;
+                let path = path.canonical()?;
                 if st.slot(&id).is_none() {
                     st.slots.push(Slot {
                         id: id.clone(),
@@ -595,7 +596,7 @@ impl Pool {
 
     /// Which slot (if any) contains `path`.
     pub fn slot_of(&self, path: &Path) -> Result<Option<String>> {
-        let path = path.canonicalize()?;
+        let path = path.canonical()?;
         Ok(self
             .status()?
             .into_iter()
@@ -679,7 +680,7 @@ impl Pool {
         for name in self.links() {
             let dest = slot.join(&name);
             if std::fs::symlink_metadata(&dest).is_err() && self.base.join(&name).exists() {
-                std::os::unix::fs::symlink(self.base.join(&name), &dest)
+                crate::sys::symlink(&self.base.join(&name), &dest)
                     .with_context(|| format!("linking {}", dest.display()))?;
             }
         }

@@ -8,6 +8,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use velmux_pool::sys::Canonical as _;
+
 /// What's kept of each side of a conversation, so a huge transcript can't
 /// swamp memory (prompts first: they say what the session was about).
 const PROMPT_CAP: usize = 48 << 10;
@@ -45,7 +47,7 @@ pub fn scan(dirs: &[PathBuf], old: Vec<Doc>) -> Vec<Doc> {
             let Ok(meta) = std::fs::metadata(&path) else { continue };
             let (mtime, size) = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
             // Slot folders can be links to the base's: index each file once.
-            if !seen.insert(path.canonicalize().unwrap_or_else(|_| path.clone())) {
+            if !seen.insert(path.canonical().unwrap_or_else(|_| path.clone())) {
                 continue;
             }
             match old.remove(&path) {

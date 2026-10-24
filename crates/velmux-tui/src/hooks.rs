@@ -44,7 +44,7 @@ pub fn hook_output(agent: Agent) -> &'static str {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    velmux_pool::sys::home().unwrap_or_default()
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -98,15 +98,21 @@ fn target(agent: Agent) -> Option<(PathBuf, PathBuf, Shape)> {
 fn exe() -> PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
-        .map(|d| d.join("velmux"))
-        .find(|p| p.is_file())
-        .or_else(|| std::env::current_exe().ok())
+        .find_map(|d| velmux_pool::sys::find_program(&d, "velmux"))
+        .or_else(crate::client::launched_exe)
         .unwrap_or_else(|| "velmux".into())
 }
 
 /// The hook's command line.
 pub fn command(agent: Agent) -> String {
-    format!("{} agent-hook {}", crate::agents::quote(&exe().display().to_string()), agent.name())
+    format!("{} agent-hook {}", hook_quote(&exe().display().to_string()), agent.name())
+}
+
+/// Agents run their hooks with `sh` (on Windows, Git Bash), whatever shell
+/// velmux's panes use: POSIX quoting, and `/` for Windows' `\`.
+pub(crate) fn hook_quote(path: &str) -> String {
+    let path = if cfg!(windows) { path.replace('\\', "/") } else { path.to_string() };
+    format!("'{}'", path.replace('\'', r"'\''"))
 }
 
 const KILO_PLUGIN: &str = include_str!("../plugins/kilo.js");

@@ -3,6 +3,8 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
+use crate::sys::Canonical as _;
+
 /// Run `git -C dir args…` and return trimmed stdout. Never takes git's
 /// *optional* locks (the index refresh `git status` does), so velmux's
 /// background status checks can't make a concurrent stash or switch fail; a
@@ -47,7 +49,7 @@ pub fn base_of(path: &Path) -> Result<PathBuf> {
     } else {
         bail!("bare repositories are not supported ({})", common.display());
     };
-    Ok(base.canonicalize()?)
+    Ok(base.canonical()?)
 }
 
 /// Every worktree of the repo at `dir` (the checkout included), from

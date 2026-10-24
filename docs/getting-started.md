@@ -2,7 +2,7 @@
 
 ## Install
 
-velmux is a single binary for macOS and Linux. You need git.
+velmux is a single binary for macOS, Linux and [Windows](#windows). You need git.
 
 ```sh
 brew install vincentvella/tap/velmux
@@ -23,6 +23,37 @@ Optional, but worth it:
 - **The GitHub CLI (`gh`)**, signed in, for [pull request status](slots.md#pull-requests).
 - **[Ghostty](https://ghostty.org)** (or another terminal you can bind keys in)
   for the prefix-less ⌘ shortcuts.
+
+### Windows
+
+velmux runs on Windows 10 (1803 or later) and 11, in Windows Terminal or any
+terminal that speaks VT sequences. Build it with Rust (`cargo install`, above)
+or download `velmux-x86_64-pc-windows-msvc.tar.gz` from the releases and put
+`velmux.exe` on your `PATH`. You need [Git for Windows](https://git-scm.com).
+
+What's different there:
+
+- **Panes run PowerShell**: PowerShell 7 (`pwsh`) when it's installed, else
+  Windows PowerShell.
+- **Repo hooks still run in `sh`**: `install_cmd`, `post_claim` and the rest
+  run in the `sh` that comes with Git for Windows, so a repo's `.velmux.toml`
+  works the same for everyone working on it.
+- **Restarts start panes again.** Windows can't hand a running pane to a new
+  process, so `velmux restart` saves everything, stops the panes and brings
+  them back, with agents resuming their conversations. For the same reason a
+  new velmux binary doesn't restart velmux by itself: it tells you, and you run
+  `velmux restart` when it suits you.
+- **A running `velmux.exe` can't be replaced.** The server runs from a copy of
+  itself so it doesn't hold the file, but an attached client does: detach
+  (`ctrl+b d`) before rebuilding or reinstalling velmux.
+- **Links**: without Developer Mode, Windows won't make symlinks, so a slot's
+  shared `.env` files are hard links and Claude's grouped transcripts a
+  junction.
+- `velmux env` prints PowerShell: `velmux env | Invoke-Expression`.
+- There are no ⌘ shortcuts: the prefix keys (`ctrl+b …`) do everything.
+
+The config and state live where they do elsewhere, under your user folder
+(`~\.config\velmux\config.toml`, `~\.local\state\velmux`).
 
 ## Teach Claude about velmux
 

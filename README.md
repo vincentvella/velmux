@@ -57,7 +57,7 @@ Then press `ctrl+b a` to start a Claude in your repo, and ask it for something.
 [Getting started](docs/getting-started.md) covers the rest, including the
 ⌘ shortcuts for Ghostty.
 
-Runs on macOS and Linux. Works with any agent CLI: it knows Claude Code, Codex,
+Runs on macOS, Linux and [Windows](docs/getting-started.md#windows). Works with any agent CLI: it knows Claude Code, Codex,
 Gemini CLI and opencode well, and follows and resumes 15 more (Copilot, Cursor
 Agent, Droid, Qwen Code, Kimi, pi…). See [Agents](docs/agents.md).
 

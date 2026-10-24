@@ -1566,7 +1566,7 @@ fn draw_new_space(app: &App, query: &str, selected: usize, repos: &[std::path::P
 
 /// `~/Workspace` for `$HOME/Workspace`.
 fn short_home(path: &std::path::Path) -> String {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let home = velmux_pool::sys::home().unwrap_or_default();
     match path.strip_prefix(&home) {
         Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()).trim_end_matches('/').to_string(),
         _ => path.display().to_string(),

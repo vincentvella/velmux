@@ -98,7 +98,8 @@ pub fn ensure(
 
 fn seed_from_base(slot: &Path, base: &Path, report: &dyn Fn(&str)) -> Result<()> {
     let src = base.join("node_modules");
-    if !src.is_dir() {
+    // NTFS has no copy-on-write clone to make a full copy cheap: install fresh.
+    if !src.is_dir() || cfg!(windows) {
         return Ok(());
     }
     report("seeding node_modules from base (copy-on-write)");
@@ -126,19 +127,13 @@ pub fn run_shell(dir: &Path, command: &str) -> Result<()> {
 /// the slot's `.nvmrc` or `.tool-versions`. With a `.nvmrc` and nvm installed,
 /// nvm is also switched explicitly, for configs that don't do it on `cd`.
 pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Result<()> {
-    use std::os::unix::process::CommandExt;
     let (program, args) = user_shell(dir, command);
     let mut cmd = Command::new(&program);
     cmd.args(&args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(dir).stdin(std::process::Stdio::null());
     // A session of its own, with no terminal: an interactive shell takes the
     // terminal it's started from for job control, which would leave a
     // `velmux claim` run in your terminal stopped in the background (SIGTTIN).
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    crate::sys::detach(&mut cmd);
     let out = cmd.output().with_context(|| format!("running `{command}`"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -150,11 +145,19 @@ pub fn run_shell_with(dir: &Path, command: &str, env: &[(String, String)]) -> Re
 }
 
 /// The shell and arguments for [`run_shell_with`]: `$SHELL` when it's one
-/// we know how to start like that (zsh, bash, fish), else plain `sh -c`.
+/// we know how to start like that (zsh, bash, fish), else plain `sh -c`. On
+/// Windows, Git's `sh` (so a repo's hooks work the same for everyone), else
+/// PowerShell.
 fn user_shell(dir: &Path, command: &str) -> (String, Vec<String>) {
+    if cfg!(windows) {
+        return match crate::sys::posix_shell() {
+            Some(sh) => (sh.display().to_string(), vec!["-c".into(), command.to_string()]),
+            None => (crate::sys::powershell(), vec!["-NoLogo".into(), "-Command".into(), command.to_string()]),
+        };
+    }
     let shell = std::env::var("SHELL").unwrap_or_default();
     let name = Path::new(&shell).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-    let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".nvm")));
+    let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).or_else(|| crate::sys::home().map(|h| h.join(".nvm")));
     let nvm_sh = nvm.map(|d| d.join("nvm.sh")).filter(|f| f.is_file());
     // nvm is a POSIX shell script: sourced in sh, bash and zsh (not fish).
     let command = match nvm_sh {
@@ -195,8 +198,8 @@ mod tests {
         assert_eq!(args.last().unwrap(), "yarn install", "no .nvmrc: as is");
         std::fs::write(tmp.path().join(".nvmrc"), "24\n").unwrap();
         let (_, args) = user_shell(tmp.path(), "yarn install");
-        let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap()).join(".nvm"));
-        if nvm.join("nvm.sh").is_file() {
+        let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| crate::sys::home().unwrap().join(".nvm"));
+        if nvm.join("nvm.sh").is_file() && cfg!(unix) {
             assert!(args.last().unwrap().contains("nvm use") && args.last().unwrap().ends_with("; yarn install"), "{args:?}");
         }
     }

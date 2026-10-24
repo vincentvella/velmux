@@ -8,6 +8,7 @@ pub mod gh;
 pub mod git;
 mod pool;
 pub mod state;
+pub mod sys;
 
 pub use config::{tui_settings, Config, Env, NotifySettings, Ports, SyncMode, TuiSettings};
 pub use pool::{BaseUpdate, ClaimOpts, ParkedView, Pool, Released, SlotView, OLD_DAYS};

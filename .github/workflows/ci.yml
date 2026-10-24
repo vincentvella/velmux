@@ -19,8 +19,9 @@ jobs:
       fail-fast: false
       matrix:
         # macOS is the primary target (libproc agent detection); Linux keeps
-        # the /proc code paths compiling and tested.
-        os: [ubuntu-latest, macos-latest]
+        # the /proc code paths compiling and tested, Windows the ConPTY and
+        # process-tree ones (its end-to-end tests are Unix only for now).
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

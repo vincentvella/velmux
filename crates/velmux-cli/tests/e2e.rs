@@ -1,4 +1,8 @@
 //! End-to-end tests (harness in `common/`).
+//!
+//! Unix only for now: the harness drives panes through `sh` and a fake Claude
+//! on symlinks.
+#![cfg(unix)]
 
 mod common;
 

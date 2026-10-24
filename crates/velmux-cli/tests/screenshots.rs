@@ -2,6 +2,7 @@
 //! Claude, fake `gh`), captured as SVG into `docs/screenshots/`.
 //!
 //! cargo test -p velmux-cli --test screenshots -- --ignored
+#![cfg(unix)]
 
 mod common;
 
