@@ -43,16 +43,31 @@ pub fn play(sound: &str) {
     }
     let path = if let Some(own) = builtin(sound) {
         own.display().to_string()
-    } else if sound.contains('/') {
+    } else if sound.contains('/') || cfg!(windows) && sound.contains('\\') {
         sound.to_string()
     } else if cfg!(target_os = "macos") {
         format!("/System/Library/Sounds/{sound}.aiff")
+    } else if cfg!(windows) {
+        format!(r"C:\Windows\Media\{sound}.wav")
     } else {
         format!("/usr/share/sounds/freedesktop/stereo/{sound}.oga")
     };
-    let player: &[&str] = if cfg!(target_os = "macos") { &["afplay"] } else { &["paplay"] };
-    let _ = std::process::Command::new(player[0])
-        .arg(path)
+    let mut player = if cfg!(target_os = "macos") {
+        std::process::Command::new("afplay")
+    } else if cfg!(windows) {
+        // Windows has no player command; .NET's plays WAVs (which velmux's own are).
+        let mut ps = std::process::Command::new("powershell");
+        ps.args(["-NoProfile", "-NonInteractive", "-Command"]);
+        ps.arg(format!("(New-Object Media.SoundPlayer {}).PlaySync()", velmux_pool::sys::quote(&path)));
+        velmux_pool::sys::detach(&mut ps);
+        ps
+    } else {
+        std::process::Command::new("paplay")
+    };
+    if !cfg!(windows) {
+        player.arg(path);
+    }
+    let _ = player
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -188,6 +203,23 @@ pub fn system(title: &str, body: &str) {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
+    } else if cfg!(windows) {
+        // A toast through WinRT, which Windows PowerShell (not pwsh) can reach,
+        // shown as PowerShell's: an unregistered app's toasts don't appear.
+        let q = velmux_pool::sys::quote;
+        let script = format!(
+            "$m = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]; \
+             $t = $m::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); \
+             $x = $t.GetElementsByTagName('text'); \
+             [void]$x.Item(0).AppendChild($t.CreateTextNode({})); [void]$x.Item(1).AppendChild($t.CreateTextNode({})); \
+             $m::CreateToastNotifier('{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($t))",
+            q(title),
+            q(body)
+        );
+        let mut ps = std::process::Command::new("powershell");
+        ps.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        velmux_pool::sys::detach(&mut ps);
+        ps.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
     } else {
         std::process::Command::new("notify-send")
             .args([title, body])

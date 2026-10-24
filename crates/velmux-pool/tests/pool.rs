@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+use velmux_pool::sys::Canonical as _;
 use velmux_pool::{claude, ClaimOpts, Env, Pool, Status};
 use tempfile::TempDir;
 
@@ -22,10 +23,10 @@ fn sh(dir: &Path, cmd: &str) -> String {
 /// `.velmux.toml`; slots land in `<tmp>/ws/.pools/app`.
 fn fixture(velmux_toml: &str) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
+    let root = tmp.path().canonical().unwrap();
     let base = root.join("ws/app");
     std::fs::create_dir_all(&base).unwrap();
-    sh(&base, "git init -q -b main && git config user.email t@t && git config user.name t");
+    sh(&base, "git init -q -b main && git config user.email t@t && git config user.name t && git config core.autocrlf false");
     std::fs::write(base.join(".gitignore"), ".env\nnode_modules\n").unwrap();
     std::fs::write(base.join(".env"), "SECRET=1\n").unwrap();
     std::fs::write(base.join("README.md"), "hi\n").unwrap();
@@ -54,7 +55,9 @@ fn init_creates_slots_beside_base() {
     assert_eq!(slots[0].path, expected);
     assert!(slots.iter().all(|s| s.status == Status::Free));
     // env file shared from base, Claude transcripts grouped under base
-    assert!(std::fs::symlink_metadata(expected.join(".env")).unwrap().file_type().is_symlink());
+    // (Windows without Developer Mode can't symlink a file: it's a hard link there.)
+    assert!(cfg!(windows) || std::fs::symlink_metadata(expected.join(".env")).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(expected.join(".env")).unwrap(), "SECRET=1\n");
     let link = claude::project_dir(&f.env.claude_dir, &expected);
     assert_eq!(std::fs::read_link(link).unwrap(), claude::project_dir(&f.env.claude_dir, &f.base));
     // idempotent, and discoverable from inside a slot
@@ -200,7 +203,7 @@ fn with_origin(f: &Fixture) -> PathBuf {
     let root = f.base.parent().unwrap().to_path_buf();
     sh(&root, "git clone -q --bare app origin.git");
     sh(&f.base, "git remote add origin ../origin.git && git fetch -q origin && git branch -q --set-upstream-to=origin/main");
-    sh(&root, "git clone -q origin.git other && cd other && git config user.email t@t && git config user.name t");
+    sh(&root, "git clone -q origin.git other && cd other && git config user.email t@t && git config user.name t && git config core.autocrlf false");
     root.join("other")
 }
 

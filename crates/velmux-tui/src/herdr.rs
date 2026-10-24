@@ -163,7 +163,7 @@ pub struct PlanPane {
 pub fn default_path(session: Option<&str>) -> Result<PathBuf> {
     let config = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) => PathBuf::from(dir).join("herdr"),
-        None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".config/herdr"),
+        None => velmux_pool::sys::home().context("HOME is not set")?.join(".config/herdr"),
     };
     let dir = match session {
         Some(name) => config.join("sessions").join(name),
@@ -420,6 +420,7 @@ impl Plan {
 
 #[cfg(test)]
 mod tests {
+    use velmux_pool::sys::Canonical as _;
     use super::*;
     use std::process::Command;
 
@@ -438,7 +439,7 @@ mod tests {
     #[test]
     fn plans_layouts_agents_and_skips() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         let repo = root.join("app");
         git_repo(&repo);
         let plain = root.join("notes");
@@ -508,7 +509,7 @@ mod tests {
     #[test]
     fn unclassified_folders_resume_only_their_own_conversations() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         let home = root.join("home");
         let deep = home.join("Downloads/thing");
         std::fs::create_dir_all(&deep).unwrap();
@@ -549,7 +550,7 @@ mod tests {
     #[test]
     fn with_latest_claude_adds_a_resuming_pane() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         let repo = root.join("app");
         git_repo(&repo);
         let env = Env { global_config: root.join("none.toml"), claude_dir: root.join("claude") };

@@ -29,7 +29,7 @@ pub struct Env {
 
 impl Env {
     pub fn from_process() -> Result<Env> {
-        let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+        let home = crate::sys::home().context("HOME is not set")?;
         let global_config = std::env::var_os("VELMUX_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config/velmux/config.toml"));
@@ -205,7 +205,7 @@ pub fn tui_settings(env: &Env) -> Result<TuiSettings> {
         theme_colors: global.theme_colors.unwrap_or_default(),
         update_check: global.update_check.unwrap_or(true),
         scratch_dir: {
-            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            let home = crate::sys::home().unwrap_or_default();
             match global.scratch_dir {
                 Some(p) => match p.strip_prefix("~") {
                     Ok(rest) => home.join(rest),

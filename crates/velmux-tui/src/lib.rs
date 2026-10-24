@@ -5,6 +5,7 @@ mod client;
 mod copy;
 mod detect;
 mod herdr;
+mod ipc;
 mod keys;
 mod layout;
 mod mouse;
@@ -13,6 +14,7 @@ mod pane;
 mod picker;
 mod prefix;
 mod proto;
+#[cfg(unix)]
 mod pty_raw;
 mod server;
 mod search;
@@ -32,7 +34,7 @@ pub use client::attach;
 /// The velmux pane this process runs in, when a server is there to ask.
 pub fn current_pane() -> Option<u64> {
     let pane = std::env::var("VELMUX_PANE").ok()?.parse().ok()?;
-    std::os::unix::net::UnixStream::connect(paths::socket().ok()?).ok()?;
+    crate::ipc::UnixStream::connect(paths::socket().ok()?).ok()?;
     Some(pane)
 }
 
@@ -122,7 +124,7 @@ pub fn release_for_pane(pane: u64) -> anyhow::Result<String> {
 /// `velmux restart`: re-exec the running server (picking up a rebuilt binary)
 /// without stopping any pane.
 pub fn restart_server() -> anyhow::Result<()> {
-    if std::os::unix::net::UnixStream::connect(paths::socket()?).is_err() {
+    if crate::ipc::UnixStream::connect(paths::socket()?).is_err() {
         println!("no velmux server running");
         return Ok(());
     }
@@ -138,7 +140,7 @@ pub fn debug_server() -> anyhow::Result<()> {
 
 /// `velmux stop`: save and stop the server.
 pub fn stop_server() -> anyhow::Result<()> {
-    if std::os::unix::net::UnixStream::connect(paths::socket()?).is_err() {
+    if crate::ipc::UnixStream::connect(paths::socket()?).is_err() {
         println!("no velmux server running");
         return Ok(());
     }
@@ -257,11 +259,12 @@ pub fn import_herdr(
     dry_run: bool,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
+    use velmux_pool::sys::Canonical as _;
     let path = match file {
         Some(f) => f,
         None => herdr::default_path(session)?,
     };
-    let path = path.canonicalize().with_context(|| format!("no herdr session at {}", path.display()))?;
+    let path = path.canonical().with_context(|| format!("no herdr session at {}", path.display()))?;
     if dry_run {
         let plan = herdr::plan(&path, &velmux_pool::Env::from_process()?, with_latest_claude)?;
         print!("would import from {}:\n{}", path.display(), plan.describe());
@@ -282,10 +285,10 @@ pub mod paths {
     use anyhow::{Context, Result};
 
     pub fn state_dir() -> Result<PathBuf> {
-        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        let home = velmux_pool::sys::home().context("HOME is not set")?;
         let dir = std::env::var_os("VELMUX_STATE_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home).join(".local/state/velmux"));
+            .unwrap_or_else(|| home.join(".local/state/velmux"));
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
@@ -293,17 +296,31 @@ pub mod paths {
     /// Unix socket paths are capped at ~104 bytes, so like tmux the socket lives
     /// in a short per-user dir rather than under the state dir.
     pub fn socket() -> Result<PathBuf> {
-        use std::os::unix::fs::PermissionsExt;
         let path = match std::env::var_os("VELMUX_SOCKET") {
             Some(path) => PathBuf::from(path),
-            None => PathBuf::from(format!("/tmp/velmux-{}/server.sock", unsafe { libc::getuid() })),
+            None => default_socket(),
         };
         let dir = path.parent().context("socket path has no parent")?;
         if !dir.exists() {
             std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            }
         }
         Ok(path)
+    }
+
+    #[cfg(unix)]
+    fn default_socket() -> PathBuf {
+        PathBuf::from(format!("/tmp/velmux-{}/server.sock", unsafe { libc::getuid() }))
+    }
+
+    /// Windows' temp folder is already per user (`%LOCALAPPDATA%\Temp`).
+    #[cfg(windows)]
+    fn default_socket() -> PathBuf {
+        std::env::temp_dir().join("velmux").join("server.sock")
     }
 
     pub fn log() -> Result<PathBuf> {

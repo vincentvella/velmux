@@ -182,15 +182,15 @@ impl App {
             let path = entry.path();
             let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
             let name = entry.file_name().to_string_lossy().into_owned();
-            let keep = want.iter().any(|(n, target)| *n == name && std::fs::read_link(&path).is_ok_and(|t| &t == target));
+            let keep = want.iter().any(|(n, target)| *n == name && velmux_pool::sys::read_link(&path).is_ok_and(|t| &t == target));
             if is_link && !keep {
-                let _ = std::fs::remove_file(&path);
+                let _ = velmux_pool::sys::remove_link(&path);
             }
         }
         for (name, target) in want {
             let link = dir.join(&name);
             if std::fs::symlink_metadata(&link).is_err() {
-                let _ = std::os::unix::fs::symlink(&target, &link);
+                let _ = velmux_pool::sys::symlink(&target, &link);
             }
         }
     }

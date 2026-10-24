@@ -152,6 +152,7 @@ pub fn history_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(unix)]
 pub fn handoff_file() -> Result<PathBuf> {
     Ok(paths::state_dir()?.join("handoff.json"))
 }
@@ -179,17 +180,14 @@ pub fn load() -> Option<Saved> {
 /// login shell, whose profile can reorder PATH: without this, `claude` in a pane
 /// may be a different install than `claude` in your terminal.
 pub fn resolve_program(command: &str, path_var: Option<&std::ffi::OsStr>) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let trimmed = command.trim_start();
     let prog_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
     let (prog, rest) = trimmed.split_at(prog_len);
-    if prog.is_empty() || prog.contains('/') {
+    if prog.is_empty() || prog.contains('/') || cfg!(windows) && prog.contains(['\\', '\'', '"']) {
         return command.to_string();
     }
     let Some(path_var) = path_var else { return command.to_string() };
-    let found = std::env::split_paths(path_var).map(|dir| dir.join(prog)).find(|p| {
-        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    });
+    let found = std::env::split_paths(path_var).find_map(|dir| velmux_pool::sys::find_program(&dir, prog));
     match found {
         Some(p) if !p.to_string_lossy().contains(char::is_whitespace) => format!("{}{rest}", p.display()),
         _ => command.to_string(),
@@ -219,6 +217,24 @@ mod tests {
 
 
     #[test]
+    #[cfg(windows)]
+    fn resolves_programs_by_their_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (first, second) = (tmp.path().join("a"), tmp.path().join("b"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("claude.cmd"), "").unwrap();
+        std::fs::write(second.join("claude.exe"), "").unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        let p = Some(path.as_os_str());
+        assert_eq!(resolve_program("claude --resume x", p), format!("{} --resume x", first.join("claude.cmd").display()));
+        assert_eq!(resolve_program(r"C:\x\claude -c", p), r"C:\x\claude -c");
+        assert_eq!(resolve_program("'claude' -c", p), "'claude' -c");
+        assert_eq!(resolve_program("nope", p), "nope");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn resolves_programs_with_the_given_path_order() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();

@@ -15,7 +15,7 @@ pub fn detected() -> bool {
 /// Ghostty's config file: the XDG one, else (macOS) the app-support one if
 /// that's what exists.
 pub fn config_path() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let home = velmux_pool::sys::home()?;
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("ghostty/config");
     let app = home.join("Library/Application Support/com.mitchellh.ghostty/config");
     Some(if !xdg.exists() && app.exists() { app } else { xdg })
