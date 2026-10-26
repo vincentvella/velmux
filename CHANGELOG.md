@@ -23,6 +23,8 @@ What changed in each release of velmux. Each version links to its release
 - Line endings are pinned to LF (`.gitattributes`): a checkout with
   `core.autocrlf` (Git for Windows' default) embedded the skill and agent
   plugins with CRLF.
+- A new conversation in a workstream with no repos in it yet took up to 30
+  seconds to be named after it.
 
 ## [0.15.1] - 2026-10-26
 
