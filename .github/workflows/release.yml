@@ -62,15 +62,17 @@ jobs:
         run: |
           name="velmux-$TAG-${{ matrix.target }}"
           exe=velmux; [ "$RUNNER_OS" = Windows ] && exe=velmux.exe
+          # (Git Bash on Windows has sha256sum, not shasum.)
+          sum() { if command -v shasum >/dev/null; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
           mkdir "$name"
           cp "target/${{ matrix.target }}/release/$exe" README.md LICENSE NOTICE "$name/"
           tar -czf "$name.tar.gz" "$name"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          sum "$name.tar.gz" > "$name.tar.gz.sha256"
           # Also without the version, so .../releases/latest/download/<file>
           # always works (the site's download links and install.sh).
           plain="velmux-${{ matrix.target }}.tar.gz"
           cp "$name.tar.gz" "$plain"
-          shasum -a 256 "$plain" > "$plain.sha256"
+          sum "$plain" > "$plain.sha256"
           "$name/$exe" --version || true
       - uses: actions/upload-artifact@v4
         with:
