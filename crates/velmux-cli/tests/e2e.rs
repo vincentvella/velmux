@@ -828,7 +828,12 @@ fn an_agent_that_takes_the_mouse_still_gets_the_pane_menu() {
     ui.line("mouse");
     ui.line("say ready");
     ui.wait_for("said ready");
-    env.until("the pane to report mouse mode", || String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).contains("mouse ButtonMotion"));
+    let debug = || String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).into_owned();
+    let start = std::time::Instant::now();
+    while !debug().contains("mouse ButtonMotion") {
+        assert!(start.elapsed() < WAIT, "the pane never reported mouse mode: {}", debug());
+        std::thread::sleep(Duration::from_millis(100));
+    }
     ui.send(b"\x1b[<2;80;12M\x1b[<2;80;12m");
     ui.wait_for("split right");
 }
@@ -1026,7 +1031,7 @@ fn prefix_space_opens_the_menu_for_whats_focused() {
     ui.prefix(" ");
     ui.wait_for("split right");
     let menu = ui.screen();
-    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap();
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap_or_else(|| panic!("no feat/keys… in the menu:\n{menu}"));
     for _ in 0..at {
         ui.send(b"j");
     }

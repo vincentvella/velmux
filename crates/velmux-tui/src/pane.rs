@@ -576,6 +576,12 @@ fn shell_command(command: Option<&str>) -> CommandBuilder {
 #[cfg(windows)]
 fn shell_command(command: Option<&str>) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(velmux_pool::sys::powershell());
+    // portable-pty starts a Windows program in the registry's environment (a
+    // fresh login's), not velmux's: pass velmux's on, as a Unix pane gets it,
+    // so a PATH or variable set where velmux was started reaches its panes.
+    for (key, value) in std::env::vars_os() {
+        cmd.env(key, value);
+    }
     cmd.arg("-NoLogo");
     if let Some(command) = command {
         let (command, stay) = match command.strip_prefix("exec ") {
