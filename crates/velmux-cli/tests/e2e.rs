@@ -1018,6 +1018,7 @@ fn a_released_workstream_comes_back_whole() {
 
 #[test]
 fn prefix_space_opens_the_menu_for_whats_focused() {
+    std::env::set_var("TRACE_VELMUX_INPUT", "1");
     let env = Env::new();
     let repo = env.repo("app");
     assert!(env.velmux(&repo, &["init"]).status.success());
@@ -1036,7 +1037,7 @@ fn prefix_space_opens_the_menu_for_whats_focused() {
     ui.prefix(" ");
     ui.wait_for("split right");
     let menu = ui.screen();
-    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap_or_else(|| panic!("no feat/keys… in the menu:\n{menu}"));
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap_or_else(|| panic!("no feat/keys… in the menu:\n{menu}\n{}", ui.report()));
     for _ in 0..at {
         ui.send(b"j");
     }
