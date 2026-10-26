@@ -335,9 +335,9 @@ fn wrap_width<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, a: usize, b: usiz
 /// Whether an agent wrapped `line` into `next` itself (the terminal didn't),
 /// and if so whether a space goes between them: `Some(true)` when it was
 /// wrapped at a space (`next` starts with a word that wouldn't have fit),
-/// `Some(false)` when a word too long for any line was split there. `None`: a real line break: `next`
-/// is blank, starts a list item, bullet or box, or its first word would have
-/// fit.
+/// `Some(false)` when a word too long for any line was split there. `None`: a
+/// real line break: `next` is blank, starts a list item, bullet or box, or its
+/// first word would have fit.
 fn agent_join(line: &str, next: &str, width: usize) -> Option<bool> {
     let text = line.trim_end();
     let rest = next.trim();
