@@ -250,11 +250,13 @@ impl Env {
                 // Where's the cursor? (ConPTY asks on start, and waits.)
                 if buf[..n].windows(4).any(|q| q == b"\x1b[6n") {
                     let (row, col) = p.screen().cursor_position();
-                    let _ = write!(w.lock().unwrap(), "\x1b[{};{}R", row + 1, col + 1);
+                    let mut w = w.lock().unwrap();
+                    let _ = write!(w, "\x1b[{};{}R", row + 1, col + 1);
+                    let _ = w.flush();
                 }
             }
         });
-        let ui = Ui { parser, writer, child: Mutex::new(child), _master: pair.master, raw, log: self.state.join("server.log") };
+        let ui = Ui { parser, writer, child: Mutex::new(child), _master: pair.master, raw, log: self.state.join("server.log"), socket: self.socket.clone() };
         ui.wait_for("menu");
         ui
     }
@@ -284,6 +286,7 @@ pub struct Ui {
     /// The last of what the client wrote, as it came (for a failure's report).
     pub raw: Arc<Mutex<Vec<u8>>>,
     pub log: PathBuf,
+    pub socket: PathBuf,
 }
 
 impl Drop for Ui {
@@ -343,7 +346,8 @@ impl Ui {
         let raw = String::from_utf8_lossy(&self.raw.lock().unwrap()).escape_debug().to_string();
         let log = std::fs::read_to_string(&self.log).unwrap_or_default();
         let tail: Vec<&str> = log.lines().rev().take(30).collect();
-        format!("client: {status:?}\nraw output: {raw}\nserver.log:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+        let server = if UnixStream::connect(&self.socket).is_ok() { "up" } else { "not answering" };
+        format!("client: {status:?}\nserver: {server}\nraw output: {raw}\nserver.log:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
     }
 
     pub fn wait_gone_text(&self, needle: &str) {
