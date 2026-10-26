@@ -333,12 +333,11 @@ fn wrap_width<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, a: usize, b: usiz
 }
 
 /// Whether an agent wrapped `line` into `next` itself (the terminal didn't),
-/// and if so whether a space goes between them: `Some(false)` when `line`
-/// runs to the agent's width ending in a long word (a path broken where it
-/// hit the edge), `Some(true)` when it was wrapped at a space (`next` starts
-/// with a word that wouldn't have fit). `None`: a real line break: `next`
-/// is blank, starts a list item, bullet or box, or its first word would have
-/// fit.
+/// and if so whether a space goes between them: `Some(true)` when it was
+/// wrapped at a space (`next` starts with a word that wouldn't have fit),
+/// `Some(false)` when a word too long for any line was split there. `None`: a
+/// real line break: `next` is blank, starts a list item, bullet or box, or its
+/// first word would have fit.
 fn agent_join(line: &str, next: &str, width: usize) -> Option<bool> {
     let text = line.trim_end();
     let rest = next.trim();
@@ -360,10 +359,13 @@ fn agent_join(line: &str, next: &str, width: usize) -> Option<bool> {
     if len + 1 < width && len + 1 + first <= width {
         return None; // its first word would have fit: a real break
     }
-    // A long word (a path, a flag-laden command) broken where it hit the edge
-    // carries on with no space; words wrapped at a space get it back.
+    // An agent only splits a word too long for a line of its own: one that
+    // would fit goes to the next line whole. So if the line's last word and
+    // the next line's first would fit on one line together, the break was at
+    // a space (put it back); only longer than a line are they one long word
+    // (a path, a URL) split where it hit the edge.
     let last = text.split_whitespace().last().map_or(0, |w| w.chars().count());
-    Some(last * 2 <= width)
+    Some(last + first <= width)
 }
 
 /// OSC 52 sequence that asks the outer terminal to set its clipboard.
@@ -440,6 +442,18 @@ mod tests {
             "  - another",
         ];
         assert_eq!(c2.extract(&mut p2, (0, 0), (7, 81)), want.join("\n"));
+        // A command whose line ends in a long path, wrapped at the space after
+        // it: the space comes back (the path isn't glued to the next word).
+        let lines = [
+            "  ! bun run build --config /Users/vince/Workspace/velmux/site/next.config.ts",
+            "  --verbose",
+            rule.as_str(),
+        ];
+        let mut p4 = vt100::Parser::new(std::num::NonZero::new(4).unwrap(), std::num::NonZero::new(82).unwrap(), 0);
+        p4.process(lines.join("\r\n").as_bytes());
+        let mut c4 = Copy::enter(1, &p4);
+        c4.rewrap = true;
+        assert_eq!(c4.extract(&mut p4, (0, 0), (1, 81)), "  ! bun run build --config /Users/vince/Workspace/velmux/site/next.config.ts --verbose");
         // Code that happens to run long keeps its lines.
         let code = ["  let total = items.iter().map(|item| item.price * item.quantity).sum::<u64>();", "  return total;", rule.as_str()];
         let mut p3 = vt100::Parser::new(std::num::NonZero::new(4).unwrap(), std::num::NonZero::new(82).unwrap(), 0);

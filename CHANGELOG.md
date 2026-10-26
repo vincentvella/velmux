@@ -23,6 +23,14 @@ What changed in each release of velmux. Each version links to its release
   `core.autocrlf` (Git for Windows' default) embedded the skill and agent
   plugins with CRLF.
 
+## [0.15.1] - 2026-10-26
+
+### Fixed
+
+- Copying a command an agent wrapped no longer glues words together when a
+  line ended in a long path or URL: the space goes back unless the two pieces
+  are too long to fit on one line (a word split at the edge).
+
 ## [0.15.0] - 2026-10-23
 
 ### Added
@@ -294,7 +302,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/vincentvella/velmux/releases/tag/v0.15.1
 [0.15.0]: https://github.com/vincentvella/velmux/releases/tag/v0.15.0
 [0.14.0]: https://github.com/vincentvella/velmux/releases/tag/v0.14.0
 [0.13.0]: https://github.com/vincentvella/velmux/releases/tag/v0.13.0
