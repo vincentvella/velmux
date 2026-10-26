@@ -597,10 +597,12 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.wait_for("alive");
     // …and its folder, emptied of links, goes once nothing works in it.
     assert!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) == 0, "no links left");
-    // (Both shells are in the checkout now: leave the folder in each.)
-    ui.line("cd /");
+    // (Both shells are in the checkout now: leave the folder in each.
+    // PowerShell's `cd` keeps the process where it was: move that too.)
+    let leave = if cfg!(windows) { "cd /; [Environment]::CurrentDirectory = 'C:\\'" } else { "cd /" };
+    ui.line(leave);
     ui.prefix("j");
-    ui.line("cd /");
+    ui.line(leave);
     env.until("its folder to go", || !dir.exists());
 }
 
@@ -817,6 +819,9 @@ fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
     });
 }
 
+// (Windows' ConPTY keeps a program's mouse reporting to itself, so velmux
+// can't see it there.)
+#[cfg(unix)]
 #[test]
 fn an_agent_that_takes_the_mouse_still_gets_the_pane_menu() {
     let env = Env::new();
