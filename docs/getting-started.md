@@ -56,6 +56,12 @@ What's different there:
 - **Links**: without Developer Mode, Windows won't make symlinks, so a slot's
   shared `.env` files are hard links and Claude's grouped transcripts a
   junction.
+- **A pane's folder is where its shell started.** PowerShell's `cd` doesn't
+  move the process, so a shell's label and the folder velmux sees for it stay
+  where it opened, and a workstream's folder goes once its shells close.
+- **Agents' own mouse support stays off.** Windows' console keeps a program's
+  mouse reporting to itself, so the mouse is always velmux's: clicks, drags,
+  the wheel and the pane menu all work, but not an agent's own mouse features.
 - `velmux env` prints PowerShell: `velmux env | Invoke-Expression`.
 - There are no ⌘ shortcuts: the prefix keys (`ctrl+b …`) do everything.
 
