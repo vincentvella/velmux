@@ -52,11 +52,29 @@ fn pty_run(prog: &str, args: &[&str], env: Option<&Env>, secs: u64) {
 fn probe() {
     pty_run("cmd", &["/c", "echo hello-from-cmd"], None, 4);
     let env = Env::new();
-    let out = env.velmux(&env.root, &["debug"]);
-    eprintln!("PROBE velmux debug (no pty): {:?}\n  out: {}\n  err: {}", out.status, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let mut child = std::process::Command::new(VELMUX).arg("debug").current_dir(&env.root).envs(env.vars()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break Some(s);
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    eprintln!("PROBE velmux debug (no pty): exited {status:?} after {:?}", start.elapsed());
+    if status.is_some() {
+        let out = child.wait_with_output().unwrap();
+        eprintln!("  out: {}\n  err: {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    } else {
+        let _ = child.kill();
+    }
     eprintln!("  server.log: {}", std::fs::read_to_string(env.state.join("server.log")).unwrap_or_default());
     eprintln!("  state: {:?}", std::fs::read_dir(&env.state).map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>()));
+    eprintln!("  server up: {}", uds_windows::UnixStream::connect(&env.socket).is_ok());
     env.stop(&env.root);
+    eprintln!("PROBE stopped");
     pty_run(VELMUX, &["--version"], Some(&env), 4);
     pty_run(VELMUX, &[], Some(&env), 8);
     eprintln!("  server.log after pty attach: {}", std::fs::read_to_string(env.state.join("server.log")).unwrap_or_default());

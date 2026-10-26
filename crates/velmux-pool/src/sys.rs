@@ -126,7 +126,7 @@ pub fn remove_link(path: &Path) -> std::io::Result<()> {
 /// Start `cmd` with no terminal: a session of its own on Unix (nothing it runs
 /// can take the terminal you're in for job control); on Windows, a hidden
 /// console of its own and its own process group, so ctrl+c in your terminal
-/// and closing it leave it alone.
+/// and closing it leave it alone, and without this process's stdio.
 pub fn detach(cmd: &mut Command) {
     #[cfg(unix)]
     unsafe {
@@ -139,6 +139,15 @@ pub fn detach(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+        // A Windows child gets every handle this process lets it inherit, its
+        // stdio usually among them: a pipe someone reads your output from (a
+        // script, an agent's shell tool) would stay open, and them waiting, as
+        // long as it runs. (Stdio::inherit() still works: it passes a copy.)
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+        }
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
