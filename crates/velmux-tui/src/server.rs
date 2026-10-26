@@ -1709,6 +1709,9 @@ impl App {
             work.push((i, pool, due));
         }
         if work.is_empty() {
+            // Conversations are named after each refresh; with none due (a
+            // workstream of no repos yet), still name a new one now.
+            self.name_conversations();
             return;
         }
         self.refreshing = true;
