@@ -73,8 +73,23 @@ pub fn fake_claude() -> PathBuf {
     Path::new(VELMUX).parent().unwrap().join("examples/fake_claude")
 }
 
+/// Run inside velmux (a pane), the tests would inherit its `VELMUX_*`
+/// variables (`VELMUX_EXE`, `VELMUX_PANE`…) and point at the real install:
+/// every command a test starts gets only the ones it sets itself.
+fn forget_outer_velmux() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("VELMUX") {
+                std::env::remove_var(&key);
+            }
+        }
+    });
+}
+
 impl Env {
     pub fn new() -> Env {
+        forget_outer_velmux();
         let lock = Slot::take();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();

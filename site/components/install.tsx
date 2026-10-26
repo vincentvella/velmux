@@ -10,6 +10,7 @@ const downloads = [
   { id: 'mac-intel', label: 'macOS · Intel', file: 'velmux-x86_64-apple-darwin.tar.gz' },
   { id: 'linux-x64', label: 'Linux · x86_64', file: 'velmux-x86_64-unknown-linux-musl.tar.gz' },
   { id: 'linux-arm', label: 'Linux · arm64', file: 'velmux-aarch64-unknown-linux-musl.tar.gz' },
+  { id: 'windows', label: 'Windows · x64', file: 'velmux-x86_64-pc-windows-msvc.tar.gz' },
 ];
 
 function Command({ label, command }: { label: string; command: string }) {
@@ -37,13 +38,13 @@ export function Install() {
   const [yours, setYours] = useState<string | null>(null);
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
-    setYours(ua.includes('mac') ? 'mac-arm' : ua.includes('linux') ? (/aarch64|arm/.test(ua) ? 'linux-arm' : 'linux-x64') : null);
+    setYours(ua.includes('win') ? 'windows' : ua.includes('mac') ? 'mac-arm' : ua.includes('linux') ? (/aarch64|arm/.test(ua) ? 'linux-arm' : 'linux-x64') : null);
   }, []);
   return (
     <div className="grid gap-2">
       <Command label="Homebrew" command="brew install vincentvella/tap/velmux" />
       <Command label="Script" command="curl -fsSL https://velmux.com/install.sh | sh" />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {downloads.map((d) => (
           <a
             key={d.id}

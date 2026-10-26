@@ -2,7 +2,7 @@
 // per platform. Cached for an hour, so GitHub is asked at most that often.
 export const revalidate = 3600;
 
-const targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl'];
+const targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'x86_64-pc-windows-msvc'];
 
 export async function GET() {
   const res = await fetch('https://api.github.com/repos/vincentvella/velmux/releases/latest', {
