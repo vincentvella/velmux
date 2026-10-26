@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-26
+
 ### Fixed
 
 - Copying a command an agent wrapped no longer glues words together when a
@@ -282,7 +284,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/vincentvella/velmux/releases/tag/v0.15.1
 [0.15.0]: https://github.com/vincentvella/velmux/releases/tag/v0.15.0
 [0.14.0]: https://github.com/vincentvella/velmux/releases/tag/v0.14.0
 [0.13.0]: https://github.com/vincentvella/velmux/releases/tag/v0.13.0
