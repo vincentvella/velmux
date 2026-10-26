@@ -5,6 +5,25 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- Windows (10 1803 and later, 11). Panes run PowerShell over ConPTY, clients
+  and the server talk over the same Unix socket (which Windows has too), and
+  agents are found in a pane's process tree. Repo hooks run in Git for
+  Windows' `sh`, so a `.velmux.toml` works the same everywhere. `velmux
+  restart` starts panes again there (agents resume their conversations), since
+  Windows can't hand a pane to a new process. Install it with
+  `irm https://velmux.com/install.ps1 | iex`; see
+  [Getting started](docs/getting-started.md#windows).
+- npm installs of Claude Code (`node …/@anthropic-ai/claude-code/…`) are
+  recognised as Claude.
+
+### Fixed
+
+- Line endings are pinned to LF (`.gitattributes`): a checkout with
+  `core.autocrlf` (Git for Windows' default) embedded the skill and agent
+  plugins with CRLF.
+
 ## [0.15.1] - 2026-10-26
 
 ### Fixed

@@ -80,7 +80,7 @@ export default function HomePage() {
       </section>
 
       <p className="text-sm text-fd-muted-foreground">
-        Runs on macOS and Linux. Works with any agent CLI, and knows{' '}
+        Runs on macOS, Linux and Windows. Works with any agent CLI, and knows{' '}
         <Link href="/docs/agents" className="underline">
           19 of them
         </Link>{' '}

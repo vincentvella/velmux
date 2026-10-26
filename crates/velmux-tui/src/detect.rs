@@ -6,6 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
+/// A process id (`pid_t`, which Windows' ids fit too).
+pub type Pid = i32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
     Idle,
@@ -22,7 +25,7 @@ const AGENTS: &[&str] = &[
 ///
 /// The group leader is often a shell (`sh -c 'claude; …'` has no job control,
 /// so the agent joins the shell's group), hence every member is checked.
-pub fn foreground_agent(pgid: Option<libc::pid_t>) -> Option<&'static str> {
+pub fn foreground_agent(pgid: Option<Pid>) -> Option<&'static str> {
     let pgid = pgid?;
     let mut pids = group_members(pgid);
     pids.retain(|&p| p != pgid);
@@ -34,8 +37,8 @@ pub fn foreground_agent(pgid: Option<libc::pid_t>) -> Option<&'static str> {
 /// as `…/claude/versions/<semver>`, so path components are matched), or, for
 /// agents that run under Node (npm installs of Codex and Gemini), by the
 /// script it runs.
-fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
-    let path = exe_path(pid)?.to_string_lossy().to_lowercase();
+fn agent_of(pid: Pid) -> Option<&'static str> {
+    let path = normal(&exe_path(pid)?.to_string_lossy());
     // The first few also by a folder they're installed in (`…/codex/bin/codex`);
     // the rest by the executable's own name only (a user called devin…).
     let file = path.rsplit('/').next().unwrap_or_default();
@@ -45,18 +48,31 @@ fn agent_of(pid: libc::pid_t) -> Option<&'static str> {
     let runtime = path.rsplit('/').next().unwrap_or_default();
     if matches!(runtime, "node" | "bun" | "deno") {
         let args = process_args(pid)?;
-        return args.iter().skip(1).take(3).find_map(|a| script_agent(&a.to_lowercase()));
+        return args.iter().skip(1).take(3).find_map(|a| script_agent(&normal(a)));
     }
     // Hermes runs as a Python script (`python …/bin/hermes`).
     if runtime.starts_with("python") {
         let args = process_args(pid)?;
-        return args.iter().skip(1).take(3).any(|a| a.ends_with("/hermes")).then_some("hermes");
+        return args.iter().skip(1).take(3).any(|a| normal(a).ends_with("/hermes")).then_some("hermes");
     }
     None
 }
 
+/// A path or argument as matched here: lowercase, `/`-separated, and
+/// without Windows' `.exe` (`C:\…\Claude.exe` → `c:/…/claude`).
+fn normal(s: &str) -> String {
+    let s = s.to_lowercase();
+    if cfg!(windows) {
+        let s = s.replace('\\', "/");
+        s.strip_suffix(".exe").map(str::to_string).unwrap_or(s)
+    } else {
+        s
+    }
+}
+
 /// Agents that run as Node scripts, by package (from herdr's detection).
 const SCRIPTS: &[(&str, &str)] = &[
+    ("@anthropic-ai/claude-code", "claude"),
     ("@github/copilot", "copilot"),
     ("@qwen-code/qwen-code", "qwen"),
     ("@moonshot-ai/kimi-code", "kimi"),
@@ -81,7 +97,7 @@ fn script_agent(arg: &str) -> Option<&'static str> {
 
 /// A process's arguments (`argv`), program first.
 #[cfg(target_os = "macos")]
-fn process_args(pid: libc::pid_t) -> Option<Vec<String>> {
+fn process_args(pid: Pid) -> Option<Vec<String>> {
     // KERN_PROCARGS2: argc (i32), the exec path, padding NULs, then argv.
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;
@@ -100,13 +116,13 @@ fn process_args(pid: libc::pid_t) -> Option<Vec<String>> {
     Some(rest[start..].split(|&b| b == 0).take(argc).map(|a| String::from_utf8_lossy(a).into_owned()).collect())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn process_args(pid: libc::pid_t) -> Option<Vec<String>> {
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_args(pid: Pid) -> Option<Vec<String>> {
     let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     Some(raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect())
 }
 
-const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "elvish", "xonsh", "login"];
+const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "nu", "elvish", "xonsh", "login", "pwsh", "powershell", "cmd"];
 
 pub fn is_shell(program: &str) -> bool {
     SHELLS.contains(&program.trim_start_matches('-'))
@@ -120,22 +136,23 @@ pub struct Foreground {
     /// Its working directory.
     pub cwd: Option<PathBuf>,
     /// Its process id (for Claude, the key to its session record).
-    pub pid: Option<libc::pid_t>,
+    pub pid: Option<Pid>,
 }
 
 /// The pty's foreground job: the first non-shell process in the group (the
 /// command a shell is running), else the shell itself.
-pub fn foreground(pgid: Option<libc::pid_t>) -> Foreground {
+pub fn foreground(pgid: Option<Pid>) -> Foreground {
     let Some(pgid) = pgid else { return Foreground::default() };
     let mut pids = group_members(pgid);
     pids.retain(|&p| p != pgid);
     pids.insert(0, pgid);
-    let named: Vec<(libc::pid_t, String)> = pids
+    let named: Vec<(Pid, String)> = pids
         .into_iter()
         .filter_map(|pid| {
             let path = exe_path(pid)?;
             // Agents take their own name (`…/claude/versions/2.1.303`, `node …/codex.js`).
-            let name = agent_of(pid).map(String::from).or_else(|| path.file_name().map(|f| f.to_string_lossy().into_owned()))?;
+            let file = if cfg!(windows) { path.file_stem() } else { path.file_name() };
+            let name = agent_of(pid).map(String::from).or_else(|| file.map(|f| f.to_string_lossy().into_owned()))?;
             Some((pid, name))
         })
         .collect();
@@ -147,7 +164,7 @@ pub fn foreground(pgid: Option<libc::pid_t>) -> Foreground {
 }
 
 #[cfg(target_os = "macos")]
-fn process_cwd(pid: libc::pid_t) -> Option<PathBuf> {
+fn process_cwd(pid: Pid) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
@@ -163,8 +180,8 @@ fn process_cwd(pid: libc::pid_t) -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsStr::from_bytes(&bytes[..end])))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn process_cwd(pid: libc::pid_t) -> Option<PathBuf> {
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_cwd(pid: Pid) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
@@ -175,22 +192,23 @@ pub fn short_cwd(cwd: &Path, root: &Path) -> Option<String> {
         return None;
     }
     if let Ok(rel) = cwd.strip_prefix(root) {
-        return Some(rel.display().to_string());
+        return Some(rel.display().to_string().replace(std::path::MAIN_SEPARATOR, "/"));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = velmux_pool::sys::home();
     let shown = match home.as_deref().and_then(|h| cwd.strip_prefix(h).ok()) {
         Some(rel) if rel.as_os_str().is_empty() => "~".to_string(),
         Some(rel) => format!("~/{}", rel.display()),
         None => cwd.display().to_string(),
     };
+    let shown = if cfg!(windows) { shown.replace('\\', "/") } else { shown };
     let parts: Vec<&str> = shown.split('/').collect();
     Some(if parts.len() > 3 { format!("…/{}", parts[parts.len() - 2..].join("/")) } else { shown })
 }
 
 #[cfg(target_os = "macos")]
-fn group_members(pgid: libc::pid_t) -> Vec<libc::pid_t> {
-    let mut pids = vec![0 as libc::pid_t; 256];
-    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+fn group_members(pgid: Pid) -> Vec<Pid> {
+    let mut pids = vec![0 as Pid; 256];
+    let bytes = (pids.len() * std::mem::size_of::<Pid>()) as libc::c_int;
     // The return value's unit (pids vs bytes) is inconsistently documented, so read
     // the zero-initialised buffer instead of trusting it.
     if unsafe { libc::proc_listpgrppids(pgid, pids.as_mut_ptr().cast(), bytes) } < 0 {
@@ -200,24 +218,24 @@ fn group_members(pgid: libc::pid_t) -> Vec<libc::pid_t> {
     pids
 }
 
-#[cfg(not(target_os = "macos"))]
-fn group_members(pgid: libc::pid_t) -> Vec<libc::pid_t> {
+#[cfg(all(unix, not(target_os = "macos")))]
+fn group_members(pgid: Pid) -> Vec<Pid> {
     let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
     entries
-        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<libc::pid_t>().ok())
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<Pid>().ok())
         .filter(|pid| {
             // Field 5 of /proc/<pid>/stat is the pgrp; comm (field 2) may contain spaces.
             std::fs::read_to_string(format!("/proc/{pid}/stat"))
                 .ok()
                 .and_then(|s| s.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
-                .and_then(|rest| rest.split_whitespace().nth(2)?.parse::<libc::pid_t>().ok())
+                .and_then(|rest| rest.split_whitespace().nth(2)?.parse::<Pid>().ok())
                 == Some(pgid)
         })
         .collect()
 }
 
 #[cfg(target_os = "macos")]
-fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
+fn exe_path(pid: Pid) -> Option<PathBuf> {
     let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
     if n <= 0 {
@@ -227,9 +245,104 @@ fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn exe_path(pid: libc::pid_t) -> Option<PathBuf> {
+#[cfg(all(unix, not(target_os = "macos")))]
+fn exe_path(pid: Pid) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(windows)]
+use self::windows::{exe_path, group_members, process_args, process_cwd};
+#[cfg(windows)]
+pub use self::windows::kill_tree;
+
+/// Windows has no process groups or `/proc`: a pane's "group" is its process
+/// tree, from one shared snapshot of every process (refreshed at most every
+/// quarter second, as every pane is looked at each detection pass).
+#[cfg(windows)]
+mod windows {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    use super::Pid;
+
+    static SNAPSHOT: Mutex<Option<(Instant, System)>> = Mutex::new(None);
+
+    fn with<T>(f: impl FnOnce(&mut System) -> T) -> T {
+        let mut guard = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
+        let stale = guard.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_millis(250));
+        let (at, sys) = guard.get_or_insert_with(|| (Instant::now(), System::new()));
+        if stale {
+            sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet));
+            *at = Instant::now();
+        }
+        f(sys)
+    }
+
+    fn spid(pid: Pid) -> sysinfo::Pid {
+        sysinfo::Pid::from_u32(pid as u32)
+    }
+
+    /// `root` and every process under it, parents before children. A pid's
+    /// parent may have exited and its number been reused, so a child must
+    /// have started after its parent.
+    pub fn group_members(root: Pid) -> Vec<Pid> {
+        with(|sys| {
+            let mut out = vec![root];
+            let mut i = 0;
+            while i < out.len() {
+                let Some(parent) = sys.process(spid(out[i])) else {
+                    i += 1;
+                    continue;
+                };
+                let started = parent.start_time();
+                let mut kids: Vec<Pid> = sys
+                    .processes()
+                    .iter()
+                    .filter(|(_, p)| p.parent() == Some(spid(out[i])) && p.start_time() >= started)
+                    .map(|(pid, _)| pid.as_u32() as Pid)
+                    .filter(|p| !out.contains(p))
+                    .collect();
+                kids.sort_unstable();
+                out.extend(kids);
+                i += 1;
+            }
+            out
+        })
+    }
+
+    pub fn exe_path(pid: Pid) -> Option<PathBuf> {
+        with(|sys| sys.process(spid(pid))?.exe().map(PathBuf::from))
+    }
+
+    pub fn process_args(pid: Pid) -> Option<Vec<String>> {
+        with(|sys| {
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[spid(pid)]), false, ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet));
+            let cmd = sys.process(spid(pid))?.cmd();
+            (!cmd.is_empty()).then(|| cmd.iter().map(|a| a.to_string_lossy().into_owned()).collect())
+        })
+    }
+
+    pub fn process_cwd(pid: Pid) -> Option<PathBuf> {
+        with(|sys| {
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[spid(pid)]), false, ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always));
+            sys.process(spid(pid))?.cwd().map(PathBuf::from)
+        })
+    }
+
+    /// End `root` and everything under it, children first.
+    pub fn kill_tree(root: Pid) {
+        let tree = group_members(root);
+        with(|sys| {
+            for pid in tree.iter().rev() {
+                if let Some(p) = sys.process(spid(*pid)) {
+                    p.kill();
+                }
+            }
+        });
+    }
 }
 
 /// What agent `agent` is doing: from what it reports (Codex's OSC 7501
@@ -464,6 +577,7 @@ pub fn classify_claude(title: &str, lines: &[String]) -> AgentState {
 
 #[cfg(test)]
 mod tests {
+    use velmux_pool::sys::Canonical as _;
     use super::*;
 
     #[test]
@@ -479,8 +593,8 @@ mod tests {
     #[test]
     fn finds_this_process_cwd_and_program() {
         // The test binary itself is a fine foreground "job".
-        let me = std::process::id() as libc::pid_t;
-        assert_eq!(process_cwd(me).map(|p| p.canonicalize().unwrap()), Some(std::env::current_dir().unwrap().canonicalize().unwrap()));
+        let me = std::process::id() as Pid;
+        assert_eq!(process_cwd(me).map(|p| p.canonical().unwrap()), Some(std::env::current_dir().unwrap().canonical().unwrap()));
     }
 
     fn lines(s: &str) -> Vec<String> {
@@ -580,7 +694,7 @@ mod tests {
 
     #[test]
     fn reads_process_arguments() {
-        let me = std::process::id() as libc::pid_t;
+        let me = std::process::id() as Pid;
         let args = process_args(me).expect("argv of this test process");
         assert!(args[0].contains("velmux_tui") || args[0].contains("deps"), "{args:?}");
         assert_eq!(script_agent("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));

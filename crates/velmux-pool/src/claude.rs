@@ -33,10 +33,10 @@ pub fn link(claude_dir: &Path, base: &Path, slot: &Path) -> Result<()> {
 
     match std::fs::symlink_metadata(&link) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            if std::fs::read_link(&link)? == target {
+            if crate::sys::read_link(&link)? == target {
                 return Ok(());
             }
-            std::fs::remove_file(&link)?;
+            crate::sys::remove_link(&link)?;
         }
         Ok(meta) if meta.is_dir() => {
             for entry in std::fs::read_dir(&link)? {
@@ -52,7 +52,7 @@ pub fn link(claude_dir: &Path, base: &Path, slot: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    std::os::unix::fs::symlink(&target, &link)
+    crate::sys::symlink(&target, &link)
         .with_context(|| format!("linking {}", link.display()))?;
     Ok(())
 }

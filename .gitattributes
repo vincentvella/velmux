@@ -1,0 +1,4 @@
+# LF everywhere, whatever core.autocrlf says: files are embedded with
+# include_str! (skills, plugins, agent rules) and parsed line by line.
+* text=auto eol=lf
+*.wav binary

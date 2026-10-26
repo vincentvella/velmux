@@ -3,6 +3,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use velmux_pool::sys::Canonical as _;
 use velmux_pool::{ClaimOpts, Env, ParkedView, Pool, SlotView, Status};
 
 /// Worktree pools: a fixed set of warm slots per repo, claimed and released.
@@ -105,7 +106,8 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Restart the TUI server in place (new binary), keeping every pane running.
+    /// Restart the TUI server in place (new binary), keeping every pane running
+    /// (on Windows, panes start again and agents resume their sessions).
     Restart,
     /// Stop the TUI server: everything is saved and restored next time.
     Stop,
@@ -164,7 +166,7 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     // `--repo` in a workstream: a path (a subfolder links to a slot) or a repo's name.
-    let repo_arg = cli.repo.as_ref().map(|p| p.canonicalize().map(|c| c.display().to_string()).unwrap_or_else(|_| p.display().to_string()));
+    let repo_arg = cli.repo.as_ref().map(|p| p.canonical().map(|c| c.display().to_string()).unwrap_or_else(|_| p.display().to_string()));
     let cwd = match cli.repo {
         Some(p) => p,
         None => std::env::current_dir()?,
@@ -254,7 +256,12 @@ fn run() -> Result<()> {
         Cmd::Env { slot } => {
             let id = resolve_slot(&pool, slot, &cwd)?;
             for (k, v) in pool.slot_env(&id) {
-                println!("export {k}={}", shell_quote(&v));
+                // For `eval "$(velmux env)"`, or on Windows `velmux env | Invoke-Expression`.
+                if cfg!(windows) {
+                    println!("$env:{k} = {}", velmux_pool::sys::quote(&v));
+                } else {
+                    println!("export {k}={}", shell_quote(&v));
+                }
             }
         }
         Cmd::Sync { slot } => {
@@ -289,13 +296,16 @@ fn run() -> Result<()> {
                 .or_else(|| std::env::var("VISUAL").ok())
                 .or_else(|| std::env::var("EDITOR").ok())
                 .ok_or_else(|| anyhow!("set `editor` in ~/.config/velmux/config.toml or $EDITOR"))?;
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg(format!("{editor} \"$1\""))
-                .arg("sh")
-                .arg(&path)
-                .status()
-                .context("launching editor")?;
+            let mut cmd = if cfg!(windows) {
+                let mut ps = Command::new(velmux_pool::sys::powershell());
+                ps.args(["-NoProfile", "-Command", &format!("{editor} {}", velmux_pool::sys::quote(&path.display().to_string()))]);
+                ps
+            } else {
+                let mut sh = Command::new("sh");
+                sh.arg("-c").arg(format!("{editor} \"$1\"")).arg("sh").arg(&path);
+                sh
+            };
+            let status = cmd.status().context("launching editor")?;
             if !status.success() {
                 bail!("editor exited with {status}");
             }
@@ -421,7 +431,11 @@ fn update(check: bool) -> Result<()> {
         install => {
             let cmd = install.command().unwrap_or_default();
             println!("running: {cmd}");
-            let ok = Command::new("sh").arg("-c").arg(cmd).status()?.success();
+            let ok = if cfg!(windows) {
+                Command::new(velmux_pool::sys::powershell()).args(["-NoProfile", "-Command", cmd]).status()?.success()
+            } else {
+                Command::new("sh").arg("-c").arg(cmd).status()?.success()
+            };
             if !ok {
                 bail!("`{cmd}` failed");
             }
@@ -445,7 +459,7 @@ fn guard() -> ! {
         let path = cwd.join(file);
         // Compare real paths (the file may not exist yet: resolve its folder).
         let real = |p: &std::path::Path| -> std::path::PathBuf {
-            p.canonicalize().ok().or_else(|| Some(p.parent()?.canonicalize().ok()?.join(p.file_name()?))).unwrap_or_else(|| p.to_path_buf())
+            p.canonical().ok().or_else(|| Some(p.parent()?.canonical().ok()?.join(p.file_name()?))).unwrap_or_else(|| p.to_path_buf())
         };
         let (path, base) = (real(&path), real(&base));
         let pool = std::env::var_os("VELMUX_POOL_DIR").map(|p| real(std::path::Path::new(&p)));
@@ -503,7 +517,7 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
         }
     };
     let run = |cmd: &str, args: &[&str]| Command::new(cmd).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let on_path = |prog: &str| prog.contains('/') && std::path::Path::new(prog).exists() || std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).any(|d| d.join(prog).is_file());
+    let on_path = |prog: &str| prog.contains(['/', std::path::MAIN_SEPARATOR]) && std::path::Path::new(prog).exists() || velmux_pool::sys::on_path(prog).is_some();
 
     let env = Env::from_process()?;
     let base = velmux_pool::git::base_of(cwd).ok();
@@ -562,7 +576,9 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
     } else {
         line(None, "gh isn't signed in (optional: pull request status)", "gh auth login");
     }
+    // (No Ghostty or ⌘ on Windows: the prefix keys are how in.)
     match velmux_tui::terminal_check() {
+        _ if cfg!(windows) => {}
         (true, true) => line(Some(true), "Ghostty sends velmux's ⌘ shortcuts", ""),
         (true, false) => line(None, "Ghostty isn't set up for the ⌘ shortcuts (optional)", "velmux keys --ghostty --install"),
         (false, _) => line(None, "not in Ghostty: ⌘ shortcuts need your terminal to send them (optional)", "velmux keys --test shows what it sends; the prefix keys always work"),

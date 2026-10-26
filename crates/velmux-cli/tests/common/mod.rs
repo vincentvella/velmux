@@ -1,6 +1,11 @@
 //! The end-to-end harness: the real `velmux` binary driven through a
 //! pseudo-terminal, with a fake Claude (`examples/fake_claude.rs`) and a fake
 //! `gh`, each on its own socket, state, config, Claude dir and HOME.
+//!
+//! Panes run the platform's shell (`sh` here, PowerShell on Windows), so a
+//! test waits for [`PROMPT`] and types commands both understand, or picks one
+//! per platform; setup commands run in a POSIX `sh` everywhere (on Windows,
+//! Git's).
 #![allow(dead_code)] // each test binary uses part of it
 
 use std::io::{Read, Write};
@@ -15,6 +20,15 @@ pub const VELMUX: &str = env!("CARGO_BIN_EXE_velmux");
 pub const COLS: u16 = 120;
 pub const ROWS: u16 = 32;
 pub const WAIT: Duration = Duration::from_secs(25);
+/// What a pane's shell shows when it's ready for a command (PowerShell's
+/// prompt is `PS C:\…> `).
+pub const PROMPT: &str = if cfg!(windows) { "PS " } else { "$" };
+
+/// The socket clients reach the server on.
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(windows)]
+use uds_windows::UnixStream;
 
 /// A few servers at a time (`VELMUX_E2E_JOBS`; by default 4, or fewer on a
 /// smaller machine): each test has its own server, socket, state and HOME, so
@@ -56,8 +70,13 @@ pub struct Env {
     pub _lock: Slot,
 }
 
+/// A POSIX `sh` (on Windows, the one Git ships).
+fn posix_sh() -> Command {
+    Command::new(velmux_pool::sys::posix_shell().expect("a POSIX sh (Git's, on Windows)"))
+}
+
 pub fn sh(dir: &Path, cmd: &str) -> String {
-    let out = Command::new("sh").arg("-c").arg(cmd).current_dir(dir).output().unwrap();
+    let out = posix_sh().arg("-c").arg(cmd).current_dir(dir).output().unwrap();
     assert!(out.status.success(), "`{cmd}` failed: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
@@ -70,44 +89,58 @@ pub fn fake_claude() -> PathBuf {
         let ok = Command::new(cargo).args(["build", "-q", "-p", "velmux-cli", "--example", "fake_claude"]).status().unwrap();
         assert!(ok.success(), "building the fake claude");
     });
-    Path::new(VELMUX).parent().unwrap().join("examples/fake_claude")
+    Path::new(VELMUX).parent().unwrap().join(format!("examples/fake_claude{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// The fake, copied to `dir/name` (`name.exe` on Windows) and linked from
+/// `bin`, which is on the tests' `PATH`: it plays whoever it's installed as.
+fn install(dir: &Path, name: &str, bin: &Path, as_name: &str) {
+    let exe = std::env::consts::EXE_SUFFIX;
+    std::fs::create_dir_all(dir).unwrap();
+    let file = dir.join(format!("{name}{exe}"));
+    std::fs::copy(fake_claude(), &file).unwrap();
+    velmux_pool::sys::symlink(&file, &bin.join(format!("{as_name}{exe}"))).unwrap();
+}
+
+/// Run inside velmux (a pane), the tests would inherit its `VELMUX_*`
+/// variables (`VELMUX_EXE`, `VELMUX_PANE`…) and point at the real install:
+/// every command a test starts gets only the ones it sets itself.
+fn forget_outer_velmux() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("VELMUX") {
+                std::env::remove_var(&key);
+            }
+        }
+    });
 }
 
 impl Env {
     pub fn new() -> Env {
+        forget_outer_velmux();
         let lock = Slot::take();
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = velmux_pool::sys::Canonical::canonical(tmp.path()).unwrap();
         let (home, bin, claude_dir, state) = (root.join("home"), root.join("bin"), root.join("claude"), root.join("state"));
         for d in [&home, &bin, &claude_dir, &state] {
             std::fs::create_dir_all(d).unwrap();
         }
-        std::fs::write(home.join(".gitconfig"), "[user]\n\tname = e2e\n\temail = e2e@example.com\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n").unwrap();
+        std::fs::write(home.join(".gitconfig"), "[user]\n\tname = e2e\n\temail = e2e@example.com\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n[core]\n\tautocrlf = false\n").unwrap();
         // Installed like Claude (`…/claude/versions/<v>`), so it's detected as Claude.
-        let versions = root.join("install/claude/versions");
-        std::fs::create_dir_all(&versions).unwrap();
-        std::fs::copy(fake_claude(), versions.join("9.9.9")).unwrap();
-        std::os::unix::fs::symlink(versions.join("9.9.9"), bin.join("claude")).unwrap();
+        install(&root.join("install/claude/versions"), "9.9.9", &bin, "claude");
         // The same fake, installed as Codex (`…/codex/bin/codex`), plays Codex.
-        let codex = root.join("install/codex/bin");
-        std::fs::create_dir_all(&codex).unwrap();
-        std::fs::copy(fake_claude(), codex.join("codex")).unwrap();
-        std::os::unix::fs::symlink(codex.join("codex"), bin.join("codex")).unwrap();
+        install(&root.join("install/codex/bin"), "codex", &bin, "codex");
         // And as Droid (followed through its session hook).
-        let droid = root.join("install/droid");
-        std::fs::create_dir_all(&droid).unwrap();
-        std::fs::copy(fake_claude(), droid.join("droid")).unwrap();
-        std::os::unix::fs::symlink(droid.join("droid"), bin.join("droid")).unwrap();
+        install(&root.join("install/droid"), "droid", &bin, "droid");
+        // `gh`, answering `--version` and `pr` with `$FAKE_GH_PRS` (or `[]`).
+        install(&root.join("install/gh"), "gh", &bin, "gh");
         // A stand-in browser: what velmux opens is written to `opened.txt`.
-        std::fs::write(bin.join("browser"), format!("#!/bin/sh\necho \"$1\" >> '{}'\n", root.join("opened.txt").display())).unwrap();
-        sh(&bin, "chmod +x browser");
-        let gh = "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'gh version 0 (fake)' ;;\n  pr) cat \"$FAKE_GH_PRS\" 2>/dev/null || echo '[]' ;;\nesac\n";
-        std::fs::write(bin.join("gh"), gh).unwrap();
-        sh(&bin, "chmod +x gh");
+        install(&root.join("install/browser"), "browser", &bin, "browser");
         std::fs::write(
             root.join("config.toml"),
             format!(
-                "prefix = \"C-a\"\nauto_restart = false\nslots = 2\nfetch_every = 0\npool_root = \"{}\"\nscratch_dir = \"{}\"\n[notify]\ndesktop = false\nsound = false\n",
+                "prefix = \"C-a\"\nauto_restart = false\nslots = 2\nfetch_every = 0\npool_root = '{}'\nscratch_dir = '{}'\n[notify]\ndesktop = false\nsound = false\n",
                 root.join("pools").display(),
                 root.join("ws").display()
             ),
@@ -117,10 +150,13 @@ impl Env {
         // test never reaches the previous one's server while it shuts down.
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let socket = PathBuf::from(format!("/tmp/vmx-e2e-{}-{n}.sock", std::process::id()));
+        let tmp_dir = if cfg!(windows) { std::env::temp_dir() } else { PathBuf::from("/tmp") };
+        let socket = tmp_dir.join(format!("vmx-e2e-{}-{n}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let velmux_dir = Path::new(VELMUX).parent().unwrap();
-        let path_var = format!("{}:{}:{}", bin.display(), velmux_dir.display(), std::env::var("PATH").unwrap_or_default());
+        let outer = std::env::var_os("PATH").unwrap_or_default();
+        let dirs = [bin.clone(), velmux_dir.to_path_buf()].into_iter().chain(std::env::split_paths(&outer));
+        let path_var = std::env::join_paths(dirs).unwrap().to_string_lossy().into_owned();
         Env { _tmp: tmp, root, socket, claude_dir, state, path_var, _lock: lock }
     }
 
@@ -137,7 +173,8 @@ impl Env {
             ("CODEX_HOME", self.root.join("codex").display().to_string()),
             ("VELMUX_BIN", VELMUX.into()),
             ("FAKE_GH_PRS", self.root.join("prs.json").display().to_string()),
-            ("BROWSER", self.root.join("bin/browser").display().to_string()),
+            ("BROWSER", self.root.join(format!("bin/browser{}", std::env::consts::EXE_SUFFIX)).display().to_string()),
+            ("FAKE_OPENED", self.root.join("opened.txt").display().to_string()),
             ("VELMUX_PR_EVERY", "1".into()),
             ("GIT_TERMINAL_PROMPT", "0".into()),
             ("ENV", String::new()),
@@ -153,7 +190,7 @@ impl Env {
     }
 
     pub fn run_in(&self, dir: &Path, cmd: &str) -> String {
-        let out = Command::new("sh").arg("-c").arg(cmd).current_dir(dir).envs(self.vars()).output().unwrap();
+        let out = posix_sh().arg("-c").arg(cmd).current_dir(dir).envs(self.vars()).output().unwrap();
         assert!(out.status.success(), "`{cmd}` failed: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
@@ -194,25 +231,40 @@ impl Env {
         drop(pair.slave);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 1000)));
         let mut reader = pair.master.try_clone_reader().unwrap();
-        let p = parser.clone();
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
+        let raw = Arc::new(Mutex::new(Vec::new()));
+        let (p, w, r) = (parser.clone(), writer.clone(), raw.clone());
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
-                p.lock().unwrap().process(&buf[..n]);
+                let mut raw = r.lock().unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let over = raw.len().saturating_sub(2000);
+                raw.drain(..over);
+                drop(raw);
+                let mut p = p.lock().unwrap();
+                p.process(&buf[..n]);
+                // Where's the cursor? (ConPTY asks on start, and waits.)
+                if buf[..n].windows(4).any(|q| q == b"\x1b[6n") {
+                    let (row, col) = p.screen().cursor_position();
+                    // (In one write: ConPTY doesn't piece a split answer together.)
+                    let mut w = w.lock().unwrap();
+                    let _ = w.write_all(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+                    let _ = w.flush();
+                }
             }
         });
-        let writer = pair.master.take_writer().unwrap();
-        let ui = Ui { parser, writer: Mutex::new(writer), child, _master: pair.master };
+        let ui = Ui { parser, writer, child: Mutex::new(child), _master: pair.master, raw, log: self.state.join("server.log"), socket: self.socket.clone() };
         ui.wait_for("menu");
         ui
     }
 
     pub fn stop(&self, dir: &Path) {
         let _ = self.velmux(dir, &["stop"]);
-        self.until("the server to stop", || std::os::unix::net::UnixStream::connect(&self.socket).is_err());
+        self.until("the server to stop", || UnixStream::connect(&self.socket).is_err());
     }
 }
 
@@ -220,7 +272,7 @@ impl Drop for Env {
     fn drop(&mut self) {
         let _ = Command::new(VELMUX).arg("stop").envs(self.vars()).output();
         let start = Instant::now();
-        while std::os::unix::net::UnixStream::connect(&self.socket).is_ok() && start.elapsed() < WAIT {
+        while UnixStream::connect(&self.socket).is_ok() && start.elapsed() < WAIT {
             std::thread::sleep(Duration::from_millis(100));
         }
         let _ = std::fs::remove_file(&self.socket);
@@ -229,14 +281,18 @@ impl Drop for Env {
 
 pub struct Ui {
     pub parser: Arc<Mutex<vt100::Parser>>,
-    pub writer: Mutex<Box<dyn Write + Send>>,
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    pub child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     pub _master: Box<dyn portable_pty::MasterPty + Send>,
+    /// The last of what the client wrote, as it came (for a failure's report).
+    pub raw: Arc<Mutex<Vec<u8>>>,
+    pub log: PathBuf,
+    pub socket: PathBuf,
 }
 
 impl Drop for Ui {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
     }
 }
 
@@ -278,11 +334,22 @@ impl Ui {
             if screen.contains(needle) || self.pane_text().contains(needle) {
                 return screen;
             }
-            assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}");
+            assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}\n{}", self.report());
             std::thread::sleep(Duration::from_millis(100));
         }
     }
 
+
+    /// What a failure is worth knowing beyond the screen: whether the client
+    /// is still running, the end of its raw output, and the server's log.
+    pub fn report(&self) -> String {
+        let status = self.child.lock().unwrap().try_wait().map(|s| s.map_or("running".to_string(), |s| format!("exited {s:?}")));
+        let raw = String::from_utf8_lossy(&self.raw.lock().unwrap()).escape_debug().to_string();
+        let log = std::fs::read_to_string(&self.log).unwrap_or_default();
+        let tail: Vec<&str> = log.lines().rev().take(30).collect();
+        let server = if UnixStream::connect(&self.socket).is_ok() { "up" } else { "not answering" };
+        format!("client: {status:?}\nserver: {server}\nraw output: {raw}\nserver.log:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+    }
 
     pub fn wait_gone_text(&self, needle: &str) {
         let start = Instant::now();

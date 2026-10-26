@@ -10,22 +10,35 @@ use std::path::{Path, PathBuf};
 /// The deny rule is left out if the pool lives inside the checkout, since it
 /// would block the slots too.
 pub fn settings(exe: &Path, base: &Path, pool_dir: &Path) -> serde_json::Value {
-    let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     let mut value = serde_json::json!({
         "hooks": {
             "PreToolUse": [{
                 // Edit rules cover every built-in tool that writes files.
                 "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                "hooks": [{ "type": "command", "command": format!("{} guard", quote(&exe.display().to_string())) }]
+                "hooks": [{ "type": "command", "command": format!("{} guard", crate::hooks::hook_quote(&exe.display().to_string())) }]
             }]
         }
     });
     if !pool_dir.starts_with(base) {
         // `//` makes it an absolute path (a single `/` is relative to this file).
-        let rule = format!("Edit(//{}/**)", base.display().to_string().trim_start_matches('/'));
+        let rule = format!("Edit(//{}/**)", rule_path(base).trim_start_matches('/'));
         value["permissions"] = serde_json::json!({ "deny": [rule] });
     }
     value
+}
+
+/// `path` as Claude matches permission rules: as is on Unix; on Windows in
+/// POSIX form, the way Claude normalises paths there (`C:\a\b` → `/c/a/b`).
+fn rule_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    if !cfg!(windows) {
+        return s;
+    }
+    let s = s.replace('\\', "/");
+    match s.split_once(":/") {
+        Some((drive, rest)) if drive.len() == 1 => format!("/{}/{rest}", drive.to_lowercase()),
+        _ => s,
+    }
 }
 
 /// What keeps the guard from working here, from Claude's own settings: your
@@ -43,6 +56,8 @@ pub struct Policy {
 fn managed_files() -> Vec<PathBuf> {
     let dir = if cfg!(target_os = "macos") {
         PathBuf::from("/Library/Application Support/ClaudeCode")
+    } else if cfg!(windows) {
+        PathBuf::from(r"C:\Program Files\ClaudeCode")
     } else {
         PathBuf::from("/etc/claude-code")
     };
@@ -74,6 +89,15 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
+    fn denies_edits_by_the_path_claude_matches_on_windows() {
+        let s = settings(Path::new(r"C:\Tools\velmux.exe"), Path::new(r"C:\Users\me\ws\app"), Path::new(r"C:\Users\me\ws\.pools\app"));
+        assert_eq!(s["permissions"]["deny"][0], "Edit(//c/Users/me/ws/app/**)");
+        assert_eq!(s["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'C:/Tools/velmux.exe' guard");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn denies_edits_under_the_checkout_by_absolute_path() {
         let s = settings(Path::new("/opt/bin/velmux"), Path::new("/Users/me/ws/app"), Path::new("/Users/me/ws/.pools/app"));
         assert_eq!(s["permissions"]["deny"][0], "Edit(//Users/me/ws/app/**)");

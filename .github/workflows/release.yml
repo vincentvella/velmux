@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag like v0.2.0 (matching the workspace version in Cargo.toml) to
-# build velmux for macOS and Linux and publish a GitHub release with the
+# build velmux for macOS, Linux and Windows and publish a GitHub release with the
 # archives and their checksums. The Homebrew tap (vincentvella/homebrew-tap)
 # picks the new release up by itself.
 
@@ -33,7 +33,12 @@ jobs:
           # musl: static binaries that run on any distro.
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so every step below runs the same.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,8 +61,9 @@ jobs:
       - name: Package
         run: |
           name="velmux-$TAG-${{ matrix.target }}"
+          exe=velmux; [ "$RUNNER_OS" = Windows ] && exe=velmux.exe
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/velmux" README.md LICENSE NOTICE "$name/"
+          cp "target/${{ matrix.target }}/release/$exe" README.md LICENSE NOTICE "$name/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           # Also without the version, so .../releases/latest/download/<file>
@@ -65,7 +71,7 @@ jobs:
           plain="velmux-${{ matrix.target }}.tar.gz"
           cp "$name.tar.gz" "$plain"
           shasum -a 256 "$plain" > "$plain.sha256"
-          "$name/velmux" --version || true
+          "$name/$exe" --version || true
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

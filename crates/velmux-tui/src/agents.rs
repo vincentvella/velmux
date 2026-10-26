@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use velmux_pool::sys::Canonical as _;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Agent {
     Claude,
@@ -148,7 +150,7 @@ impl Agent {
     /// Installed: on `PATH`.
     pub fn installed(self) -> bool {
         let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path).any(|d| d.join(self.name()).is_file())
+        std::env::split_paths(&path).any(|d| velmux_pool::sys::find_program(&d, self.name()).is_some())
     }
 
     /// The session reference for `id` (see the module docs).
@@ -196,9 +198,8 @@ pub struct Launch {
     pub env: Vec<(String, String)>,
 }
 
-pub fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
+/// One word for the shell the pane runs the agent in.
+pub use velmux_pool::sys::quote;
 
 /// A TOML basic string (for `codex -c key=value`).
 fn toml_string(s: &str) -> String {
@@ -275,7 +276,7 @@ pub fn launch(agent: Agent, base: &str, resume: Option<&str>, ctx: &Context) -> 
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    velmux_pool::sys::home().unwrap_or_default()
 }
 
 pub fn codex_home() -> PathBuf {
@@ -296,7 +297,7 @@ fn millis(t: SystemTime) -> u128 {
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
-    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let real = |p: &Path| p.canonical().unwrap_or_else(|_| p.to_path_buf());
     real(a) == real(b)
 }
 
@@ -370,7 +371,7 @@ fn sql_text(s: &str) -> String {
 }
 
 pub fn opencode_session_since(db: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
-    let dir = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let dir = cwd.canonical().unwrap_or_else(|_| cwd.to_path_buf());
     let since = millis(since).saturating_sub(5000);
     let sql = format!(
         "select id from session where directory = {} and parent_id is null and time_created >= {since} order by time_created desc limit 1",
@@ -428,6 +429,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn launches_agents_quoted_for_powershell() {
+        let claude = launch(Agent::Claude, "claude", Some("id1"), &ctx());
+        assert_eq!(claude.command, "claude --add-dir '/w/.pools/app' --append-system-prompt 'plan here; don''t edit' --resume id1");
+        assert_eq!(launch(Agent::Cursor, "cursor-agent", Some("c1"), &ctx()).command, "cursor-agent --resume 'c1'");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn launches_each_agent_its_way() {
         let c = launch(Agent::Codex, "codex", None, &ctx());
         assert_eq!(c.command, "codex --add-dir '/w/.pools/app' -c 'developer_instructions=\"plan here; don'\\''t edit\"'");
@@ -463,7 +473,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let day = tmp.path().join("sessions/2026/10/21");
         std::fs::create_dir_all(&day).unwrap();
-        let meta = |id: &str, cwd: &str| format!("{{\"timestamp\":\"x\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"cwd\":\"{cwd}\"}}}}\n");
+        let meta = |id: &str, cwd: &str| format!("{{\"timestamp\":\"x\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"cwd\":{}}}}}\n", serde_json::to_string(cwd).unwrap());
         let started = SystemTime::now() - std::time::Duration::from_secs(1);
         std::fs::write(day.join("rollout-2026-10-21T10-00-00-aaa.jsonl"), meta("aaa", "/elsewhere")).unwrap();
         std::fs::write(day.join("rollout-2026-10-21T10-00-01-bbb.jsonl"), meta("bbb", tmp.path().to_str().unwrap())).unwrap();

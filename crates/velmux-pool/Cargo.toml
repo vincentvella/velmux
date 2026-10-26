@@ -7,11 +7,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-libc = "0.2"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+junction = "1"
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
 tempfile.workspace = true

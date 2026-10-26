@@ -112,7 +112,7 @@ const END: &str = "<!-- velmux:end -->";
 /// The instruction files other agents read for every project, for those set
 /// up here: (agent, file).
 pub fn agent_files() -> Vec<(&'static str, PathBuf)> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = velmux_pool::sys::home().unwrap_or_default();
     let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
     let codex = crate::agents::codex_home();
     let gemini = crate::agents::gemini_home();

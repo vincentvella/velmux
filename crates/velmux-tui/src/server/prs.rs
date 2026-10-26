@@ -132,7 +132,8 @@ impl App {
     /// Open a URL in the default browser (or `$BROWSER`).
     pub(super) fn open_url(&mut self, url: &str) {
         let url = url.to_string();
-        let opener = std::env::var("BROWSER").ok().filter(|b| !b.is_empty()).unwrap_or_else(|| if cfg!(target_os = "macos") { "open" } else { "xdg-open" }.into());
+        // (explorer.exe opens a URL in the default browser.)
+        let opener = std::env::var("BROWSER").ok().filter(|b| !b.is_empty()).unwrap_or_else(|| if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" }.into());
         match std::process::Command::new(&opener).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             Ok(mut child) => {
                 std::thread::spawn(move || child.wait());

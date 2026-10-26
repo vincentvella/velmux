@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use velmux_pool::sys::Canonical as _;
 
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -32,6 +33,7 @@ pub fn target() -> Option<&'static str> {
         ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
         ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
         _ => None,
     }
 }
@@ -82,12 +84,12 @@ pub enum Install {
 
 impl Install {
     pub fn detect() -> Install {
-        let exe = std::env::current_exe().and_then(|p| p.canonicalize()).unwrap_or_default();
+        let exe = crate::client::launched_exe().and_then(|p| p.canonical().ok()).unwrap_or_default();
         Install::of(&exe)
     }
 
     pub fn of(exe: &Path) -> Install {
-        let s = exe.to_string_lossy();
+        let s = exe.to_string_lossy().replace('\\', "/");
         if s.contains("/Cellar/") || s.contains("/homebrew/") || s.contains("/linuxbrew/") {
             Install::Homebrew
         } else if s.contains("/.cargo/bin/") {
@@ -124,14 +126,28 @@ pub fn apply(latest: &Latest, path: &Path) -> Result<()> {
         bail!("the download doesn't match its checksum; nothing was changed");
     }
     let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&tmp).status().is_ok_and(|s| s.success());
-    let new = std::fs::read_dir(&tmp)?.flatten().map(|e| e.path().join("velmux")).find(|p| p.is_file());
+    let new = std::fs::read_dir(&tmp)?.flatten().map(|e| e.path().join(if cfg!(windows) { "velmux.exe" } else { "velmux" })).find(|p| p.is_file());
     let result = match (ok, new) {
         (true, Some(new)) => {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
+            }
+            // Windows won't replace a running program's file, but will rename
+            // it: move it aside first (removed by the next update).
+            if cfg!(windows) {
+                let aside = path.with_extension("old.exe");
+                let _ = std::fs::remove_file(&aside);
+                std::fs::rename(path, &aside).with_context(|| format!("moving {} aside", path.display()))?;
+            }
             // Same folder, so this is an atomic replace; a running velmux keeps
             // its old file open until it restarts into the new one.
-            std::fs::rename(&new, path).with_context(|| format!("replacing {}", path.display()))
+            std::fs::rename(&new, path).with_context(|| format!("replacing {}", path.display())).inspect_err(|_| {
+                if cfg!(windows) {
+                    let _ = std::fs::rename(path.with_extension("old.exe"), path);
+                }
+            })
         }
         _ => Err(anyhow::anyhow!("couldn't unpack the download")),
     };
@@ -146,6 +162,11 @@ fn tempdir(near: &Path) -> Result<PathBuf> {
 }
 
 fn sha256(file: &Path) -> Result<String> {
+    if cfg!(windows) {
+        // Its second line is the hash.
+        let out = Command::new("certutil").arg("-hashfile").arg(file).arg("SHA256").output()?;
+        return Ok(String::from_utf8_lossy(&out.stdout).lines().nth(1).unwrap_or_default().replace(' ', "").to_lowercase());
+    }
     let out = Command::new("shasum").args(["-a", "256"]).arg(file).output().or_else(|_| Command::new("sha256sum").arg(file).output())?;
     Ok(String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_string())
 }
@@ -177,7 +198,7 @@ mod tests {
 
     #[test]
     fn reads_the_api_and_picks_this_platform() {
-        let latest = parse(r#"{"version":"0.3.0","tag":"v0.3.0","url":"https://x/r","downloads":{"aarch64-apple-darwin":"a","x86_64-apple-darwin":"b","x86_64-unknown-linux-musl":"c","aarch64-unknown-linux-musl":"d"}}"#).unwrap();
+        let latest = parse(r#"{"version":"0.3.0","tag":"v0.3.0","url":"https://x/r","downloads":{"aarch64-apple-darwin":"a","x86_64-apple-darwin":"b","x86_64-unknown-linux-musl":"c","aarch64-unknown-linux-musl":"d","x86_64-pc-windows-msvc":"e"}}"#).unwrap();
         assert_eq!(latest.version, "0.3.0");
         assert_eq!(latest.download.is_some(), target().is_some());
     }

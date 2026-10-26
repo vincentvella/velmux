@@ -218,18 +218,7 @@ impl Pane {
     ) -> Result<Pane> {
         let size = PtySize { rows: rows.max(1), cols: cols.max(1), pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size).map_err(|e| anyhow!("openpty: {e}"))?;
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.arg("-l");
-        if let Some(command) = launch.command {
-            // Drop back into a shell when the command exits so the pane survives:
-            // the one the pane started with, interactive for certain (`-i`), so
-            // it reads your `.zshrc` / `.bashrc` whatever state the agent left
-            // the terminal in.
-            let quoted = format!("'{}'", shell.replace('\'', r"'\''"));
-            cmd.arg("-c");
-            cmd.arg(format!("{command}; exec {quoted} -l -i"));
-        }
+        let mut cmd = shell_command(launch.command);
         cmd.cwd(launch.cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
@@ -245,6 +234,7 @@ impl Pane {
     }
 
     /// Rebuild a pane from a pty kept open across a live restart.
+    #[cfg(unix)]
     pub fn adopt(id: u64, loc: Loc, kind: Kind, live: &crate::session::LivePane, events: Sender<Event>) -> Result<Pane> {
         let master: Box<dyn MasterPty + Send> = Box::new(crate::pty_raw::RawMaster::new(live.fd));
         let child: Box<dyn Child + Send + Sync> = Box::new(crate::pty_raw::RawChild::new(live.pid));
@@ -256,7 +246,14 @@ impl Pane {
         Ok(pane)
     }
 
+    /// Windows has no live restart: its panes are started again instead.
+    #[cfg(windows)]
+    pub fn adopt(_: u64, _: Loc, _: Kind, _: &crate::session::LivePane, _: Sender<Event>) -> Result<Pane> {
+        Err(anyhow!("no live restart on Windows"))
+    }
+
     /// Keep this pane's pty open across `exec`, describing it for the next server.
+    #[cfg(unix)]
     pub fn handoff(&mut self) -> Option<crate::session::LivePane> {
         if let Some(held) = self.frozen.take() {
             self.parser.process(&held);
@@ -433,7 +430,7 @@ impl Pane {
         if self.frozen.is_some() {
             return false;
         }
-        let pgid = self.master.process_group_leader();
+        let pgid = self.group();
         let agent = detect::foreground_agent(pgid);
         let fg = detect::foreground(pgid);
         let fg_changed = fg != self.fg;
@@ -493,9 +490,33 @@ impl Pane {
         changed
     }
 
+    /// What detection looks through: the pty's foreground process group on
+    /// Unix; on Windows, which has no such thing, the pane's process tree
+    /// (named by its root, the shell).
+    #[cfg(unix)]
+    fn group(&self) -> Option<detect::Pid> {
+        self.master.process_group_leader()
+    }
+
+    #[cfg(windows)]
+    fn group(&self) -> Option<detect::Pid> {
+        self.child.process_id().map(|p| p as detect::Pid)
+    }
+
+    /// Terminate everything running in the pane: its whole process tree (the
+    /// console closing doesn't reach processes that left it).
+    #[cfg(windows)]
+    pub fn kill(&mut self) {
+        if let Some(pid) = self.child.process_id() {
+            detect::kill_tree(pid as detect::Pid);
+        }
+        let _ = self.child.kill();
+    }
+
     /// Terminate everything running in the pane, not just its shell: `sh -c 'claude; …'`
     /// keeps the agent in the shell's process group, and it outlives a lone SIGHUP to
     /// the shell (reparented to init). Signal the groups, then SIGKILL stragglers.
+    #[cfg(unix)]
     pub fn kill(&mut self) {
         let mut groups: Vec<libc::pid_t> = Vec::new();
         if let Some(pid) = self.child.process_id() {
@@ -529,6 +550,53 @@ impl Pane {
     pub fn reap(&mut self) {
         let _ = self.child.try_wait();
     }
+}
+
+/// The pane's shell, running `command` first when there is one.
+#[cfg(unix)]
+fn shell_command(command: Option<&str>) -> CommandBuilder {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.arg("-l");
+    if let Some(command) = command {
+        // Drop back into a shell when the command exits so the pane survives:
+        // the one the pane started with, interactive for certain (`-i`), so
+        // it reads your `.zshrc` / `.bashrc` whatever state the agent left
+        // the terminal in.
+        let quoted = format!("'{}'", shell.replace('\'', r"'\''"));
+        cmd.arg("-c");
+        cmd.arg(format!("{command}; exec {quoted} -l -i"));
+    }
+    cmd
+}
+
+/// The pane's shell on Windows: PowerShell, staying on once `command` exits
+/// (`-NoExit`) so the pane survives, unless it's `exec <command>` (as on
+/// Unix: the pane closes with it).
+#[cfg(windows)]
+fn shell_command(command: Option<&str>) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(velmux_pool::sys::powershell());
+    // portable-pty starts a Windows program in the registry's environment (a
+    // fresh login's), not velmux's: pass velmux's on, as a Unix pane gets it,
+    // so a PATH or variable set where velmux was started reaches its panes.
+    for (key, value) in std::env::vars_os() {
+        cmd.env(key, value);
+    }
+    cmd.arg("-NoLogo");
+    if let Some(command) = command {
+        let (command, stay) = match command.strip_prefix("exec ") {
+            Some(rest) => (rest, false),
+            None => (command, true),
+        };
+        if stay {
+            cmd.arg("-NoExit");
+        }
+        cmd.arg("-Command");
+        // A quoted program is a string to PowerShell unless it's called (`&`).
+        let call = if command.starts_with(['\'', '"']) { "& " } else { "" };
+        cmd.arg(format!("{call}{command}"));
+    }
+    cmd
 }
 
 fn strip(data: &[u8], pat: &[u8]) -> Vec<u8> {
