@@ -648,17 +648,18 @@ fn slots_drag_into_a_workstream_and_leave_it() {
     ui.send(b"a");
     let id = ui.claude_id();
     ui.line("say hi");
-    env.until("its conversation to be named after the workstream", || {
-        std::fs::read_dir(env.claude_dir.join("projects"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|d| d.path().join(format!("{id}.jsonl")))
-            .find(|p| p.is_file())
-            .and_then(|t| velmux_pool::claude::custom_title(&t))
-            .as_deref()
-            == Some("dragged")
-    });
+    let transcript = || std::fs::read_dir(env.claude_dir.join("projects")).into_iter().flatten().flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.is_file());
+    let start = std::time::Instant::now();
+    while transcript().and_then(|t| velmux_pool::claude::custom_title(&t)).as_deref() != Some("dragged") {
+        assert!(
+            start.elapsed() < WAIT,
+            "its conversation wasn't named after the workstream: {:?}\n{}\n{}",
+            transcript(),
+            transcript().and_then(|t| std::fs::read_to_string(t).ok()).unwrap_or_default(),
+            ui.report()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
