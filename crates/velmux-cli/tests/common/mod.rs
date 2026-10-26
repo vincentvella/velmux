@@ -250,8 +250,9 @@ impl Env {
                 // Where's the cursor? (ConPTY asks on start, and waits.)
                 if buf[..n].windows(4).any(|q| q == b"\x1b[6n") {
                     let (row, col) = p.screen().cursor_position();
+                    // (In one write: ConPTY doesn't piece a split answer together.)
                     let mut w = w.lock().unwrap();
-                    let _ = write!(w, "\x1b[{};{}R", row + 1, col + 1);
+                    let _ = w.write_all(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
                     let _ = w.flush();
                 }
             }
