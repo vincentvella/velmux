@@ -232,13 +232,19 @@ impl Env {
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 1000)));
         let mut reader = pair.master.try_clone_reader().unwrap();
         let writer = Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
-        let (p, w) = (parser.clone(), writer.clone());
+        let raw = Arc::new(Mutex::new(Vec::new()));
+        let (p, w, r) = (parser.clone(), writer.clone(), raw.clone());
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
+                let mut raw = r.lock().unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let over = raw.len().saturating_sub(2000);
+                raw.drain(..over);
+                drop(raw);
                 let mut p = p.lock().unwrap();
                 p.process(&buf[..n]);
                 // Where's the cursor? (ConPTY asks on start, and waits.)
@@ -248,7 +254,7 @@ impl Env {
                 }
             }
         });
-        let ui = Ui { parser, writer, child, _master: pair.master };
+        let ui = Ui { parser, writer, child: Mutex::new(child), _master: pair.master, raw, log: self.state.join("server.log") };
         ui.wait_for("menu");
         ui
     }
@@ -273,13 +279,16 @@ impl Drop for Env {
 pub struct Ui {
     pub parser: Arc<Mutex<vt100::Parser>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     pub _master: Box<dyn portable_pty::MasterPty + Send>,
+    /// The last of what the client wrote, as it came (for a failure's report).
+    pub raw: Arc<Mutex<Vec<u8>>>,
+    pub log: PathBuf,
 }
 
 impl Drop for Ui {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
     }
 }
 
@@ -321,11 +330,21 @@ impl Ui {
             if screen.contains(needle) || self.pane_text().contains(needle) {
                 return screen;
             }
-            assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}");
+            assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}\n{}", self.report());
             std::thread::sleep(Duration::from_millis(100));
         }
     }
 
+
+    /// What a failure is worth knowing beyond the screen: whether the client
+    /// is still running, the end of its raw output, and the server's log.
+    pub fn report(&self) -> String {
+        let status = self.child.lock().unwrap().try_wait().map(|s| s.map_or("running".to_string(), |s| format!("exited {s:?}")));
+        let raw = String::from_utf8_lossy(&self.raw.lock().unwrap()).escape_debug().to_string();
+        let log = std::fs::read_to_string(&self.log).unwrap_or_default();
+        let tail: Vec<&str> = log.lines().rev().take(30).collect();
+        format!("client: {status:?}\nraw output: {raw}\nserver.log:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+    }
 
     pub fn wait_gone_text(&self, needle: &str) {
         let start = Instant::now();
