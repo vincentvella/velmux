@@ -33,3 +33,40 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --all-targets --locked
+
+  # The site's PowerShell installer, against a release built here and served
+  # locally: it installs a checked download, and refuses a tampered one.
+  install-ps1:
+    name: install.ps1 (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build a release package
+        shell: bash
+        run: |
+          cargo build --locked -p velmux-cli
+          mkdir -p dist/velmux-v0-test
+          cp target/debug/velmux.exe dist/velmux-v0-test/
+          cd dist
+          tar -czf velmux-x86_64-pc-windows-msvc.tar.gz velmux-v0-test
+          sha256sum velmux-x86_64-pc-windows-msvc.tar.gz > velmux-x86_64-pc-windows-msvc.tar.gz.sha256
+      - name: Install with it
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--directory', 'dist' -PassThru -WindowStyle Hidden
+          Start-Sleep 2
+          $env:VELMUX_DOWNLOAD_URL = 'http://127.0.0.1:8765'
+          $env:VELMUX_INSTALL_DIR = "$env:RUNNER_TEMP\velmux-bin"
+          Get-Content site/public/install.ps1 -Raw | Invoke-Expression
+          & "$env:VELMUX_INSTALL_DIR\velmux.exe" --version
+          if (-not ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $env:VELMUX_INSTALL_DIR)) { throw 'not added to the user PATH' }
+          # A tampered download is refused.
+          Remove-Item "$env:VELMUX_INSTALL_DIR\velmux.exe"
+          Set-Content dist/velmux-x86_64-pc-windows-msvc.tar.gz.sha256 '0000  velmux-x86_64-pc-windows-msvc.tar.gz'
+          $refused = $false
+          try { Get-Content site/public/install.ps1 -Raw | Invoke-Expression } catch { $refused = $_.ToString() -match 'checksum' }
+          if (-not $refused) { throw 'a bad checksum was not refused' }
+          if (Test-Path "$env:VELMUX_INSTALL_DIR\velmux.exe") { throw 'installed anyway' }
+          Stop-Process $server

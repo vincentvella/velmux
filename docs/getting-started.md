@@ -27,9 +27,16 @@ Optional, but worth it:
 ### Windows
 
 velmux runs on Windows 10 (1803 or later) and 11, in Windows Terminal or any
-terminal that speaks VT sequences. Build it with Rust (`cargo install`, above)
-or download `velmux-x86_64-pc-windows-msvc.tar.gz` from the releases and put
-`velmux.exe` on your `PATH`. You need [Git for Windows](https://git-scm.com).
+terminal that speaks VT sequences. In PowerShell:
+
+```powershell
+irm https://velmux.com/install.ps1 | iex
+```
+
+That checks the download against its checksum, puts `velmux.exe` in
+`~\.local\bin` and adds it to your `PATH`. Or build it with Rust
+(`cargo install`, above), or download `velmux-x86_64-pc-windows-msvc.tar.gz`
+from the releases yourself. You need [Git for Windows](https://git-scm.com).
 
 What's different there:
 

@@ -1,6 +1,6 @@
 'use client';
 
-// Install: Homebrew, the script, or a download, with the visitor's platform
+// Install: Homebrew, a script (sh, or PowerShell on Windows), or a download, with the visitor's platform
 // picked out (a guess from the browser; every option stays visible).
 import { useEffect, useState } from 'react';
 
@@ -44,6 +44,7 @@ export function Install() {
     <div className="grid gap-2">
       <Command label="Homebrew" command="brew install vincentvella/tap/velmux" />
       <Command label="Script" command="curl -fsSL https://velmux.com/install.sh | sh" />
+      <Command label="PowerShell" command="irm https://velmux.com/install.ps1 | iex" />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {downloads.map((d) => (
           <a

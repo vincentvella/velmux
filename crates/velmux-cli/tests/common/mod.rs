@@ -231,18 +231,24 @@ impl Env {
         drop(pair.slave);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 1000)));
         let mut reader = pair.master.try_clone_reader().unwrap();
-        let p = parser.clone();
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
+        let (p, w) = (parser.clone(), writer.clone());
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
-                p.lock().unwrap().process(&buf[..n]);
+                let mut p = p.lock().unwrap();
+                p.process(&buf[..n]);
+                // Where's the cursor? (ConPTY asks on start, and waits.)
+                if buf[..n].windows(4).any(|q| q == b"\x1b[6n") {
+                    let (row, col) = p.screen().cursor_position();
+                    let _ = write!(w.lock().unwrap(), "\x1b[{};{}R", row + 1, col + 1);
+                }
             }
         });
-        let writer = pair.master.take_writer().unwrap();
-        let ui = Ui { parser, writer: Mutex::new(writer), child, _master: pair.master };
+        let ui = Ui { parser, writer, child, _master: pair.master };
         ui.wait_for("menu");
         ui
     }
@@ -266,7 +272,7 @@ impl Drop for Env {
 
 pub struct Ui {
     pub parser: Arc<Mutex<vt100::Parser>>,
-    pub writer: Mutex<Box<dyn Write + Send>>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
     pub _master: Box<dyn portable_pty::MasterPty + Send>,
 }
