@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- Copying a command an agent wrapped no longer glues words together when a
+  line ended in a long path or URL: the space goes back unless the two pieces
+  are too long to fit on one line (a word split at the edge).
+
 ## [0.15.0] - 2026-10-23
 
 ### Added
