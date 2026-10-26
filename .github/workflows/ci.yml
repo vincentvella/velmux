@@ -33,7 +33,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
-        run: ${{ matrix.os == 'windows-latest' && 'cargo test --locked -p velmux-cli --test e2e' || 'cargo test --all-targets --locked' }}
+        run: cargo test --all-targets --locked
 
   # The site's PowerShell installer, against a release built here and served
   # locally: it installs a checked download, and refuses a tampered one.

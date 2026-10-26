@@ -309,16 +309,10 @@ impl Ui {
         std::thread::sleep(Duration::from_millis(120));
     }
 
-    /// The prefix (ctrl+a) then `key`. (In one write on Windows: with
-    /// several tests at once, a key sent on its own just after the prefix
-    /// sometimes never got through the test's ConPTY.)
+    /// The prefix (ctrl+a) then `key`.
     pub fn prefix(&self, key: &str) {
-        if cfg!(windows) {
-            self.send(format!("\x01{key}").as_bytes());
-        } else {
-            self.send(b"\x01");
-            self.send(key.as_bytes());
-        }
+        self.send(b"\x01");
+        self.send(key.as_bytes());
     }
 
     pub fn line(&self, text: &str) {

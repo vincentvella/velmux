@@ -1018,7 +1018,6 @@ fn a_released_workstream_comes_back_whole() {
 
 #[test]
 fn prefix_space_opens_the_menu_for_whats_focused() {
-    std::env::set_var("TRACE_VELMUX_INPUT", "1");
     let env = Env::new();
     let repo = env.repo("app");
     assert!(env.velmux(&repo, &["init"]).status.success());
@@ -1026,23 +1025,24 @@ fn prefix_space_opens_the_menu_for_whats_focused() {
     let ui = env.attach(&repo);
     ui.click_on("feat/keys", false);
     ui.wait_for("app › slot-1");
-    // An empty place: its own menu.
+    // An empty place: its own menu. (Waiting for items the keys popup, up
+    // between the prefix and the key, doesn't list.)
     ui.prefix(" ");
-    ui.wait_for("release slot");
+    ui.wait_for("copy path");
     ui.send(b"\x1b");
-    ui.wait_gone_text("release slot");
+    ui.wait_gone_text("copy path");
     // A pane: the pane's menu, whose last item is its place's.
     ui.send(b"c");
     ui.wait_for(PROMPT);
     ui.prefix(" ");
-    ui.wait_for("split right");
+    ui.wait_for("conversation to the right");
     let menu = ui.screen();
-    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap_or_else(|| panic!("no feat/keys… in the menu:\n{menu}\n{}", ui.report()));
+    let at = menu.lines().skip_while(|l| !l.contains("split right")).position(|l| l.contains("feat/keys…")).unwrap_or_else(|| panic!("no feat/keys… in the menu:\n{menu}"));
     for _ in 0..at {
         ui.send(b"j");
     }
     ui.send(b"\r");
-    ui.wait_for("release slot");
+    ui.wait_for("copy path");
 }
 
 #[test]

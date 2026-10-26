@@ -1244,12 +1244,7 @@ impl App {
                 }
             }
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
-            ClientMsg::Input(bytes) => {
-                if std::env::var_os("TRACE_VELMUX_INPUT").is_some() {
-                    eprintln!("TRACE input {:?} mode {}", String::from_utf8_lossy(&bytes), std::mem::discriminant(&self.mode) == std::mem::discriminant(&Mode::Normal));
-                }
-                self.input(&bytes)
-            }
+            ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
             ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } => {}
         }
