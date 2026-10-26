@@ -1870,6 +1870,7 @@ dependencies = [
  "portable-pty",
  "serde_json",
  "tempfile",
+ "uds_windows",
  "velmux-pool",
  "velmux-tui",
  "vt100",

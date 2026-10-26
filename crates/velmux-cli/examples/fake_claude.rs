@@ -10,6 +10,8 @@
 //!   screenshots); `title <text>`: set the window title; `mouse`: turn mouse
 //!   reporting on
 //! - `exit`
+//!
+//! Installed as `codex`, `droid`, `gh` or `browser`, it plays that instead.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -17,13 +19,24 @@ use std::process::Command;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let exe = std::env::current_exe().unwrap_or_default();
+    // The name it's installed under (`codex`, or `codex.exe` on Windows).
+    let name = exe.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // Installed as `codex` (…/codex/bin/codex), it plays Codex instead.
-    if std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str() == "codex")) {
+    if name == "codex" || exe.components().any(|c| c.as_os_str() == "codex") {
         return fake_codex(&args);
     }
-    // Installed as `droid`, it plays an agent followed through its hooks.
-    if std::env::current_exe().is_ok_and(|p| p.file_name().is_some_and(|n| n == "droid")) {
-        return fake_droid(&args);
+    match name.as_str() {
+        // An agent followed through its hooks.
+        "droid" => return fake_droid(&args),
+        "gh" => return fake_gh(&args),
+        // A browser: what it's asked to open goes in `$FAKE_OPENED`.
+        "browser" => {
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("FAKE_OPENED").expect("FAKE_OPENED")).unwrap();
+            writeln!(f, "{}", args.get(1).cloned().unwrap_or_default()).unwrap();
+            return;
+        }
+        _ => {}
     }
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let (id, resumed) = match (flag("--resume"), flag("--session-id")) {
@@ -88,7 +101,7 @@ fn main() {
                 }
             }
             "sh" => {
-                let ok = Command::new("sh").arg("-c").arg(rest).current_dir(&here).status().is_ok_and(|s| s.success());
+                let ok = sh().arg("-c").arg(rest).current_dir(&here).status().is_ok_and(|s| s.success());
                 println!("ran {ok}");
             }
             "show" => {
@@ -127,6 +140,24 @@ fn main() {
             "" => {}
             other => println!("unknown {other}"),
         }
+    }
+}
+
+/// A POSIX `sh` (on Windows, Git's).
+fn sh() -> Command {
+    Command::new(velmux_pool::sys::posix_shell().unwrap_or_else(|| "sh".into()))
+}
+
+/// `gh` as velmux uses it: `--version` says it's there, and `pr …` answers
+/// with `$FAKE_GH_PRS` (the PRs a test set up), or none.
+fn fake_gh(args: &[String]) {
+    match args.get(1).map(String::as_str) {
+        Some("--version") => println!("gh version 0 (fake)"),
+        Some("pr") => {
+            let prs = std::env::var("FAKE_GH_PRS").ok().and_then(|p| std::fs::read_to_string(p).ok());
+            println!("{}", prs.as_deref().unwrap_or("[]").trim_end());
+        }
+        _ => {}
     }
 }
 
@@ -192,7 +223,7 @@ fn fake_droid(args: &[String]) {
     for entry in settings["hooks"]["SessionStart"].as_array().into_iter().flatten() {
         for hook in entry["hooks"].as_array().into_iter().flatten() {
             if let Some(cmd) = hook["command"].as_str() {
-                let child = Command::new("sh").arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).spawn();
+                let child = sh().arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).spawn();
                 if let Ok(mut child) = child {
                     let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
                     let _ = child.wait();

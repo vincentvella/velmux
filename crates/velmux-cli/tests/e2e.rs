@@ -1,8 +1,4 @@
 //! End-to-end tests (harness in `common/`).
-//!
-//! Unix only for now: the harness drives panes through `sh` and a fake Claude
-//! on symlinks.
-#![cfg(unix)]
 
 mod common;
 
@@ -90,8 +86,8 @@ fn a_stopped_server_restores_scrollback() {
     let repo = env.repo("app");
     let ui = env.attach(&repo);
     ui.prefix("c");
-    ui.wait_for("$");
-    ui.line("i=1; while [ $i -le 80 ]; do echo e2e-line-$i; i=$((i+1)); done");
+    ui.wait_for(PROMPT);
+    ui.line(if cfg!(windows) { "1..80 | % { \"e2e-line-$_\" }" } else { "i=1; while [ $i -le 80 ]; do echo e2e-line-$i; i=$((i+1)); done" });
     ui.wait_for("e2e-line-80");
     env.stop(&repo);
     drop(ui);
@@ -116,6 +112,8 @@ fn a_stopped_server_brings_claude_back_as_itself() {
     ui.wait_for(&format!("FAKE-CLAUDE id={id} mode=resume"));
 }
 
+// (On Windows a restart can't hand the panes over: it restarts them.)
+#[cfg(unix)]
 #[test]
 fn live_restart_keeps_panes_running() {
     let env = Env::new();
@@ -310,6 +308,8 @@ fn changes_in_the_checkout_are_flagged_and_move_to_a_slot() {
     ui.wait_gone_text("✎2");
 }
 
+// (On Windows, updates come as a zip, unpacked by PowerShell.)
+#[cfg(unix)]
 #[test]
 fn update_swaps_in_a_downloaded_binary() {
     let env = Env::new();
@@ -399,7 +399,7 @@ fn an_agent_with_a_session_hook_is_resumed() {
     // Started by hand in a shell, its hook tells velmux the session…
     let ui = env.attach(&repo);
     ui.prefix("c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.line("droid");
     let screen = ui.wait_for("FAKE-DROID id=");
     let id = screen.split("FAKE-DROID id=").nth(1).unwrap().split_whitespace().next().unwrap().to_string();
@@ -553,16 +553,16 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.wait_for("@1 app");
     let dir = env.root.join("pools/.workstreams/checkout");
     let app_slot = env.slot(&app, "slot-1")["path"].as_str().unwrap().to_string();
-    env.until("the folder to link the app's slot", || std::fs::read_link(dir.join("app")).is_ok_and(|t| t.to_string_lossy() == app_slot));
+    env.until("the folder to link the app's slot", || velmux_pool::sys::read_link(&dir.join("app")).is_ok_and(|t| t.to_string_lossy() == app_slot));
     // From a shell in the workstream, claim a slot in another repo into it.
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.line(&format!("velmux claim feat/b --repo {} --no-fetch", api.display()));
     ui.wait_for("into the workstream checkout");
     ui.wait_for("@1 api");
     let api_slot = env.slot(&api, "slot-1");
     assert_eq!(api_slot["status"], "inuse");
-    env.until("the folder to link the api's slot too", || std::fs::read_link(dir.join("api")).is_ok());
+    env.until("the folder to link the api's slot too", || velmux_pool::sys::read_link(&dir.join("api")).is_ok());
     // `velmux workstream`: from anywhere by name (JSON for scripts)…
     env.until("velmux workstream to list both slots", || {
         let w = env.json(&app, &["workstream", "checkout", "--json"]);
@@ -577,7 +577,7 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.click_on("feat/a", false);
     ui.wait_for("app › slot-1");
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.line("echo still-here");
     ui.wait_for("still-here");
     // Releasing it hands every slot back and removes it…
@@ -699,12 +699,12 @@ fn a_workstream_slot_released_from_its_own_pane_leaves_it() {
     ui.line("ws");
     ui.wait_for("@1 app");
     let link = env.root.join("pools/.workstreams/ws/app");
-    env.until("the link", || std::fs::read_link(&link).is_ok());
+    env.until("the link", || velmux_pool::sys::read_link(&link).is_ok());
     // A shell in the slot (under the workstream) releases it.
     ui.click_on("feat/w", false);
     ui.wait_for("app › slot-1");
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.line("velmux release");
     env.until("the slot to be free", || env.slot(&app, "slot-1")["status"] == "free");
     // The pane is back in app's checkout; the slot has left the workstream (which stays).
@@ -724,7 +724,7 @@ fn releasing_a_slot_from_its_menu_moves_its_panes_back() {
     ui.click_on("feat/menu", false);
     ui.wait_for("app › slot-1");
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.line("echo still-here");
     ui.wait_for("still-here");
     ui.click_on("feat/menu", true);
@@ -772,7 +772,7 @@ fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
     ui.wait_for("@1 api");
     assert_eq!(env.slot(&api, "slot-1")["branch"], "feat/pair");
     assert_eq!(env.slot(&app, "slot-1")["status"], "free");
-    env.until("its link", || std::fs::read_link(env.root.join("pools/.workstreams/pair/api")).is_ok());
+    env.until("its link", || velmux_pool::sys::read_link(&env.root.join("pools/.workstreams/pair/api")).is_ok());
 }
 
 #[test]
@@ -781,7 +781,7 @@ fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
     let repo = env.repo("app");
     let ui = env.attach(&repo);
     ui.prefix("c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     let right_click = |x: u16, y: u16| ui.send(format!("\x1b[<2;{x};{y}M\x1b[<2;{x};{y}m").as_bytes());
     let count = |needle: &str| ui.screen().matches(needle).count();
     // Right-click in the pane: its menu; the first item splits it.
@@ -813,7 +813,7 @@ fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
     ui.send(b"\r");
     env.until("one pane left", || {
         let s = ui.screen();
-        titles() == 0 && !s.contains("close pane") && count("$") >= 1
+        titles() == 0 && !s.contains("close pane") && count(PROMPT) >= 1
     });
 }
 
@@ -839,9 +839,11 @@ fn dragging_a_selection_to_a_panes_edge_scrolls_both_ways() {
     let repo = env.repo("app");
     let ui = env.attach(&repo);
     ui.prefix("c");
-    ui.wait_for("$");
-    ui.line("seq 1 400");
-    ui.wait_for("400");
+    ui.wait_for(PROMPT);
+    // (PowerShell echoes `1..400` itself: wait for what follows the numbers.)
+    let (list, done) = if cfg!(windows) { ("1..400; 'list' + 'ed'", "listed") } else { ("seq 1 400", "400") };
+    ui.line(list);
+    ui.wait_for(done);
     // Scroll well back into history with the wheel (SGR 64 = wheel up).
     for _ in 0..40 {
         ui.send(b"\x1b[<64;80;10M");
@@ -927,7 +929,7 @@ fn a_conversation_to_the_right_starts_beside_the_pane() {
     ui.click_on("feat/side", false);
     ui.wait_for("app › slot-1");
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.send(b"\x1b[<2;70;12M\x1b[<2;70;12m");
     ui.wait_for("conversation to the right");
     let menu = ui.screen();
@@ -1020,7 +1022,7 @@ fn prefix_space_opens_the_menu_for_whats_focused() {
     ui.wait_gone_text("release slot");
     // A pane: the pane's menu, whose last item is its place's.
     ui.send(b"c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.prefix(" ");
     ui.wait_for("split right");
     let menu = ui.screen();
@@ -1062,7 +1064,7 @@ fn a_workstream_pushes_its_branches_for_prs() {
     let api = env.repo("api");
     for (repo, name) in [(&app, "app"), (&api, "api")] {
         let bare = env.root.join(format!("remotes/{name}.git"));
-        env.run_in(repo, &format!("git clone -q --bare . {0} && git remote add origin {0} && git fetch -q origin", bare.display()));
+        env.run_in(repo, &format!("git clone -q --bare . '{0}' && git remote add origin '{0}' && git fetch -q origin", bare.display()));
         assert!(env.velmux(repo, &["init"]).status.success());
     }
     for (repo, branch) in [(&app, "feat/p"), (&api, "feat/q")] {
@@ -1166,7 +1168,7 @@ fn focus_follows_the_mouse_when_turned_on() {
     std::fs::write(&config, format!("focus_follows_mouse = true\n{text}")).unwrap();
     let ui = env.attach(&repo);
     ui.prefix("c");
-    ui.wait_for("$");
+    ui.wait_for(PROMPT);
     ui.prefix("|"); // split right; the new right pane has focus
     std::thread::sleep(Duration::from_secs(1));
     let focused = || {

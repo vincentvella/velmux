@@ -22,3 +22,6 @@ velmux-tui = { path = "../velmux-tui" }
 portable-pty = "0.9"
 vt100 = "0.18"
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+uds_windows = "1"
