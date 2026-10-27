@@ -30,6 +30,10 @@ pub enum ClientMsg {
     /// One-shot: an agent's hook says which session that pane's agent is in
     /// (a session reference, see `agents`).
     ReportSession { pane: u64, session: String },
+    /// One-shot: every pane, where it is and what's in it (JSON).
+    Panes,
+    /// One-shot: close a pane (`velmux close-pane`).
+    ClosePane { pane: u64 },
 }
 
 pub enum ServerMsg {
@@ -101,6 +105,8 @@ impl ClientMsg {
                 p.extend_from_slice(session.as_bytes());
                 write_frame(w, 10, &p)
             }
+            ClientMsg::Panes => write_frame(w, 12, &[]),
+            ClientMsg::ClosePane { pane } => write_frame(w, 13, &pane.to_be_bytes()),
             ClientMsg::ImportHerdr { path, with_latest_claude } => {
                 let mut p = vec![*with_latest_claude as u8];
                 p.extend_from_slice(path.as_os_str().as_encoded_bytes());
@@ -133,6 +139,8 @@ impl ClientMsg {
                 })
             }
             7 if p.len() >= 8 => Ok(ClientMsg::ReleaseFor { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
+            12 => Ok(ClientMsg::Panes),
+            13 if p.len() >= 8 => Ok(ClientMsg::ClosePane { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
             11 if p.len() > 8 => {
                 let v: serde_json::Value = serde_json::from_slice(&p[8..]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let text = |k: &str| v[k].as_str().map(String::from);

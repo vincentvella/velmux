@@ -519,7 +519,9 @@ pub fn serve() -> Result<()> {
                     | ClientMsg::ClaimFor { .. }
                     | ClientMsg::ReleaseFor { .. }
                     | ClientMsg::ReportSession { .. }
-                    | ClientMsg::ClaimInto { .. } => Event::Control(stream, first),
+                    | ClientMsg::ClaimInto { .. }
+                    | ClientMsg::Panes
+                    | ClientMsg::ClosePane { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -980,6 +982,14 @@ impl App {
                         None => "error: that pane isn't in velmux".into(),
                     },
                     ClientMsg::Debug => self.debug_dump(),
+                    ClientMsg::Panes => self.panes_json(),
+                    ClientMsg::ClosePane { pane } => match self.panes.iter_mut().find(|p| p.id == pane) {
+                        Some(p) => {
+                            p.kill();
+                            format!("closed pane {pane}")
+                        }
+                        None => format!("error: no pane {pane} (`velmux panes` lists them)"),
+                    },
                     ClientMsg::Stop => {
                         self.quit = true;
                         "stopping — panes and Claude sessions are restored next time you run velmux".into()
@@ -1262,7 +1272,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } | ClientMsg::Panes | ClientMsg::ClosePane { .. } => {}
         }
     }
 
@@ -1784,6 +1794,35 @@ impl App {
 
     /// `velmux debug`: the focused pane as velmux holds it (pty and parser
     /// size, the rect it's drawn in, each row), to compare with the screen.
+    /// Every pane for `velmux panes`, as JSON: its place (and that place's
+    /// folder, branch and slot), what's running in it, and its agent's state.
+    fn panes_json(&self) -> String {
+        let list: Vec<serde_json::Value> = self
+            .panes
+            .iter()
+            .map(|p| {
+                let project = &self.projects[p.loc.project];
+                let slot = p.loc.slot.as_ref().and_then(|id| project.slots.iter().find(|s| &s.id == id));
+                serde_json::json!({
+                    "pane": p.id,
+                    "place": self.loc_name(&p.loc),
+                    "repo": project.pool.as_ref().map(|_| project.name()),
+                    "slot": slot.map(|s| s.id.clone()),
+                    "branch": slot.and_then(|s| s.branch.clone()),
+                    "workstream": self.is_workstream(&p.loc).then(|| p.loc.slot.clone()).flatten(),
+                    "path": self.loc_cwd(&p.loc),
+                    "cwd": p.fg.cwd,
+                    "running": ui::pane_program(p),
+                    "agent": p.agent,
+                    "state": p.state.map(|s| format!("{s:?}").to_lowercase()),
+                    "session": p.session,
+                    "focused": self.focus == Some(p.id),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
     fn debug_dump(&mut self) -> String {
         let body = ui::pane_area(self.size.0, self.size.1, self.sidebar_hidden, self.sidebar_cols);
         let Some(pane) = self.focus.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) else {

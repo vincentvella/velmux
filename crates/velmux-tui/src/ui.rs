@@ -672,9 +672,10 @@ fn state_glyph(t: &Theme, pane: &Pane) -> (&'static str, Style) {
 
 /// What a pane is: its agent, the program it's running, or `shell`, plus its
 /// folder when that isn't the location's root (`shell · packages/web`).
-pub fn pane_label(app: &App, pane: &Pane) -> String {
-    let program = pane.fg.program.as_deref();
-    let name = match (pane.agent, program) {
+/// What's running in `pane`: its agent, else its foreground program, else
+/// "shell" (or what it was started as).
+pub fn pane_program(pane: &Pane) -> String {
+    match (pane.agent, pane.fg.program.as_deref()) {
         (Some(agent), _) => agent.to_string(),
         (None, Some(p)) if !crate::detect::is_shell(p) => p.to_string(),
         (None, Some(_)) => "shell".into(),
@@ -683,7 +684,11 @@ pub fn pane_label(app: &App, pane: &Pane) -> String {
             Kind::Shell => "shell".into(),
             Kind::Editor => "editor".into(),
         },
-    };
+    }
+}
+
+pub fn pane_label(app: &App, pane: &Pane) -> String {
+    let name = pane_program(pane);
     let place = match (pane.fg.cwd.as_deref(), app.loc_cwd(&pane.loc)) {
         (Some(cwd), Some(root)) => crate::detect::short_cwd(cwd, &root),
         _ => None,

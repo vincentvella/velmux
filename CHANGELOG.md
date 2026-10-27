@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- `velmux panes [--json]`: every pane, where it is (repo, slot and branch, or
+  workstream) and what's running in it, with yours marked; and
+  `velmux close-pane <n>`. A claim moves the pane it runs in, and this is how a
+  script or agent can see where it went. The Claude skill points agents at it.
+
 ### Fixed
 
 - The first claim in a repo with no slots yet set every slot up and installed

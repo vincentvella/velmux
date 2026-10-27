@@ -111,6 +111,14 @@ enum Cmd {
     Restart,
     /// Stop the TUI server: everything is saved and restored next time.
     Stop,
+    /// Every pane in velmux: where it is (repo, slot and branch, or
+    /// workstream) and what's running in it; yours is marked.
+    Panes {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close a pane, as `<prefix> x` does (its number from `velmux panes`).
+    ClosePane { pane: u64 },
     /// Print the focused pane as the server holds it (sizes and rows).
     #[command(hide = true)]
     Debug,
@@ -177,6 +185,11 @@ fn run() -> Result<()> {
         Some(Cmd::Restart) => return velmux_tui::restart_server(),
         Some(Cmd::Skill { action }) => return skill(action, &cwd),
         Some(Cmd::Stop) => return velmux_tui::stop_server(),
+        Some(Cmd::Panes { json }) => return panes(json),
+        Some(Cmd::ClosePane { pane }) => {
+            println!("{}", velmux_tui::close_pane(pane)?);
+            return Ok(());
+        }
         Some(Cmd::Debug) => return velmux_tui::debug_server(),
         Some(Cmd::Keys { test: true, .. }) => return velmux_tui::key_test(),
         Some(Cmd::Keys { ghostty, install, .. }) => return velmux_tui::print_keys(ghostty, install),
@@ -327,7 +340,7 @@ fn run() -> Result<()> {
             }
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Panes { .. } | Cmd::ClosePane { .. } | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -677,6 +690,36 @@ fn workstream(name: Option<String>, json: bool) -> Result<()> {
             }
             println!("  {:<12} {:<7} {}{marks}  {}", s.repo, s.slot.id, s.slot.branch.as_deref().unwrap_or("-"), s.slot.path.display());
         }
+    }
+    Ok(())
+}
+
+/// `velmux panes`: one line a pane (`pane 3  app › slot-1 · feat/x  claude, idle`).
+fn panes(json: bool) -> Result<()> {
+    let Some(panes) = velmux_tui::panes()? else {
+        bail!("no velmux server running");
+    };
+    if json {
+        println!("{panes}");
+        return Ok(());
+    }
+    let mine = std::env::var("VELMUX_PANE").ok().and_then(|p| p.parse::<u64>().ok());
+    let list = panes.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("no panes");
+    }
+    let width = list.iter().filter_map(|p| p["place"].as_str()).map(|p| p.chars().count()).max().unwrap_or(0);
+    for p in &list {
+        let id = p["pane"].as_u64().unwrap_or_default();
+        let running = match p["state"].as_str() {
+            Some(state) => format!("{}, {state}", p["running"].as_str().unwrap_or_default()),
+            None => p["running"].as_str().unwrap_or_default().to_string(),
+        };
+        let marks = [(Some(id) == mine).then_some("← this pane"), p["focused"].as_bool().unwrap_or(false).then_some("(focused)")];
+        let marks: Vec<&str> = marks.into_iter().flatten().collect();
+        let place = p["place"].as_str().unwrap_or_default();
+        let line = format!("pane {id:<4} {place:<width$}  {running}  {}", marks.join(" "));
+        println!("{}", line.trim_end());
     }
     Ok(())
 }

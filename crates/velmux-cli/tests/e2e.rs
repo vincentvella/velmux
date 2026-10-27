@@ -89,6 +89,37 @@ fn a_pane_claims_one_slot_at_a_time() {
 }
 
 #[test]
+fn panes_says_where_every_pane_is_and_closes_one() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    let id = ui.claude_id();
+    ui.line("claim feat/where --no-fetch");
+    ui.wait_for("claimed ");
+    ui.prefix("|");
+    ui.wait_for(PROMPT);
+    let panes = env.json(&repo, &["panes", "--json"]);
+    let list = panes.as_array().unwrap();
+    assert_eq!(list.len(), 2, "{panes}");
+    let claude = list.iter().find(|p| p["agent"] == "claude").unwrap();
+    assert_eq!((claude["slot"].as_str(), claude["branch"].as_str(), claude["session"].as_str()), (Some("slot-1"), Some("feat/where"), Some(id.as_str())));
+    assert_eq!(claude["place"], "app › slot-1 · feat/where");
+    let shell = list.iter().find(|p| p["agent"].is_null()).unwrap();
+    assert_eq!((shell["running"].as_str(), shell["focused"].as_bool()), (Some("shell"), Some(true)));
+    // The table marks the pane it's run from.
+    let out = env.velmux(&repo, &["panes"]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("app › slot-1 · feat/where") && text.contains("claude, "), "{text}");
+    // Closing one by its number.
+    let n = shell["pane"].as_u64().unwrap().to_string();
+    assert!(env.velmux(&repo, &["close-pane", &n]).status.success());
+    env.until("the shell to close", || env.json(&repo, &["panes", "--json"]).as_array().unwrap().len() == 1);
+    let none = env.velmux(&repo, &["close-pane", "999"]);
+    assert!(!none.status.success() && String::from_utf8_lossy(&none.stderr).contains("no pane 999"));
+}
+
+#[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
     let repo = env.repo("app");

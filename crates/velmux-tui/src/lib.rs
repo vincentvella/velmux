@@ -139,6 +139,27 @@ pub fn debug_server() -> anyhow::Result<()> {
 }
 
 /// `velmux stop`: save and stop the server.
+/// `velmux panes`: every pane, from the running server (`None` when there
+/// isn't one: it isn't started for this).
+pub fn panes() -> anyhow::Result<Option<serde_json::Value>> {
+    if crate::ipc::UnixStream::connect(paths::socket()?).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&client::request(proto::ClientMsg::Panes)?)?))
+}
+
+/// `velmux close-pane <id>`: close it as `<prefix> x` would.
+pub fn close_pane(pane: u64) -> anyhow::Result<String> {
+    if crate::ipc::UnixStream::connect(paths::socket()?).is_err() {
+        anyhow::bail!("no velmux server running");
+    }
+    let reply = client::request(proto::ClientMsg::ClosePane { pane })?;
+    match reply.strip_prefix("error: ") {
+        Some(e) => anyhow::bail!("{e}"),
+        None => Ok(reply),
+    }
+}
+
 pub fn stop_server() -> anyhow::Result<()> {
     if crate::ipc::UnixStream::connect(paths::socket()?).is_err() {
         println!("no velmux server running");

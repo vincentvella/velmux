@@ -17,6 +17,9 @@ its dependencies installed between tasks, so claiming one is fast.
 - `$VELMUX_SLOT` set (e.g. `slot-2`): you're in that slot, on its own branch.
 - Only `$VELMUX_BASE` set: you're in the base checkout.
 - `$VELMUX_WORKSTREAM` set: you're in that workstream (see below).
+- These are from when your pane started, and a claim or release moves it:
+  `velmux panes` says where every pane is now (`← this pane` is you; `--json`
+  for slot, branch and path).
 
 ## In the base checkout: plan, then claim
 
@@ -31,7 +34,9 @@ velmux claim feat/short-name
 ```
 
 It prints the slot's path; work there from then on (use that path for every
-file edit and command). Inside velmux, your pane moves under that slot in the
+file edit and command). It can take minutes when the slot installs
+dependencies: wait for it (run it in the foreground, with a long timeout).
+A second claim from your pane while one is running is refused. Inside velmux, your pane moves under that slot in the
 sidebar. If the branch already exists (or was parked), you get it back with any
 parked changes restored.
 
