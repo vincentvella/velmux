@@ -5,6 +5,8 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-26
+
 ### Changed
 
 - A failed dependency install no longer fails the claim: the slot is yours
@@ -318,7 +320,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/vincentvella/velmux/releases/tag/v0.16.1
 [0.16.0]: https://github.com/vincentvella/velmux/releases/tag/v0.16.0
 [0.15.1]: https://github.com/vincentvella/velmux/releases/tag/v0.15.1
 [0.15.0]: https://github.com/vincentvella/velmux/releases/tag/v0.15.0
