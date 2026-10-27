@@ -39,11 +39,12 @@ fn a_failed_install_still_claims_and_no_install_skips_it() {
     let ui = env.attach(&repo);
     ui.prefix("a");
     ui.claude_id();
-    // From a pane, `--no-install` holds (setting the slots up still tries each).
+    // From a pane, `--no-install` holds (and the slots it sets up first wait
+    // for their own claims to install).
     ui.line("claim feat/a --no-fetch --no-install");
     ui.wait_for("claimed ");
     let before = tries();
-    assert_eq!(before, 2, "one try per slot as they're set up, none for the claim");
+    assert_eq!(before, 0, "no installs for the claim or the slots it set up");
     ui.line("release");
     env.until("slot-1 to be free", || env.slot(&repo, "slot-1")["status"] == "free");
     // Without it the install runs, fails, and the slot is claimed all the same.
@@ -55,6 +56,36 @@ fn a_failed_install_still_claims_and_no_install_skips_it() {
     assert_eq!(slot["status"], "inuse");
     assert!(slot["install_error"].as_str().is_some_and(|e| e.contains("exit") || e.contains("failed")), "{slot}");
     ui.wait_for("✗ install");
+}
+
+#[test]
+fn a_pane_claims_one_slot_at_a_time() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    // A slow install, so the first claim is still at it.
+    env.run_in(&repo, "printf 'install_cmd = \"sleep 4\"\\n' > .velmux.toml && git add -A && git commit -qm cfg");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    let pane = String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).split_whitespace().nth(1).unwrap().to_string();
+    let claim = |branch: &str| {
+        let mut c = Command::new(VELMUX);
+        c.args(["claim", branch, "--no-fetch"]).current_dir(&repo).envs(env.vars()).env("VELMUX_PANE", &pane);
+        c
+    };
+    let mut first = claim("feat/a").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let on = |branch: &str| {
+        let out = env.velmux(&repo, &["status", "--json"]);
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default().into_iter().any(|s| s["branch"] == branch)
+    };
+    // It takes its slot straight away, before installing anything.
+    env.until("the first claim to take its slot", || on("feat/a"));
+    let second = claim("feat/b").output().unwrap();
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(!second.status.success() && said.contains("still running"), "{said}");
+    assert!(first.wait().unwrap().success());
+    ui.wait_for("slot-1 · feat/a");
+    assert!(!on("feat/b"));
 }
 
 #[test]

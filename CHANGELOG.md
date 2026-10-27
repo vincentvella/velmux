@@ -5,6 +5,16 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- The first claim in a repo with no slots yet set every slot up and installed
+  dependencies in all of them before claiming, with every slot still showing
+  free; it now creates them, takes one at once and installs only that one
+  (the rest install when they're claimed; `velmux init` still warms them all).
+- A second `velmux claim` from a pane whose first was still running (a slow
+  install looks like a dead claim) was taken too, and moved the pane twice;
+  it's now refused until the first is done.
+
 ## [0.16.1] - 2026-10-26
 
 ### Changed

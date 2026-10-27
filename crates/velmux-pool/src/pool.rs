@@ -237,8 +237,20 @@ impl Pool {
         dirs
     }
 
-    /// Create missing slots up to the configured count. Idempotent; never shrinks.
+    /// Create missing slots up to the configured count, and install each free
+    /// one's dependencies. Idempotent; never shrinks.
     pub fn init(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
+        self.set_up(true, report)
+    }
+
+    /// [`init`](Self::init) without installing anything: for a claim that
+    /// finds no slots, which installs in the one it takes (the others install
+    /// when they're claimed), so it isn't waiting on every slot's install.
+    pub fn create_slots(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
+        self.set_up(false, report)
+    }
+
+    fn set_up(&self, install: bool, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
         std::fs::create_dir_all(&self.dir)?;
         self.adopt(report)?;
         let created = self.store.with(&self.base, |st| {
@@ -273,7 +285,7 @@ impl Pool {
         let slots = self.store.snapshot()?.map(|s| s.slots).unwrap_or_default();
         for slot in slots.iter().filter(|s| s.status == Status::Free) {
             self.link_into(&slot.path)?;
-            if self.cfg.install {
+            if install && self.cfg.install {
                 self.try_install(slot, report)?;
             }
         }

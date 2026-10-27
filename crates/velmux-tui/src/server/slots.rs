@@ -130,7 +130,17 @@ impl App {
     }
 
     /// [`claim_in`](Self::claim_in), bringing back the Claude `resume` sessions in the slot.
-    pub(super) fn claim_resuming(&mut self, project: usize, branch: Option<String>, for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) -> Option<String> {
+    pub(super) fn claim_resuming(&mut self, project: usize, branch: Option<String>, mut for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) -> Option<String> {
+        // One claim at a time per pane: a slow one (a big install) looks like
+        // it died to whoever ran it, and a second would move the pane again.
+        if let Some((pane, stream)) = &mut for_pane {
+            if let Some(job) = self.claiming.get(pane) {
+                let step = self.jobs.iter().find(|(k, _)| k == job).map(|(_, s)| s.clone()).unwrap_or_default();
+                let _ = ServerMsg::Reply(format!("error: this pane's last claim is still running ({step}); it moves here when it's done")).write(stream);
+                self.next_claim = None;
+                return None;
+            }
+        }
         let Some(pool) = self.projects[project].pool.clone() else {
             if let Some((_, mut stream)) = for_pane {
                 let _ = ServerMsg::Reply("error: this folder isn't a git repo, so it has no slots".into()).write(&mut stream);
@@ -144,6 +154,9 @@ impl App {
         let job = format!("claim {}", self.job_seq);
         self.jobs.push((job.clone(), format!("claiming {}", branch.as_deref().unwrap_or("a slot"))));
         let id = job.clone();
+        if let Some((pane, _)) = &for_pane {
+            self.claiming.insert(*pane, job.clone());
+        }
         std::thread::spawn(move || {
             let progress = {
                 let (tx, job) = (tx.clone(), job.clone());
@@ -153,7 +166,7 @@ impl App {
             };
             let result = (|| {
                 if pool.status()?.is_empty() {
-                    pool.init(&|_| {})?;
+                    pool.create_slots(&|_| {})?;
                 }
                 let opts = ClaimOpts { branch, by: Some("velmux".into()), fetch, install };
                 pool.claim(&opts, &progress)

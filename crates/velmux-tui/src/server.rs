@@ -384,6 +384,8 @@ pub struct App {
     /// Whether the next claim fetches and installs (`velmux claim --no-fetch`
     /// / `--no-install` from a pane set it): taken by that claim.
     next_claim: Option<(bool, bool)>,
+    /// Panes with a claim under way (`velmux claim` in them), and its job.
+    claiming: HashMap<u64, String>,
     /// Menu labels made at runtime (workstream names), kept for the menus' `&'static str`.
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
@@ -654,6 +656,7 @@ impl App {
             repeat_until: None,
             claim_into: HashMap::new(),
             next_claim: None,
+            claiming: HashMap::new(),
             interned: HashMap::new(),
             menu_at: None,
             refreshed: HashMap::new(),
@@ -1022,6 +1025,7 @@ impl App {
             Event::Claimed { project, job, result, for_pane, resume } => {
                 self.jobs.retain(|(k, _)| k != &job);
                 self.preparing.retain(|_, (k, _)| k != &job);
+                self.claiming.retain(|_, k| k != &job);
                 self.refresh_slots();
                 let install_failed = result.as_ref().ok().filter(|s| s.install_error.is_some()).map(|s| s.id.clone());
                 match (result, for_pane) {
