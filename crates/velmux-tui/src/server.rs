@@ -1934,6 +1934,12 @@ impl App {
         for (id, kind) in alerts {
             self.alert(id, kind);
         }
+        #[cfg(windows)]
+        for pane in &mut self.panes {
+            if pane.exited() {
+                let _ = self.events.send(Event::PtyExit(pane.id));
+            }
+        }
         if sessions_changed {
             self.save();
         }

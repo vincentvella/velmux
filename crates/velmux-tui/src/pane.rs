@@ -550,6 +550,13 @@ impl Pane {
     pub fn reap(&mut self) {
         let _ = self.child.try_wait();
     }
+
+    /// Its program has exited. (On Windows the pane's output stays open until
+    /// the pane itself is closed, so that's how its end is noticed there.)
+    #[cfg(windows)]
+    pub fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
 }
 
 /// The pane's shell, running `command` first when there is one.

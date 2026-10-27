@@ -21,6 +21,9 @@ What changed in each release of velmux. Each version links to its release
 - A second `velmux claim` from a pane whose first was still running (a slow
   install looks like a dead claim) was taken too, and moved the pane twice;
   it's now refused until the first is done.
+- Windows: a pane whose program exited (or was closed) could stay open, as
+  the console keeps its output open until the pane goes; velmux now notices
+  the exit itself.
 
 ## [0.16.1] - 2026-10-26
 
