@@ -310,6 +310,30 @@ fn install_is_skipped_while_lockfile_is_unchanged() {
 }
 
 #[test]
+fn a_failed_install_is_a_warning_and_tried_again() {
+    let f = fixture("slots = 1\ninstall_cmd = \"echo run >> ../installs.log; [ -f ../fixed ] || { echo broken >&2; exit 3; }\"\n");
+    std::fs::write(f.base.join("package-lock.json"), "{}").unwrap();
+    sh(&f.base, "git add -A && git commit -qm lock");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    let said = std::sync::Mutex::new(Vec::new());
+    let report = |m: &str| said.lock().unwrap().push(m.to_string());
+    // Setting the slots up doesn't fail on it, and neither does claiming one.
+    pool.init(&report).unwrap();
+    let s = pool.claim(&opts(Some("a")), &report).unwrap();
+    assert_eq!(s.status, Status::InUse);
+    assert!(s.install_error.as_deref().is_some_and(|e| e.contains("broken")), "{:?}", s.install_error);
+    assert!(said.lock().unwrap().iter().any(|m| m.contains("warning: installing dependencies failed")));
+    // The lockfile hasn't changed, but a failed install isn't skipped next time…
+    pool.release(&s.id, false).unwrap();
+    std::fs::write(pool.dir.join("fixed"), "").unwrap();
+    let s = pool.claim(&opts(Some("a")), &quiet).unwrap();
+    let runs = std::fs::read_to_string(pool.dir.join("installs.log")).unwrap().lines().count();
+    assert_eq!(runs, 3, "init, the first claim, and this one");
+    // …and once it works, the slot stops saying it failed.
+    assert_eq!(s.install_error, None);
+}
+
+#[test]
 fn adopts_a_pool_laid_out_beside_the_repo() {
     let f = fixture("slots = 3\n");
     let ws = f.base.parent().unwrap().to_path_buf();

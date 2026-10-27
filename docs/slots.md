@@ -62,6 +62,10 @@ The least recently used free slot is taken, fetched, switched to the branch, and
 its dependencies installed if the lockfile changed. Configured `post_claim`
 hooks run, and gitignored files like `.env` are linked from your checkout.
 
+If the install fails, the slot is yours anyway: velmux warns, the slot shows
+`✗ install` (`velmux status --json` has the error), and the next claim tries
+again. `velmux claim --no-install` skips it.
+
 **Release** hands it back: `velmux release` (Claude, or you in the slot),
 `<prefix> r`, or the slot's right-click menu. Uncommitted work is stashed, the
 slot is reset to the base ref, and everything that isn't dependencies or caches

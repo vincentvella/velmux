@@ -5,6 +5,17 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Changed
+
+- A failed dependency install no longer fails the claim: the slot is yours
+  anyway, it shows `✗ install` (and `velmux status --json` has the error), and
+  the next claim tries again.
+
+### Fixed
+
+- `velmux claim --no-install` and `--no-fetch` from inside a velmux pane were
+  ignored: the server always fetched and installed.
+
 ## [0.16.0] - 2026-10-26
 
 ### Added

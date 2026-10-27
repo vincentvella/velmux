@@ -30,6 +30,34 @@ fn base_claude_claims_a_slot_and_releases_it() {
 }
 
 #[test]
+fn a_failed_install_still_claims_and_no_install_skips_it() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    // An install that always fails, noting each try.
+    env.run_in(&repo, "printf 'install_cmd = \"echo try >> ../tries.log; exit 3\"\\n' > .velmux.toml && git add -A && git commit -qm cfg");
+    let tries = || std::fs::read_to_string(env.root.join("pools/app/tries.log")).unwrap_or_default().lines().count();
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    ui.claude_id();
+    // From a pane, `--no-install` holds (setting the slots up still tries each).
+    ui.line("claim feat/a --no-fetch --no-install");
+    ui.wait_for("claimed ");
+    let before = tries();
+    assert_eq!(before, 2, "one try per slot as they're set up, none for the claim");
+    ui.line("release");
+    env.until("slot-1 to be free", || env.slot(&repo, "slot-1")["status"] == "free");
+    // Without it the install runs, fails, and the slot is claimed all the same.
+    ui.line("claim feat/b --no-fetch");
+    let on_b = || env.json(&repo, &["status", "--json"]).as_array().unwrap().iter().find(|s| s["branch"] == "feat/b").cloned();
+    env.until("a slot to be claimed for feat/b", || on_b().is_some());
+    assert_eq!(tries(), before + 1);
+    let slot = on_b().unwrap();
+    assert_eq!(slot["status"], "inuse");
+    assert!(slot["install_error"].as_str().is_some_and(|e| e.contains("exit") || e.contains("failed")), "{slot}");
+    ui.wait_for("✗ install");
+}
+
+#[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
     let repo = env.repo("app");

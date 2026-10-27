@@ -381,6 +381,9 @@ pub struct App {
     repeat_until: Option<Instant>,
     /// Claims (by job) whose slot goes into a workstream instead of moving the pane.
     claim_into: HashMap<String, Loc>,
+    /// Whether the next claim fetches and installs (`velmux claim --no-fetch`
+    /// / `--no-install` from a pane set it): taken by that claim.
+    next_claim: Option<(bool, bool)>,
     /// Menu labels made at runtime (workstream names), kept for the menus' `&'static str`.
     interned: HashMap<String, &'static str>,
     /// Where the menu that's running an item was, for a menu it opens.
@@ -650,6 +653,7 @@ impl App {
             prefix,
             repeat_until: None,
             claim_into: HashMap::new(),
+            next_claim: None,
             interned: HashMap::new(),
             menu_at: None,
             refreshed: HashMap::new(),
@@ -956,8 +960,12 @@ impl App {
                         self.claim_in(project, branch, Some((pane, stream)));
                         return;
                     }
-                    ClientMsg::ClaimInto { pane, branch, repo, workstream } => {
-                        return self.claim_into_for(pane, branch, repo, workstream, stream);
+                    ClientMsg::ClaimInto { pane, branch, repo, workstream, fetch, install } => {
+                        self.next_claim = Some((fetch, install));
+                        self.claim_into_for(pane, branch, repo, workstream, stream);
+                        // (Not taken when it failed before claiming.)
+                        self.next_claim = None;
+                        return;
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
                     ClientMsg::ReportSession { pane, session } => match self.panes.iter_mut().find(|p| p.id == pane) {
@@ -1015,6 +1023,7 @@ impl App {
                 self.jobs.retain(|(k, _)| k != &job);
                 self.preparing.retain(|_, (k, _)| k != &job);
                 self.refresh_slots();
+                let install_failed = result.as_ref().ok().filter(|s| s.install_error.is_some()).map(|s| s.id.clone());
                 match (result, for_pane) {
                     // Claimed from a workstream's menu: the slot joins it.
                     (Ok(slot), None) if self.claim_into.contains_key(&job) => {
@@ -1066,6 +1075,9 @@ impl App {
                         self.claim_into.remove(&job);
                         let _ = ServerMsg::Reply(format!("error: {e}")).write(&mut stream);
                     }
+                }
+                if let Some(id) = install_failed {
+                    self.say(format!("claimed {id}, but installing its dependencies failed (`velmux status --json` says why)"));
                 }
             }
             Event::Progress { project, job, text } => {

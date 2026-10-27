@@ -25,7 +25,8 @@ pub enum ClientMsg {
     /// One-shot: `velmux claim` in a pane, saying which repo (`--repo`) and
     /// which workstream (`--workstream`, or the one the pane is in) when it's
     /// for one. Without either, the same as `ClaimFor`.
-    ClaimInto { pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String> },
+    /// `fetch` / `install`: `--no-fetch` / `--no-install` not given.
+    ClaimInto { pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, fetch: bool, install: bool },
     /// One-shot: an agent's hook says which session that pane's agent is in
     /// (a session reference, see `agents`).
     ReportSession { pane: u64, session: String },
@@ -90,9 +91,9 @@ impl ClientMsg {
                 write_frame(w, 6, &p)
             }
             ClientMsg::ReleaseFor { pane } => write_frame(w, 7, &pane.to_be_bytes()),
-            ClientMsg::ClaimInto { pane, branch, repo, workstream } => {
+            ClientMsg::ClaimInto { pane, branch, repo, workstream, fetch, install } => {
                 let mut p = pane.to_be_bytes().to_vec();
-                p.extend_from_slice(serde_json::json!({ "branch": branch, "repo": repo, "workstream": workstream }).to_string().as_bytes());
+                p.extend_from_slice(serde_json::json!({ "branch": branch, "repo": repo, "workstream": workstream, "fetch": fetch, "install": install }).to_string().as_bytes());
                 write_frame(w, 11, &p)
             }
             ClientMsg::ReportSession { pane, session } => {
@@ -135,7 +136,9 @@ impl ClientMsg {
             11 if p.len() > 8 => {
                 let v: serde_json::Value = serde_json::from_slice(&p[8..]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let text = |k: &str| v[k].as_str().map(String::from);
-                Ok(ClientMsg::ClaimInto { pane: u64::from_be_bytes(p[..8].try_into().unwrap()), branch: text("branch"), repo: text("repo"), workstream: text("workstream") })
+                // (An older client sends neither: both on.)
+                let on = |k: &str| v[k].as_bool().unwrap_or(true);
+                Ok(ClientMsg::ClaimInto { pane: u64::from_be_bytes(p[..8].try_into().unwrap()), branch: text("branch"), repo: text("repo"), workstream: text("workstream"), fetch: on("fetch"), install: on("install") })
             }
             10 if p.len() > 8 => Ok(ClientMsg::ReportSession {
                 pane: u64::from_be_bytes(p[..8].try_into().unwrap()),

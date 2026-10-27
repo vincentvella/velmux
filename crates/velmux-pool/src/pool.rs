@@ -43,6 +43,8 @@ pub struct SlotView {
     pub ahead: usize,
     /// `rebase` / `merge` stopped part-way (conflicts to resolve).
     pub conflict: Option<String>,
+    /// Its last dependency install failed, and why.
+    pub install_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +207,7 @@ impl Pool {
                     claimed_by: None,
                     released_at: None,
                     deps_hash: None,
+                    install_error: None,
                 });
                 adopted += 1;
             }
@@ -260,6 +263,7 @@ impl Pool {
                         claimed_at: None,
                         released_at: None,
                         deps_hash: None,
+                        install_error: None,
                     });
                 }
             }
@@ -270,7 +274,7 @@ impl Pool {
         for slot in slots.iter().filter(|s| s.status == Status::Free) {
             self.link_into(&slot.path)?;
             if self.cfg.install {
-                self.install(slot, report)?;
+                self.try_install(slot, report)?;
             }
         }
         if !created.is_empty() {
@@ -354,7 +358,7 @@ impl Pool {
         }
         self.link_into(dir)?;
         if opts.install && self.cfg.install {
-            self.install(slot, report)?;
+            self.try_install(slot, report)?;
         }
         for hook in &self.cfg.post_claim {
             report(&format!("hook: {hook}"));
@@ -638,7 +642,28 @@ impl Pool {
             claimed_by: s.claimed_by.clone(),
             claimed_at: s.claimed_at,
             dirty: live && git::is_dirty(&s.path).unwrap_or(false),
+            install_error: s.install_error.clone(),
         }
+    }
+
+    /// [`install`](Self::install), where failing is a warning: the slot is
+    /// still yours without its dependencies, says why (`install_error`), and
+    /// the next claim tries again.
+    fn try_install(&self, slot: &Slot, report: &dyn Fn(&str)) -> Result<()> {
+        let failed = self.install(slot, report).err().map(|e| format!("{e:#}"));
+        if let Some(e) = &failed {
+            report(&format!("{}: warning: installing dependencies failed (the next claim tries again):\n{e}", slot.id));
+        }
+        self.store.with(&self.base, |st| {
+            if let Some(s) = st.slot_mut(&slot.id) {
+                // A half-done install isn't one to skip next time.
+                if failed.is_some() {
+                    s.deps_hash = None;
+                }
+                s.install_error = failed.clone();
+            }
+            Ok(())
+        })
     }
 
     fn install(&self, slot: &Slot, report: &dyn Fn(&str)) -> Result<()> {

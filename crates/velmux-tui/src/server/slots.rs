@@ -138,6 +138,7 @@ impl App {
             self.say("scratch sessions aren't git repos, so they have no slots");
             return None;
         };
+        let (fetch, install) = self.next_claim.take().unwrap_or((true, true));
         let tx = self.events.clone();
         self.job_seq += 1;
         let job = format!("claim {}", self.job_seq);
@@ -154,7 +155,7 @@ impl App {
                 if pool.status()?.is_empty() {
                     pool.init(&|_| {})?;
                 }
-                let opts = ClaimOpts { branch, by: Some("velmux".into()), fetch: true, install: true };
+                let opts = ClaimOpts { branch, by: Some("velmux".into()), fetch, install };
                 pool.claim(&opts, &progress)
             })()
             .map_err(|e| format!("{e:#}"));

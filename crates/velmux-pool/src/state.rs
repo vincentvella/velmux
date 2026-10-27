@@ -28,6 +28,9 @@ pub struct Slot {
     /// Hash of the lockfile at the last successful install; lets claim skip installs.
     #[serde(default)]
     pub deps_hash: Option<String>,
+    /// Why its last install failed (the slot was claimed anyway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_error: Option<String>,
 }
 
 /// A branch handed back to the pool with work on it (stashed changes, or

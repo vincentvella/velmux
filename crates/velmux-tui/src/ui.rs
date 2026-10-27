@@ -539,6 +539,9 @@ pub fn detail_pieces(app: &App, loc: &Loc, side: u16, selected: bool) -> Vec<Pie
         if let Some(c) = &s.conflict {
             parts.push(vec![piece(format!("! {c}"), base.fg(t.blocked).add_modifier(Modifier::BOLD))]);
         }
+        if s.install_error.is_some() {
+            parts.push(vec![piece("✗ install".into(), base.fg(t.blocked))]);
+        }
         // Once its PR has merged, how it stands against the base no longer matters.
         let merged = s.branch.as_ref().and_then(|b| project.prs.get(b)).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged);
         let mut drift = Vec::new();

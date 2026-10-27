@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -189,11 +189,19 @@ fn run() -> Result<()> {
         }
         // Inside a velmux pane: the server claims (it knows the pane's place:
         // a workstream there, or a repo whose slot this pane moves into).
-        Some(Cmd::Claim { branch, workstream, json: false, .. }) if velmux_tui::current_pane().is_some() => {
-            let (path, ws) = velmux_tui::claim_into(velmux_tui::current_pane().unwrap(), branch, repo_arg, workstream)?;
+        Some(Cmd::Claim { branch, workstream, no_fetch, no_install, json: false, .. }) if velmux_tui::current_pane().is_some() => {
+            let (path, ws) = velmux_tui::claim_into(velmux_tui::current_pane().unwrap(), branch, repo_arg, workstream, !no_fetch, !no_install)?;
             match ws {
                 Some(ws) => eprintln!("claimed a slot into the workstream {ws}; it's linked in its folder"),
                 None => eprintln!("claimed a slot; work in it from here (this pane now lives there in velmux)"),
+            }
+            // The server did the installing: say if it failed, as a claim here would.
+            let failed = Pool::discover(Env::from_process()?, Path::new(&path)).ok().and_then(|pool| {
+                let id = pool.slot_of(Path::new(&path)).ok()??;
+                pool.view(&id).ok()?.install_error.map(|e| (id, e))
+            });
+            if let Some((id, e)) = failed {
+                eprintln!("{id}: warning: installing dependencies failed (the next claim tries again):\n{e}");
             }
             println!("{path}");
             return Ok(());
@@ -690,6 +698,9 @@ fn print_table(pool: &Pool, slots: &[SlotView]) {
         }
         if let Some(op) = &s.conflict {
             dirty.push_str(&format!(" !{op} in progress"));
+        }
+        if s.install_error.is_some() {
+            dirty.push_str(" ✗install failed");
         }
         let by = s.claimed_by.as_deref().map(|b| format!("  [{b}]")).unwrap_or_default();
         let port = pool.slot_port(&s.id).map(|p| format!("  :{p}")).unwrap_or_default();

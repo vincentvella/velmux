@@ -78,6 +78,7 @@ keep = ["node_modules", "ios/Pods"] # kept on release (sensible defaults)
 link = [".env.local"]               # linked from your checkout (default: gitignored .env*)
 post_claim = ["bun run codegen"]    # run after each claim
 install = true                      # install dependencies when the lockfile changes
+                                    # (read from your checkout's .velmux.toml, not a slot's)
                                     # (in your shell, so nvm & co. pick the slot's node)
 install_cmd = "bun install"         # instead of detecting the package manager
 sync = "merge"
