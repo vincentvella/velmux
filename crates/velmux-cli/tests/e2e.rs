@@ -99,6 +99,9 @@ fn panes_says_where_every_pane_is_and_closes_one() {
     ui.wait_for("claimed ");
     ui.prefix("|");
     ui.wait_for(PROMPT);
+    // (Until its shell is up, something else may be in front of it.)
+    let shell_up = || env.json(&repo, &["panes", "--json"]).as_array().unwrap().iter().any(|p| p["agent"].is_null() && p["running"] == "shell");
+    env.until("the new shell to be in front in its pane", shell_up);
     let panes = env.json(&repo, &["panes", "--json"]);
     let list = panes.as_array().unwrap();
     assert_eq!(list.len(), 2, "{panes}");
@@ -1211,6 +1214,8 @@ fn a_workstream_pushes_its_branches_for_prs() {
             ui.click_on("new workstream…", false);
             ui.wait_for("name for the workstream");
             ui.line("both");
+            // (The sidebar moves as it joins: aim the next click after that.)
+            ui.wait_for("@1 app");
         } else {
             ui.wait_for("new workstream…");
             ui.send(b"\r");
