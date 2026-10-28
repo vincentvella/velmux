@@ -30,7 +30,8 @@ pub enum Kind {
 #[derive(Default)]
 pub struct Term {
     pub title: String,
-    /// What the agent reports about itself (Codex's OSC 7501 `state=`).
+    /// What the program reports about itself (OSC 7501 `state=`: Codex, or
+    /// any program that isn't a known agent; see [`Pane::reported_state`]).
     pub status: Option<String>,
     /// Its last progress report (OSC 9;4), as `4;<state>;<percent>`.
     pub progress: String,
@@ -109,6 +110,8 @@ pub struct Pane {
     /// When `state` last changed (how long it's been blocked, working…).
     pub state_since: Instant,
     idle_streak: u8,
+    /// The process whose OSC 7501 report `state` comes from.
+    reporter: Option<detect::Pid>,
     /// Agent finished while the pane wasn't focused.
     pub unseen_done: bool,
     pub last_output: Instant,
@@ -313,6 +316,7 @@ impl Pane {
             state: None,
             state_since: Instant::now(),
             idle_streak: 0,
+            reporter: None,
             unseen_done: false,
             last_output: Instant::now(),
             session: None,
@@ -465,7 +469,7 @@ impl Pane {
                 let cb = self.parser.callbacks();
                 Some(detect::classify(name, self.title(), &lines, cb.status.as_deref(), &cb.progress, busy))
             }
-            None => None,
+            None => self.reported_state(),
         };
         // Debounce working → idle so a redraw gap doesn't flicker the sidebar.
         let state = if self.state == Some(AgentState::Working) && state == Some(AgentState::Idle) {
@@ -488,6 +492,32 @@ impl Pane {
         }
         self.state = state;
         changed
+    }
+
+    /// The state a program that isn't a known agent reports itself (OSC 7501
+    /// `state=working|blocked|idle|done|error`, as Codex does), while it's in
+    /// front: a report outlives its program, so it ends when the pane's own
+    /// shell, or another program, is in front instead. `error` needs you.
+    fn reported_state(&mut self) -> Option<AgentState> {
+        let shell = self.child.process_id().map(|p| p as detect::Pid);
+        let front = self.fg.pid;
+        let reported = self.parser.callbacks().status.is_some();
+        let stale = match self.reporter {
+            _ if !reported => true,
+            None => front.is_none() || front == shell,
+            Some(pid) => Some(pid) != front,
+        };
+        if stale {
+            self.parser.callbacks_mut().status = None;
+            self.reporter = None;
+            return None;
+        }
+        self.reporter = front;
+        Some(match self.parser.callbacks().status.as_deref() {
+            Some("working") => AgentState::Working,
+            Some("blocked" | "error") => AgentState::Blocked,
+            _ => AgentState::Idle,
+        })
     }
 
     /// What detection looks through: the pty's foreground process group on

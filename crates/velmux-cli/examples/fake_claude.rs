@@ -11,7 +11,8 @@
 //!   reporting on
 //! - `exit`
 //!
-//! Installed as `codex`, `droid`, `gh` or `browser`, it plays that instead.
+//! Installed as `codex`, `droid`, `gh` or `browser`, it plays that instead; as
+//! `reporter`, a program (not an agent) that reports its own state.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -30,6 +31,7 @@ fn main() {
         // An agent followed through its hooks.
         "droid" => return fake_droid(&args),
         "gh" => return fake_gh(&args),
+        "reporter" => return fake_reporter(),
         // A browser: what it's asked to open goes in `$FAKE_OPENED`.
         "browser" => {
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("FAKE_OPENED").expect("FAKE_OPENED")).unwrap();
@@ -140,6 +142,30 @@ fn main() {
             "" => {}
             other => println!("unknown {other}"),
         }
+    }
+}
+
+/// A program that says what it's doing over OSC 7501, as a CI watcher might:
+/// `state <working|done|error|…>` reports one, `title <text>` sets the window
+/// title, `exit` quits.
+fn fake_reporter() {
+    println!("FAKE-REPORTER");
+    let stdin = std::io::stdin();
+    loop {
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        let line = line.trim();
+        let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match cmd {
+            "state" => print!("\x1b]7501;state={rest}\x1b\\"),
+            "title" => print!("\x1b]2;{rest}\x07"),
+            "exit" => break,
+            _ => {}
+        }
+        println!("reported {line}");
+        let _ = std::io::stdout().flush();
     }
 }
 

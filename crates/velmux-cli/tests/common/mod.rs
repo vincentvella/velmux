@@ -135,6 +135,8 @@ impl Env {
         install(&root.join("install/droid"), "droid", &bin, "droid");
         // `gh`, answering `--version` and `pr` with `$FAKE_GH_PRS` (or `[]`).
         install(&root.join("install/gh"), "gh", &bin, "gh");
+        // A program that reports its own state (OSC 7501).
+        install(&root.join("install/reporter"), "reporter", &bin, "reporter");
         // A stand-in browser: what velmux opens is written to `opened.txt`.
         install(&root.join("install/browser"), "browser", &bin, "browser");
         std::fs::write(

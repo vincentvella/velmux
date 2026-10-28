@@ -262,7 +262,7 @@ pub fn agent_rows(app: &App) -> Vec<Row> {
             Row::Pane(i) => Some(i),
             _ => None,
         })
-        .filter(|&i| app.panes[i].agent.is_some() || app.panes[i].kind == Kind::Agent)
+        .filter(|&i| app.panes[i].agent.is_some() || app.panes[i].state.is_some() || app.panes[i].kind == Kind::Agent)
         .collect();
     let needs = |i: usize| {
         let p = &app.panes[i];
@@ -703,7 +703,8 @@ pub fn pane_label(app: &App, pane: &Pane) -> String {
 /// put `user@host:path`, which the label already covers.
 pub fn useful_title(pane: &Pane) -> Option<&str> {
     let t = pane.title().trim();
-    (pane.agent.is_some() && !t.is_empty()).then_some(t)
+    // (A program reporting its state is treated as an agent here too.)
+    ((pane.agent.is_some() || pane.state.is_some()) && !t.is_empty()).then_some(t)
 }
 
 /// Draw the whole UI; returns where the hardware cursor belongs, if visible.

@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- Any program can show in the sidebar and the agents view like an agent by
+  reporting its state (OSC 7501 `state=working|blocked|idle|done|error`, as
+  Codex and herdr do), with its window title beside it: a CI watcher, a long
+  build. `error` needs you. See [Agents](docs/agents.md#any-program-can-say-what-its-doing).
+
 ## [0.17.0] - 2026-10-27
 
 ### Added

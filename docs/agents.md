@@ -66,3 +66,22 @@ instructions to the file it reads for every project (`~/.codex/AGENTS.md`,
 `velmux:start` / `velmux:end` markers so your own text is left alone.
 `velmux skill uninstall` takes them out again. After an update, velmux brings
 them up to date itself (the skill too, if you haven't changed it).
+
+## Any program can say what it's doing
+
+A program that isn't an agent (a CI watcher, a long build, a test runner) can
+show in the sidebar and the agents view like one, by writing its state to the
+terminal as an OSC 7501 sequence, the one Codex and herdr use:
+
+```sh
+printf '\033]7501;state=working\033\\'
+```
+
+`state` is `working`, `blocked`, `idle`, `done` or `error`; `error` counts as
+needing you, like `blocked` (and notifies you the same way), and `done` after
+`working` marks it finished while you weren't looking. Its window title (OSC
+0 or 2) shows beside it, as an agent's does: `printf '\033]2;3/5 ✓ svc#42\007'`.
+velmux sets `VELMUX_PANE` in its panes: check for it to report only inside velmux.
+
+A report lasts while the program that made it is in front: when it exits and
+you're back at the shell, it's gone. `state=clear` ends it sooner.

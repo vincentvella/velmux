@@ -120,6 +120,34 @@ fn panes_says_where_every_pane_is_and_closes_one() {
 }
 
 #[test]
+fn a_program_can_report_its_own_state() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    let state = || env.json(&repo, &["panes", "--json"])[0]["state"].as_str().map(String::from);
+    ui.line("reporter");
+    ui.wait_for("FAKE-REPORTER");
+    assert_eq!(state(), None, "nothing reported yet: a plain program");
+    ui.line("title 3/5 ✓ svc#42");
+    ui.line("state working");
+    env.until("it to be working", || state().as_deref() == Some("working"));
+    // Its title shows, as an agent's does.
+    ui.wait_for("reporter — 3/5 ✓ svc#42");
+    // A failure needs you.
+    ui.line("state error");
+    env.until("it to need you", || state().as_deref() == Some("blocked"));
+    ui.line("state done");
+    env.until("it to be done", || state().as_deref() == Some("idle"));
+    // Back at the shell, its report goes with it.
+    ui.line("state working");
+    env.until("it to be working again", || state().as_deref() == Some("working"));
+    ui.line("exit");
+    env.until("the report to end with it", || state().is_none());
+}
+
+#[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
     let repo = env.repo("app");
