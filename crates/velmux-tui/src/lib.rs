@@ -121,6 +121,15 @@ pub fn release_for_pane(pane: u64) -> anyhow::Result<String> {
     }
 }
 
+/// `velmux move <repo>` inside a pane: put it in that repo's base checkout.
+pub fn move_pane_to(pane: u64, repo: String) -> anyhow::Result<String> {
+    let reply = client::request(proto::ClientMsg::MoveTo { pane, repo })?;
+    match reply.strip_prefix("error: ") {
+        Some(e) => anyhow::bail!("{e}"),
+        None => Ok(reply),
+    }
+}
+
 /// `velmux restart`: re-exec the running server (picking up a rebuilt binary)
 /// without stopping any pane.
 pub fn restart_server() -> anyhow::Result<()> {

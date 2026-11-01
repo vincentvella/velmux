@@ -115,6 +115,10 @@ pub struct SavedPane {
     /// Its saved scrollback: `scrollback/<key>.ansi` in the state dir.
     #[serde(default)]
     pub history: Option<String>,
+    /// The base checkout `velmux release` returns it to, when a claim in
+    /// another repo moved it (see `Pane::home`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
 }
 
 /// State passed to the next server across a live restart.
@@ -215,6 +219,13 @@ pub fn new_session_id() -> String {
 mod tests {
     use super::*;
 
+    // A pane saved before `home` existed restores, with no home: a release
+    // then goes to the slot repo's base, which is what it did before.
+    #[test]
+    fn a_pane_saved_without_a_home_restores() {
+        let pane: SavedPane = serde_json::from_str(r#"{"id":16,"kind":"Agent","claude_session":null,"started_at":0}"#).unwrap();
+        assert!(pane.home.is_none());
+    }
 
     #[test]
     #[cfg(windows)]

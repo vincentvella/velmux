@@ -356,7 +356,7 @@ impl App {
     /// An open repo by name, or the repo a path is in (its checkout, one of
     /// its slots, a workstream's link to one); a repo that isn't open yet is
     /// added as a space.
-    fn repo_named(&mut self, r: &str) -> Option<usize> {
+    pub(super) fn repo_named(&mut self, r: &str) -> Option<usize> {
         let open = |p: &Project| !p.removed && !p.is_unclassified();
         if let Some(i) = self.projects.iter().position(|p| open(p) && p.name() == r) {
             return Some(i);

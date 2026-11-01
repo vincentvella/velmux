@@ -124,6 +124,9 @@ pub struct Pane {
     /// Launch overrides, persisted so restore reproduces the pane.
     pub cwd_override: Option<std::path::PathBuf>,
     pub command_override: Option<String>,
+    /// Where a claim in another repo took this pane from (that repo's base):
+    /// `velmux release` sends it back here rather than to the slot repo's base.
+    pub home: Option<Loc>,
     /// Output held back while copy mode reads the history (`None` = live).
     frozen: Option<Vec<u8>>,
     /// Name of this pane's saved history file (see [`history_formatted`](Pane::history_formatted)).
@@ -324,6 +327,7 @@ impl Pane {
             started_at: SystemTime::now(),
             cwd_override: None,
             command_override: None,
+            home: None,
             frozen: None,
             history_key: format!("{}-{id}", SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis())),
             output_seq: 0,

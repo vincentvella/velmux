@@ -119,6 +119,8 @@ enum Cmd {
     },
     /// Close a pane, as `<prefix> x` does (its number from `velmux panes`).
     ClosePane { pane: u64 },
+    /// Move this pane to a repo's base checkout (its name, or a path in it), without claiming or releasing.
+    Move { repo: String },
     /// Print the focused pane as the server holds it (sizes and rows).
     #[command(hide = true)]
     Debug,
@@ -188,6 +190,11 @@ fn run() -> Result<()> {
         Some(Cmd::Panes { json }) => return panes(json),
         Some(Cmd::ClosePane { pane }) => {
             println!("{}", velmux_tui::close_pane(pane)?);
+            return Ok(());
+        }
+        Some(Cmd::Move { repo }) => {
+            let Some(pane) = velmux_tui::current_pane() else { anyhow::bail!("velmux move runs inside a velmux pane") };
+            println!("{}", velmux_tui::move_pane_to(pane, repo)?);
             return Ok(());
         }
         Some(Cmd::Debug) => return velmux_tui::debug_server(),
@@ -340,7 +347,7 @@ fn run() -> Result<()> {
             }
             print_table(&pool, &pool.status()?);
         }
-        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Panes { .. } | Cmd::ClosePane { .. } | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),
+        Cmd::Server | Cmd::ImportHerdr { .. } | Cmd::Keys { .. } | Cmd::Restart | Cmd::Stop | Cmd::Panes { .. } | Cmd::ClosePane { .. } | Cmd::Move { .. } | Cmd::Debug | Cmd::Skill { .. } | Cmd::Doctor | Cmd::Guard | Cmd::AgentHook { .. } | Cmd::Update { .. } | Cmd::Workstream { .. } => unreachable!(),
     }
     Ok(())
 }

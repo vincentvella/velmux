@@ -521,7 +521,8 @@ pub fn serve() -> Result<()> {
                     | ClientMsg::ReportSession { .. }
                     | ClientMsg::ClaimInto { .. }
                     | ClientMsg::Panes
-                    | ClientMsg::ClosePane { .. } => Event::Control(stream, first),
+                    | ClientMsg::ClosePane { .. }
+                    | ClientMsg::MoveTo { .. } => Event::Control(stream, first),
                     _ => Event::Client(stream, first),
                 };
                 let _ = tx.send(ev);
@@ -973,6 +974,7 @@ impl App {
                         return;
                     }
                     ClientMsg::ReleaseFor { pane } => self.release_for(pane),
+                    ClientMsg::MoveTo { pane, repo } => self.move_for(pane, &repo),
                     ClientMsg::ReportSession { pane, session } => match self.panes.iter_mut().find(|p| p.id == pane) {
                         Some(p) => {
                             p.session = Some(session);
@@ -1076,6 +1078,14 @@ impl App {
                     }
                     (Ok(slot), Some((pane, mut stream))) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
+                        // Into another repo: remember where it came from, so a
+                        // release sends it back there and not to this repo's base.
+                        // The first home wins across a chain of claims.
+                        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
+                            if p.loc.project != project && p.home.is_none() {
+                                p.home = Some(Loc { project: p.loc.project, slot: None });
+                            }
+                        }
                         self.move_pane(pane, loc);
                         let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
                         self.say(format!("claimed {}{branch}", slot.id));
@@ -1272,7 +1282,7 @@ impl App {
             ClientMsg::Resize { cols, rows } => self.resize(cols, rows),
             ClientMsg::Input(bytes) => self.input(&bytes),
             // Only valid as the first message of a control connection.
-            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } | ClientMsg::Panes | ClientMsg::ClosePane { .. } => {}
+            ClientMsg::ImportHerdr { .. } | ClientMsg::Restart | ClientMsg::Stop | ClientMsg::Debug | ClientMsg::ClaimFor { .. } | ClientMsg::ReleaseFor { .. } | ClientMsg::ReportSession { .. } | ClientMsg::ClaimInto { .. } | ClientMsg::Panes | ClientMsg::ClosePane { .. } | ClientMsg::MoveTo { .. } => {}
         }
     }
 
@@ -1370,6 +1380,7 @@ impl App {
                                 cwd: p.cwd_override.clone(),
                                 command: p.command_override.clone(),
                                 history: (p.dumped_seq > 0).then(|| p.history_key.clone()),
+                                home: p.home.as_ref().and_then(|h| self.projects[h.project].base().map(Path::to_path_buf)),
                             })
                             .collect(),
                     })
@@ -1550,6 +1561,10 @@ impl App {
                             pane.started_at = UNIX_EPOCH + Duration::from_secs(p.started_at);
                             pane.cwd_override = p.cwd;
                             pane.command_override = p.command;
+                            pane.home = p
+                                .home
+                                .and_then(|base| self.projects.iter().position(|q| q.base() == Some(base.as_path())))
+                                .map(|project| Loc { project, slot: None });
                             self.next_pane = self.next_pane.max(p.id + 1);
                             self.panes.push(pane);
                         }

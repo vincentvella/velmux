@@ -34,6 +34,8 @@ pub enum ClientMsg {
     Panes,
     /// One-shot: close a pane (`velmux close-pane`).
     ClosePane { pane: u64 },
+    /// One-shot: move a pane to a repo's base checkout (`velmux move`).
+    MoveTo { pane: u64, repo: String },
 }
 
 pub enum ServerMsg {
@@ -107,6 +109,11 @@ impl ClientMsg {
             }
             ClientMsg::Panes => write_frame(w, 12, &[]),
             ClientMsg::ClosePane { pane } => write_frame(w, 13, &pane.to_be_bytes()),
+            ClientMsg::MoveTo { pane, repo } => {
+                let mut p = pane.to_be_bytes().to_vec();
+                p.extend_from_slice(repo.as_bytes());
+                write_frame(w, 14, &p)
+            }
             ClientMsg::ImportHerdr { path, with_latest_claude } => {
                 let mut p = vec![*with_latest_claude as u8];
                 p.extend_from_slice(path.as_os_str().as_encoded_bytes());
@@ -141,6 +148,10 @@ impl ClientMsg {
             7 if p.len() >= 8 => Ok(ClientMsg::ReleaseFor { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
             12 => Ok(ClientMsg::Panes),
             13 if p.len() >= 8 => Ok(ClientMsg::ClosePane { pane: u64::from_be_bytes(p[..8].try_into().unwrap()) }),
+            14 if p.len() > 8 => Ok(ClientMsg::MoveTo {
+                pane: u64::from_be_bytes(p[..8].try_into().unwrap()),
+                repo: String::from_utf8_lossy(&p[8..]).into_owned(),
+            }),
             11 if p.len() > 8 => {
                 let v: serde_json::Value = serde_json::from_slice(&p[8..]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let text = |k: &str| v[k].as_str().map(String::from);
@@ -177,6 +188,24 @@ impl ServerMsg {
             2 => Ok(ServerMsg::Bye(String::from_utf8_lossy(&p).into_owned())),
             3 => Ok(ServerMsg::Reply(String::from_utf8_lossy(&p).into_owned())),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown server frame")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn move_to_round_trips() {
+        let mut buf = Vec::new();
+        ClientMsg::MoveTo { pane: 16, repo: "~/Workspace/kino".into() }.write(&mut buf).unwrap();
+        match ClientMsg::read(&mut buf.as_slice()).unwrap() {
+            ClientMsg::MoveTo { pane, repo } => {
+                assert_eq!(pane, 16);
+                assert_eq!(repo, "~/Workspace/kino");
+            }
+            _ => panic!("read back as another message"),
         }
     }
 }

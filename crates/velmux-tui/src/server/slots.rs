@@ -4,17 +4,43 @@
 use super::*;
 
 impl App {
-    /// `velmux release` inside a pane: move it back to its repo's base, then
-    /// release the slot it was in (other panes there close, work is stashed).
+    /// `velmux release` inside a pane: move it back where it came from (its
+    /// home, when a claim brought it from another repo; else this repo's
+    /// base), then release the slot it was in (other panes there close, work
+    /// is stashed).
     pub(super) fn release_for(&mut self, pane: u64) -> String {
         let Some(loc) = self.pane(pane).map(|p| p.loc.clone()) else { return "error: that pane isn't in velmux".into() };
         let Some(slot) = loc.slot.clone().filter(|_| !self.projects[loc.project].is_unclassified()) else {
             return "error: this pane isn't in a slot (nothing to release)".into();
         };
         let session = self.pane(pane).and_then(|p| p.session.clone());
-        self.move_pane(pane, Loc { project: loc.project, slot: None });
+        let home = self.pane(pane).and_then(|p| p.home.clone()).filter(|h| !self.projects[h.project].removed);
+        let to = home.unwrap_or(Loc { project: loc.project, slot: None });
+        let name = self.projects[to.project].name().to_string();
+        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
+            p.home = None;
+        }
+        self.move_pane(pane, to);
         self.release_location(loc, session);
-        format!("releasing {slot}; this conversation is back in the base checkout")
+        format!("releasing {slot}; this conversation is back in {name}'s base checkout")
+    }
+
+    /// `velmux move <repo>` inside a pane: put it in that repo's base checkout
+    /// (by name or path), without claiming or releasing anything. For a pane
+    /// velmux grouped somewhere it doesn't belong; the process is untouched.
+    pub(super) fn move_for(&mut self, pane: u64, repo: &str) -> String {
+        if self.pane(pane).is_none() {
+            return "error: that pane isn't in velmux".into();
+        }
+        let Some(project) = self.repo_named(repo) else {
+            return format!("error: no repo {repo:?} in velmux; give its name or a path inside it");
+        };
+        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
+            p.home = None;
+        }
+        self.move_pane(pane, Loc { project, slot: None });
+        self.save();
+        format!("moved to {}'s base checkout", self.projects[project].name())
     }
 
     /// Move a running pane to another location (its process is untouched).
