@@ -5,6 +5,24 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-01
+
+### Added
+
+- Move a conversation anywhere while it runs, without releasing or claiming:
+  "move to…" in the pane menu or `<prefix> M` opens the location picker, and
+  `velmux move <where>` takes a repo, `repo/slot-2`, a path, or a branch a slot
+  has. See [CLI](docs/cli.md).
+
+### Fixed
+
+- `velmux release` sends a pane back where it came from. A pane that claimed a
+  slot in another repo (`--repo`) used to land in that repo's base afterwards,
+  listed under a repo it had nothing to do with.
+- `velmux claim <branch>` for a branch a slot already has moves the pane into
+  that slot. It used to take a fresh slot and fail there, because git refuses a
+  second checkout of a branch.
+
 ## [0.18.0] - 2026-10-28
 
 ### Added
@@ -351,7 +369,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/vincentvella/velmux/releases/tag/v0.19.0
 [0.18.0]: https://github.com/vincentvella/velmux/releases/tag/v0.18.0
 [0.17.0]: https://github.com/vincentvella/velmux/releases/tag/v0.17.0
 [0.16.1]: https://github.com/vincentvella/velmux/releases/tag/v0.16.1
