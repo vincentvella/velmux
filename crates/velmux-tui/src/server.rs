@@ -1078,15 +1078,7 @@ impl App {
                     }
                     (Ok(slot), Some((pane, mut stream))) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
-                        // Into another repo: remember where it came from, so a
-                        // release sends it back there and not to this repo's base.
-                        // The first home wins across a chain of claims.
-                        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
-                            if p.loc.project != project && p.home.is_none() {
-                                p.home = Some(Loc { project: p.loc.project, slot: None });
-                            }
-                        }
-                        self.move_pane(pane, loc);
+                        self.relocate(pane, loc);
                         let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
                         self.say(format!("claimed {}{branch}", slot.id));
                         let _ = ServerMsg::Reply(slot.path.display().to_string()).write(&mut stream);
@@ -2427,8 +2419,14 @@ impl App {
             Some(0x1b | 0x03) => self.mode = Mode::Normal,
             Some(b'\r' | b'\n') => {
                 let chosen = picker::filter(&items, &p.query).get(p.selected).map(|i| i.loc.clone());
+                let moving = p.moving;
                 self.mode = Mode::Normal;
                 if let Some(loc) = chosen {
+                    // Moving one: it goes there, and so do you, to keep it in view.
+                    if let Some(pane) = moving {
+                        self.relocate(pane, loc.clone());
+                        self.focus = Some(pane);
+                    }
                     self.show_location(loc);
                 }
             }
@@ -2767,7 +2765,16 @@ impl App {
                 // Start on the current location so Enter alone is a no-op.
                 let items = self.picker_items();
                 let at = self.current_loc().and_then(|c| items.iter().position(|i| i.loc == c)).unwrap_or(0);
-                self.mode = Mode::Picker(Picker { query: String::new(), selected: at });
+                self.mode = Mode::Picker(Picker { query: String::new(), selected: at, moving: None });
+            }
+            Action::MovePane => {
+                let Some(pane) = self.focus else { return self.say("no pane to move") };
+                if self.copy.is_some() {
+                    self.exit_copy();
+                }
+                let items = self.picker_items();
+                let at = self.current_loc().and_then(|c| items.iter().position(|i| i.loc == c)).unwrap_or(0);
+                self.mode = Mode::Picker(Picker { query: String::new(), selected: at, moving: Some(pane) });
             }
             Action::RenameTab => match self.current_loc().and_then(|l| self.views.get(&l)) {
                 Some(view) => {

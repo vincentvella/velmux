@@ -131,6 +131,8 @@ pub enum Action {
     SidebarNarrower,
     /// Fuzzy-pick any location to go to.
     LocationPicker,
+    /// Fuzzy-pick a location and move the focused pane there, still running.
+    MovePane,
     RenameTab,
     /// Name the current location (base, slot or folder).
     RenameLocation,
@@ -195,6 +197,7 @@ const NAMES: &[(&str, Action)] = &[
     ("sidebar_wider", Action::SidebarWider),
     ("sidebar_narrower", Action::SidebarNarrower),
     ("location_picker", Action::LocationPicker),
+    ("move_pane", Action::MovePane),
     ("rename_tab", Action::RenameTab),
     ("rename_location", Action::RenameLocation),
     ("settings", Action::Settings),
@@ -290,6 +293,7 @@ fn defaults() -> Vec<(Action, &'static [&'static str])> {
         (SidebarWider, &["prefix+>"]),
         (SidebarNarrower, &["prefix+<"]),
         (LocationPicker, &["prefix+w", "super+p"]),
+        (MovePane, &["prefix+M"]),
         (NewSpace, &["prefix+N"]),
         (NewSession, &["prefix+S"]),
         (FindSession, &["prefix+/", "super+shift+f"]),
@@ -609,6 +613,7 @@ impl Keymap {
                     (one(NewSpace), "new space…"),
                     (one(NewSession), "new session"),
                     (one(LocationPicker), "go to…"),
+                    (one(MovePane), "move pane to…"),
                     (one(FindSession), "find conversation…"),
                     (one(RenameLocation), "rename place"),
                     (one(RemovePlace), "remove place"),

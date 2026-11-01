@@ -15,6 +15,9 @@ pub struct Picker {
     pub query: String,
     /// Index into the filtered list.
     pub selected: usize,
+    /// The pane being moved, when this picks where it goes rather than where
+    /// to look.
+    pub moving: Option<u64>,
 }
 
 /// Fuzzy subsequence score (higher is better), `None` if `query` doesn't match.

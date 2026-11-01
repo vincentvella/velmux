@@ -881,6 +881,7 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<Position> {
     let bar = Style::new().bg(t.bar_bg).fg(t.bar_fg);
     let (text, style) = match &app.mode {
         Mode::Prefix => (format!("{} …", app.prefix.label), bar.fg(t.accent).add_modifier(Modifier::BOLD)),
+        Mode::Picker(p) if p.moving.is_some() => ("enter move it here · esc cancel".into(), bar.fg(t.dim)),
         Mode::Picker(_) => ("enter go · esc cancel".into(), bar.fg(t.dim)),
         Mode::Sessions { .. } => ("enter open · esc cancel".into(), bar.fg(t.dim)),
         Mode::NewSpace { .. } => ("enter add · esc cancel".into(), bar.fg(t.dim)),
@@ -1614,7 +1615,7 @@ fn draw_picker(app: &App, p: &crate::picker::Picker, body: Rect, buf: &mut Buffe
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(app.theme.picker_border))
-        .title(" go to ")
+        .title(if p.moving.is_some() { " move pane to " } else { " go to " })
         .render(area, buf);
     let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
     let prompt = format!("› {}", p.query);

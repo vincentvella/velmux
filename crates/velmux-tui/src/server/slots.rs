@@ -25,22 +25,67 @@ impl App {
         format!("releasing {slot}; this conversation is back in {name}'s base checkout")
     }
 
-    /// `velmux move <repo>` inside a pane: put it in that repo's base checkout
-    /// (by name or path), without claiming or releasing anything. For a pane
-    /// velmux grouped somewhere it doesn't belong; the process is untouched.
-    pub(super) fn move_for(&mut self, pane: u64, repo: &str) -> String {
-        if self.pane(pane).is_none() {
+    /// `velmux move <where>` inside a pane: put it there, claiming and releasing
+    /// nothing. For a pane in the wrong place, or a conversation that should
+    /// now live in a slot; the process is untouched.
+    pub(super) fn move_for(&mut self, pane: u64, spec: &str) -> String {
+        let Some(from) = self.pane(pane).map(|p| p.loc.project) else {
             return "error: that pane isn't in velmux".into();
-        }
-        let Some(project) = self.repo_named(repo) else {
-            return format!("error: no repo {repo:?} in velmux; give its name or a path inside it");
         };
-        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
-            p.home = None;
+        let Some(to) = self.resolve_place(spec, from) else {
+            return format!("error: no place {spec:?}: give a repo, a slot (repo/slot-2, or a path in it) or a branch a slot has");
+        };
+        let name = self.loc_name(&to);
+        self.relocate(pane, to);
+        format!("moved to {name}")
+    }
+
+    /// Where `velmux move` means, in order: a path (the slot it is in, else its
+    /// repo's base), `repo/slot-id` or `repo/branch`, a branch some slot has
+    /// (in `near`'s repo first), then a repo by name.
+    pub(super) fn resolve_place(&mut self, spec: &str, near: usize) -> Option<Loc> {
+        let open = |p: &Project| !p.removed && !p.is_unclassified();
+        let path = std::path::Path::new(spec);
+        if path.is_absolute() && path.exists() {
+            for (i, project) in self.projects.iter().enumerate().filter(|(_, p)| open(p)) {
+                if let Some(slot) = project.slots.iter().find(|s| path.starts_with(&s.path)) {
+                    return Some(Loc { project: i, slot: Some(slot.id.clone()) });
+                }
+            }
+            return self.repo_named(spec).map(|project| Loc { project, slot: None });
         }
-        self.move_pane(pane, Loc { project, slot: None });
+        let in_slot = |project: usize, want: &str, projects: &[Project]| {
+            projects[project].slots.iter().find(|s| s.id == want || s.branch.as_deref() == Some(want)).map(|s| Loc { project, slot: Some(s.id.clone()) })
+        };
+        if let Some((repo, rest)) = spec.split_once('/') {
+            if let Some(project) = self.projects.iter().position(|p| open(p) && p.name() == repo) {
+                if let Some(loc) = in_slot(project, rest, &self.projects) {
+                    return Some(loc);
+                }
+            }
+        }
+        let order = std::iter::once(near).chain((0..self.projects.len()).filter(|&i| i != near));
+        for project in order.filter(|&i| open(&self.projects[i])).collect::<Vec<_>>() {
+            if let Some(loc) = self.projects[project].slots.iter().find(|s| s.branch.as_deref() == Some(spec)).map(|s| Loc { project, slot: Some(s.id.clone()) }) {
+                return Some(loc);
+            }
+        }
+        self.repo_named(spec).map(|project| Loc { project, slot: None })
+    }
+
+    /// Move a pane, keeping its home right: into a slot of another repo, it
+    /// remembers the base it came from (the first, across several moves), so
+    /// a release sends it back; at any base, it is home, so it forgets.
+    pub(super) fn relocate(&mut self, pane: u64, to: Loc) {
+        if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
+            if to.slot.is_none() {
+                p.home = None;
+            } else if p.loc.project != to.project && p.home.is_none() {
+                p.home = Some(Loc { project: p.loc.project, slot: None });
+            }
+        }
+        self.move_pane(pane, to);
         self.save();
-        format!("moved to {}'s base checkout", self.projects[project].name())
     }
 
     /// Move a running pane to another location (its process is untouched).
@@ -164,6 +209,20 @@ impl App {
                 let step = self.jobs.iter().find(|(k, _)| k == job).map(|(_, s)| s.clone()).unwrap_or_default();
                 let _ = ServerMsg::Reply(format!("error: this pane's last claim is still running ({step}); it moves here when it's done")).write(stream);
                 self.next_claim = None;
+                return None;
+            }
+        }
+        // A branch a slot already has: the pane goes to that slot. Asking for
+        // it again is asking to work there, not for a second checkout git
+        // would refuse anyway.
+        if let (Some(b), Some((pane, _))) = (&branch, &for_pane) {
+            let held = self.projects[project].slots.iter().find(|s| s.branch.as_ref() == Some(b)).map(|s| (s.id.clone(), s.path.clone()));
+            if let Some((id, path)) = held {
+                let pane = *pane;
+                let (_, mut stream) = for_pane.take().unwrap();
+                self.relocate(pane, Loc { project, slot: Some(id.clone()) });
+                self.say(format!("moved into {id}, which already has {b}"));
+                let _ = ServerMsg::Reply(path.display().to_string()).write(&mut stream);
                 return None;
             }
         }

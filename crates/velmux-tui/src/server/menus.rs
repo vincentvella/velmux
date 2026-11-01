@@ -162,6 +162,8 @@ impl App {
         } else if split {
             items.push(("zoom", Action::Zoom));
         }
+        // Its conversation somewhere else (a slot, another repo's base), still running.
+        items.push(("move to…", Action::MovePane));
         items.extend([("copy mode", Action::CopyMode), ("close pane", Action::ClosePane)]);
         // And the place it's in (its slot's, repo's or workstream's menu).
         items.push((self.intern(&format!("{}…", self.loc_name(&loc))), Action::PlaceMenu));

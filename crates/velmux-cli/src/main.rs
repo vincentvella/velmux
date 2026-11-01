@@ -119,9 +119,9 @@ enum Cmd {
     },
     /// Close a pane, as `<prefix> x` does (its number from `velmux panes`).
     ClosePane { pane: u64 },
-    /// Move this pane to a repo's base checkout (its name, or a path in it), without claiming or releasing.
+    /// Move this pane somewhere else, still running, claiming and releasing nothing.
     Move {
-        /// The repo: its name in velmux, or a path inside it.
+        /// A repo (its base), a slot (repo/slot-2, or a path in it), or a branch a slot has.
         #[arg(value_name = "REPO")]
         to: String,
     },
@@ -198,6 +198,11 @@ fn run() -> Result<()> {
         }
         Some(Cmd::Move { to }) => {
             let Some(pane) = velmux_tui::current_pane() else { anyhow::bail!("velmux move runs inside a velmux pane") };
+            // A path is the server's to resolve from anywhere, so it goes absolute.
+            let to = match std::fs::canonicalize(&to) {
+                Ok(path) => path.display().to_string(),
+                Err(_) => to,
+            };
             println!("{}", velmux_tui::move_pane_to(pane, to)?);
             return Ok(());
         }
