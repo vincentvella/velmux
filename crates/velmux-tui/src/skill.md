@@ -38,7 +38,8 @@ file edit and command). It can take minutes when the slot installs
 dependencies: wait for it (run it in the foreground, with a long timeout).
 A second claim from your pane while one is running is refused. Inside velmux, your pane moves under that slot in the
 sidebar. If the branch already exists (or was parked), you get it back with any
-parked changes restored.
+parked changes restored. If a slot already has that branch checked out, your
+pane moves into that slot instead of taking another.
 
 ## In a slot
 
@@ -78,7 +79,8 @@ velmux release
 
 This hands the slot back. Uncommitted changes are stashed and the branch is
 **parked** (it shows in the sidebar to resume later), the slot is reset with its
-dependencies kept, and your conversation moves back to the base. Release once
+dependencies kept, and your conversation moves back where it came from (your
+own repo's base, even when the slot was in another repo). Release once
 the work is committed (or merged), not mid-task.
 
 ## Other commands
@@ -87,6 +89,9 @@ the work is committed (or merged), not mid-task.
   base, port) and parked branches.
 - `velmux parked`: parked branches; `velmux claim <branch>` resumes one.
 - `velmux discard <branch>`: drop a parked branch's stashed changes (ask first).
+- `velmux move <where>`: move your pane, still running, to a repo's base, a slot
+  (`repo/slot-2`, a path in it, or a branch a slot has). Claims and releases
+  nothing; use it when the user says the conversation belongs somewhere else.
 
 ## Don't
 

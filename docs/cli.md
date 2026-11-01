@@ -29,6 +29,7 @@ velmux discard <branch>          # drop a parked branch's stashed changes (the b
 # Panes
 velmux panes [--json]            # every pane: its place (repo, slot, branch), what's running
 velmux close-pane <n>            # close pane n, as <prefix> x does
+velmux move <where>              # move this pane, still running: a repo, repo/slot-2, a path, or a branch a slot has
 
 # The server
 velmux restart                   # restart in place: panes keep running
@@ -46,7 +47,11 @@ velmux import-herdr              # bring over a herdr session
 [slot] defaults to the slot you're in.
 
 Inside a velmux pane, `velmux claim` and `velmux release` go through the server,
-so the pane running them (usually a Claude) moves into the slot and back;
-`velmux panes` shows where each one is. One claim runs at a time per pane.
+so the pane running them (usually a Claude) moves into the slot and back:
+back to where it came from, which is its own repo's base even when it claimed a
+slot in another repo. Claiming a branch a slot already has moves the pane into
+that slot. `velmux move` (or the pane menu's "move to…", `<prefix> M`) moves a
+pane without claiming or releasing anything. `velmux panes` shows where each
+one is. One claim runs at a time per pane.
 
 `claim` takes `--no-fetch`, `--no-install`, `--by <name>` and `--json`.
