@@ -120,7 +120,11 @@ enum Cmd {
     /// Close a pane, as `<prefix> x` does (its number from `velmux panes`).
     ClosePane { pane: u64 },
     /// Move this pane to a repo's base checkout (its name, or a path in it), without claiming or releasing.
-    Move { repo: String },
+    Move {
+        /// The repo: its name in velmux, or a path inside it.
+        #[arg(value_name = "REPO")]
+        to: String,
+    },
     /// Print the focused pane as the server holds it (sizes and rows).
     #[command(hide = true)]
     Debug,
@@ -192,9 +196,9 @@ fn run() -> Result<()> {
             println!("{}", velmux_tui::close_pane(pane)?);
             return Ok(());
         }
-        Some(Cmd::Move { repo }) => {
+        Some(Cmd::Move { to }) => {
             let Some(pane) = velmux_tui::current_pane() else { anyhow::bail!("velmux move runs inside a velmux pane") };
-            println!("{}", velmux_tui::move_pane_to(pane, repo)?);
+            println!("{}", velmux_tui::move_pane_to(pane, to)?);
             return Ok(());
         }
         Some(Cmd::Debug) => return velmux_tui::debug_server(),
