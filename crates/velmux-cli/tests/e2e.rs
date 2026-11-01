@@ -783,7 +783,7 @@ fn slots_drag_into_a_workstream_and_leave_it() {
 }
 
 #[test]
-fn a_claude_claims_in_another_repo_and_comes_back_there() {
+fn a_claude_claims_in_another_repo_and_comes_back_home() {
     let env = Env::new();
     let app = env.repo("app");
     let api = env.repo("api");
@@ -801,10 +801,11 @@ fn a_claude_claims_in_another_repo_and_comes_back_there() {
     assert_eq!((slot["status"].as_str(), slot["branch"].as_str()), (Some("inuse"), Some("feat/x")));
     assert_eq!(env.slot(&app, "slot-1")["status"], "free", "nothing claimed in app");
     assert!(ui.screen().contains(&format!("FAKE-CLAUDE id={id}")), "the same conversation, moved");
-    // Released, it comes back to api's checkout (the repo the slot was in).
+    // Released, it comes home to app's checkout, where it started: not to api's,
+    // which it only borrowed a slot from (until 0.19.0 it landed there).
     ui.line("release");
     env.until("api's slot to be free", || env.slot(&api, "slot-1")["status"] == "free");
-    ui.wait_for("api › base");
+    ui.wait_for("app › base");
     assert!(ui.screen().contains(&format!("FAKE-CLAUDE id={id}")), "still the same conversation");
 }
 
