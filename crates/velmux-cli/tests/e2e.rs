@@ -1123,6 +1123,9 @@ fn a_released_workstream_comes_back_whole() {
             ui.click_on("new workstream…", false);
             ui.wait_for("name for the workstream");
             ui.line("pair");
+            // The workstream's rows go in above feat/b: wait for them, or the
+            // next click aims at where feat/b was and lands on `pair`.
+            ui.wait_for("◇ pair");
         } else {
             ui.wait_for("new workstream…");
             ui.send(b"\r");
