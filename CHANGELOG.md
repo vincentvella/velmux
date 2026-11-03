@@ -5,6 +5,15 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-02
+
+### Fixed
+
+- A claim in a repo that was renamed while velmux had it open, with a symlink
+  left at the old path, goes to the repo where it is now. It used to build a
+  second, empty pool of fresh worktrees at the old path, reached through the
+  symlink. A repo that's gone altogether is refused instead of rebuilt.
+
 ## [0.19.0] - 2026-11-01
 
 ### Added
@@ -369,7 +378,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/vincentvella/velmux/releases/tag/v0.19.1
 [0.19.0]: https://github.com/vincentvella/velmux/releases/tag/v0.19.0
 [0.18.0]: https://github.com/vincentvella/velmux/releases/tag/v0.18.0
 [0.17.0]: https://github.com/vincentvella/velmux/releases/tag/v0.17.0
