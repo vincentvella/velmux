@@ -5,6 +5,14 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-11-02
+
+### Fixed
+
+- No change to velmux itself. An end-to-end test that sometimes failed on
+  Linux CI (it clicked a sidebar row before a redraw moved it) now waits for
+  the redraw, so releases are not held up by it.
+
 ## [0.19.1] - 2026-11-02
 
 ### Fixed
@@ -378,7 +386,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.19.2...HEAD
+[0.19.2]: https://github.com/vincentvella/velmux/releases/tag/v0.19.2
 [0.19.1]: https://github.com/vincentvella/velmux/releases/tag/v0.19.1
 [0.19.0]: https://github.com/vincentvella/velmux/releases/tag/v0.19.0
 [0.18.0]: https://github.com/vincentvella/velmux/releases/tag/v0.18.0
