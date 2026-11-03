@@ -30,6 +30,30 @@ fn base_claude_claims_a_slot_and_releases_it() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_repo_renamed_behind_a_symlink_is_claimed_where_it_is_now() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    ui.claude_id();
+    // Renamed while open, with a symlink left at the old path: the project still
+    // has the old base, and used to build a second pool (pools/app) through it.
+    let ws = repo.parent().unwrap();
+    env.run_in(ws, "mv app renamed && ln -s renamed app");
+    let renamed = ws.join("renamed");
+    ui.line("claim feat/moved --no-fetch --no-install");
+    ui.wait_for("claimed ");
+    ui.wait_for("renamed › slot-1 · feat/moved");
+    let slot = env.slot(&renamed, "slot-1");
+    assert_eq!((slot["status"].as_str(), slot["branch"].as_str()), (Some("inuse"), Some("feat/moved")));
+    // pool.lock only: the old project, still open, locks it to read status.
+    let old = env.root.join("pools/app");
+    let left: Vec<_> = std::fs::read_dir(&old).map(|d| d.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
+    assert!(left.iter().all(|n| n == "pool.lock"), "no pool built at the old path: {left:?}");
+}
+
+#[test]
 fn a_failed_install_still_claims_and_no_install_skips_it() {
     let env = Env::new();
     let repo = env.repo("app");

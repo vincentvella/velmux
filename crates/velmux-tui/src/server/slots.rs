@@ -184,6 +184,23 @@ impl App {
         });
     }
 
+    /// The project to claim in for `project`, as its repo is now. A project
+    /// keeps the paths it was opened with, and a repo moved since (renamed,
+    /// with a symlink left at the old path) would otherwise get a second,
+    /// empty pool built at the old path. So: the project for wherever the
+    /// base resolves to now, opened if need be; an error if it's gone.
+    fn where_now(&mut self, project: usize) -> Result<usize, String> {
+        let Some(pool) = self.projects[project].pool.clone() else { return Ok(project) };
+        let env = Env::from_process().map_err(|e| format!("{e:#}"))?;
+        let fresh = Pool::discover(env, &pool.base)
+            .map_err(|e| format!("{} isn't a repo any more ({e:#}); if it moved, open it from where it is now", pool.base.display()))?;
+        if fresh.base == pool.base {
+            return Ok(project);
+        }
+        self.say(format!("{} is {} now; claiming there", pool.base.display(), fresh.base.display()));
+        self.repo_named(&fresh.base.to_string_lossy()).ok_or_else(|| format!("can't open {}", fresh.base.display()))
+    }
+
     pub(super) fn claim(&mut self, branch: Option<String>) {
         let Some(loc) = self.current_loc() else { return };
         self.claim_in(loc.project, branch, None);
@@ -202,6 +219,16 @@ impl App {
 
     /// [`claim_in`](Self::claim_in), bringing back the Claude `resume` sessions in the slot.
     pub(super) fn claim_resuming(&mut self, project: usize, branch: Option<String>, mut for_pane: Option<(u64, UnixStream)>, resume: Vec<String>) -> Option<String> {
+        let project = match self.where_now(project) {
+            Ok(p) => p,
+            Err(e) => {
+                if let Some((_, mut stream)) = for_pane {
+                    let _ = ServerMsg::Reply(format!("error: {e}")).write(&mut stream);
+                }
+                self.say(e);
+                return None;
+            }
+        };
         // One claim at a time per pane: a slow one (a big install) looks like
         // it died to whoever ran it, and a second would move the pane again.
         if let Some((pane, stream)) = &mut for_pane {
