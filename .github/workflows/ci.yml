@@ -57,7 +57,8 @@ jobs:
         shell: pwsh
         run: |
           $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--directory', 'dist' -PassThru -WindowStyle Hidden
-          Start-Sleep 2
+          # Until it's listening (a fixed wait was sometimes too short).
+          foreach ($i in 1..40) { try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/ | Out-Null; break } catch { Start-Sleep -Milliseconds 500 } }
           $env:VELMUX_DOWNLOAD_URL = 'http://127.0.0.1:8765'
           $env:VELMUX_INSTALL_DIR = "$env:RUNNER_TEMP\velmux-bin"
           Get-Content site/public/install.ps1 -Raw | Invoke-Expression
