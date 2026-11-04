@@ -333,8 +333,13 @@ impl Ui {
         let start = Instant::now();
         loop {
             let screen = self.screen();
-            if screen.contains(needle) || self.pane_text().contains(needle) {
+            if screen.contains(needle) {
                 return screen;
+            }
+            // Wrapped across rows on screen: what it matched in, so callers can parse it.
+            let pane = self.pane_text();
+            if pane.contains(needle) {
+                return pane;
             }
             assert!(start.elapsed() < WAIT, "timed out waiting for {needle:?}; screen:\n{screen}\n{}", self.report());
             std::thread::sleep(Duration::from_millis(100));
