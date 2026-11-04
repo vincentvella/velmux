@@ -703,8 +703,10 @@ pub fn pane_label(app: &App, pane: &Pane) -> String {
 /// put `user@host:path`, which the label already covers.
 pub fn useful_title(pane: &Pane) -> Option<&str> {
     let t = pane.title().trim();
-    // (A program reporting its state is treated as an agent here too.)
-    ((pane.agent.is_some() || pane.state.is_some()) && !t.is_empty()).then_some(t)
+    // (A program reporting its state is treated as an agent here too.) A
+    // Windows console's own title, the shell's path (`…\pwsh.EXE`), isn't one.
+    let console = t.to_lowercase().ends_with(".exe");
+    ((pane.agent.is_some() || pane.state.is_some()) && !t.is_empty() && !console).then_some(t)
 }
 
 /// Draw the whole UI; returns where the hardware cursor belongs, if visible.
