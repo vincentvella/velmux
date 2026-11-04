@@ -11,6 +11,12 @@ What changed in each release of velmux. Each version links to its release
   the repo (installed like the rest), kept from then on. A claim that finds
   every slot in use points to it.
 
+### Changed
+
+- A checkout's uncommitted changes (`✎2`) show beside its name, muted like a
+  slot's `*`, instead of in bold yellow among the agents' marks on the right,
+  where it looked like one more agent state.
+
 ### Fixed
 
 - Windows: an agent showed PowerShell's window title (`Administrator:

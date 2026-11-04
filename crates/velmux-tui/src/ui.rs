@@ -433,14 +433,9 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     };
     let text = if selected { base.fg(t.text).add_modifier(Modifier::BOLD) } else { base.fg(t.text2) };
 
-    // Right side first, so the label knows how much room it has: changes in
-    // a repo's checkout, then its agents' states. (A slot's health is on its
-    // second line.)
+    // Right side first, so the label knows how much room it has: its agents'
+    // states (and a workstream's PRs). (A slot's health is on its second line.)
     let mut marks: Vec<(String, Style)> = Vec::new();
-    // Changes in a repo's checkout: work that belongs in a slot.
-    if loc.slot.is_none() && project.base_changes > 0 {
-        marks.push((format!("✎{}", project.base_changes), Style::new().fg(t.alert).add_modifier(Modifier::BOLD)));
-    }
     // A workstream: its slots' PRs at a glance (`3 PR ✗1 …1 ⇡1`, `✓` when all
     // pass), or, all merged, `⏏ release` (after its agents' states, below).
     let ready = app.is_workstream(loc) && app.workstream_ready(loc);
@@ -487,8 +482,17 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
         buf.set_string(x, y, g, base.fg(glyph_color));
         x += 2;
     }
+    // Uncommitted changes, beside the name: a slot's `*`, a checkout's `✎2`
+    // (work that belongs in a slot), out of the agents' column.
+    let suffix = if dirty {
+        "*".to_string()
+    } else if loc.slot.is_none() && project.base_changes > 0 {
+        format!(" ✎{}", project.base_changes)
+    } else {
+        String::new()
+    };
     let room = right_edge.saturating_sub(badge_w + 1).saturating_sub(x) as usize;
-    let room_for_label = room.saturating_sub(dirty as usize);
+    let room_for_label = room.saturating_sub(suffix.chars().count());
     let shown: String = if label.chars().count() > room_for_label {
         label.chars().take(room_for_label.saturating_sub(1)).chain(std::iter::once('…')).collect()
     } else {
@@ -496,9 +500,7 @@ fn draw_location_row(app: &App, loc: &Loc, y: u16, side: u16, selected: bool, bu
     };
     buf.set_string(x, y, &shown, text);
     x += shown.chars().count() as u16;
-    if dirty {
-        buf.set_string(x, y, "*", base.fg(t.dirty));
-    }
+    buf.set_string(x, y, &suffix, base.fg(t.dirty));
 }
 
 /// One piece of a slot's second line, where it's drawn, and where it links.

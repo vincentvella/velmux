@@ -456,7 +456,8 @@ fn changes_in_the_checkout_are_flagged_and_move_to_a_slot() {
     let ui = env.attach(&repo);
     std::fs::write(repo.join("README.md"), "edited in the checkout\n").unwrap();
     std::fs::write(repo.join("notes.txt"), "new\n").unwrap();
-    ui.wait_for("✎2");
+    // Beside the checkout's name, not with the agents' marks on the right.
+    ui.wait_for("◆ base ✎2");
     ui.click_on("◆ base", true);
     ui.wait_for("move changes to a slot…");
     ui.send(b"\r");
