@@ -5,6 +5,10 @@ Each repo has a pool of **slots**: git worktrees at
 is either free or claimed for a branch. Claiming one is fast because its
 dependencies and build caches are still there from last time.
 
+How many: `slots` in the [config](configuration.md) (5 by default). Need one
+more? **add a slot** in the repo's right-click menu, or `velmux add-slot`; it's
+kept from then on.
+
 Already have a pool laid out beside the repo, the way some other tools do it
 (`~/Workspace/shop-pool-1`, `shop-pool-2`…, or `shop-slot-N`)? velmux uses those
 worktrees as the repo's slots, where they are: one that's detached and clean is

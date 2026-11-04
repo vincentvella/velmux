@@ -342,6 +342,25 @@ impl App {
         });
     }
 
+    /// One more slot for the current repo, in the background (its install can
+    /// take a while).
+    pub(super) fn add_slot(&mut self) {
+        let Some(project) = self.current_loc().map(|l| l.project) else { return };
+        let Some(pool) = self.projects[project].pool.clone() else { return self.say("scratch sessions have no slots") };
+        self.job_seq += 1;
+        let job = format!("add slot {}", self.job_seq);
+        self.jobs.push((job.clone(), "adding a slot".into()));
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let before: Vec<String> = pool.status().unwrap_or_default().into_iter().map(|s| s.id).collect();
+            let result = pool
+                .add_slot(&|_| {})
+                .map(|after| after.into_iter().find(|s| !before.contains(&s.id)).map_or("no slot added".into(), |s| format!("added {}", s.id)))
+                .map_err(|e| format!("adding a slot: {e:#}"));
+            let _ = tx.send(Event::Synced { job, result });
+        });
+    }
+
     /// Rebase (or merge) a slot's branch onto the base ref, in the background.
     pub(super) fn sync_slot(&mut self) {
         let Some(loc) = self.current_loc() else { return };
@@ -353,7 +372,7 @@ impl App {
         self.jobs.push((job.clone(), format!("syncing {slot}")));
         let tx = self.events.clone();
         std::thread::spawn(move || {
-            let result = pool.sync(&slot, &|_| {}).map_err(|e| format!("{e:#}"));
+            let result = pool.sync(&slot, &|_| {}).map_err(|e| format!("sync: {e:#}"));
             let _ = tx.send(Event::Synced { job, result });
         });
     }

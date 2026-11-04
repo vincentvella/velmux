@@ -175,6 +175,24 @@ fn a_program_can_report_its_own_state() {
 }
 
 #[test]
+fn a_slot_is_added_from_the_repos_menu_and_the_cli() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    let count = || env.json(&repo, &["status", "--json"]).as_array().unwrap().len();
+    assert_eq!(count(), 2);
+    let ui = env.attach(&repo);
+    ui.click_on("app", true);
+    ui.click_on("add a slot", false);
+    ui.wait_for("added slot-3");
+    assert_eq!(count(), 3);
+    ui.wait_for("3 free");
+    // And from the command line.
+    assert!(env.velmux(&repo, &["add-slot"]).status.success());
+    assert_eq!(count(), 4);
+}
+
+#[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
     let repo = env.repo("app");

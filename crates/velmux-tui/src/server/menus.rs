@@ -51,6 +51,7 @@ impl App {
                 }
                 items.extend([
                 ("claim a slot…", Action::ClaimSlot),
+                ("add a slot", Action::AddSlot),
                 ("shell in base", Action::NewShell),
                 ("open base in editor", Action::NewEditor),
                 ("rename space", Action::RenameLocation),

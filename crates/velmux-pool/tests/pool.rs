@@ -334,6 +334,23 @@ fn a_failed_install_is_a_warning_and_tried_again() {
 }
 
 #[test]
+fn add_slot_goes_beyond_the_configured_count_and_stays() {
+    let f = fixture("slots = 2\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    let slots = pool.add_slot(&quiet).unwrap();
+    assert_eq!(slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["slot-1", "slot-2", "slot-3"]);
+    assert!(slots[2].path.join("README.md").exists(), "a real worktree");
+    // init doesn't take it away, and all three can be claimed.
+    assert_eq!(pool.init(&quiet).unwrap().len(), 3);
+    for b in ["a", "b", "c"] {
+        pool.claim(&opts(Some(b)), &quiet).unwrap();
+    }
+    let err = pool.claim(&opts(Some("d")), &quiet).unwrap_err();
+    assert!(format!("{err:#}").contains("all 3 slots"), "{err:#}");
+}
+
+#[test]
 fn adopts_a_pool_laid_out_beside_the_repo() {
     let f = fixture("slots = 3\n");
     let ws = f.base.parent().unwrap().to_path_buf();

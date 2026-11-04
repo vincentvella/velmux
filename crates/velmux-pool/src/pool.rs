@@ -240,22 +240,30 @@ impl Pool {
     /// Create missing slots up to the configured count, and install each free
     /// one's dependencies. Idempotent; never shrinks.
     pub fn init(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
-        self.set_up(true, report)
+        self.set_up(self.cfg.slots, true, report)
+    }
+
+    /// One more slot than the pool has (its dependencies installed), beyond
+    /// the configured count if need be; kept from then on, like the rest.
+    pub fn add_slot(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
+        let have = self.store.snapshot()?.map_or(0, |s| s.slots.len());
+        self.set_up(have + 1, true, report)
     }
 
     /// [`init`](Self::init) without installing anything: for a claim that
     /// finds no slots, which installs in the one it takes (the others install
     /// when they're claimed), so it isn't waiting on every slot's install.
     pub fn create_slots(&self, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
-        self.set_up(false, report)
+        self.set_up(self.cfg.slots, false, report)
     }
 
-    fn set_up(&self, install: bool, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
+    /// Slots `slot-1` to `slot-<count>`, made where missing.
+    fn set_up(&self, count: usize, install: bool, report: &dyn Fn(&str)) -> Result<Vec<SlotView>> {
         std::fs::create_dir_all(&self.dir)?;
         self.adopt(report)?;
         let created = self.store.with(&self.base, |st| {
             let mut created = Vec::new();
-            for n in 1..=self.cfg.slots {
+            for n in 1..=count {
                 let id = format!("slot-{n}");
                 let path = st.slot(&id).map(|s| s.path.clone()).unwrap_or_else(|| self.new_slot_path(&st.slots, n));
                 if !path.exists() {
@@ -301,12 +309,13 @@ impl Pool {
             if st.slots.is_empty() {
                 bail!("pool for {} has no slots; run `velmux init`", self.name);
             }
+            let count = st.slots.len();
             let slot = st
                 .slots
                 .iter_mut()
                 .filter(|s| s.status == Status::Free)
                 .min_by_key(|s| s.released_at.unwrap_or(0))
-                .ok_or_else(|| anyhow!("all {} slots in {} are in use", self.cfg.slots, self.name))?;
+                .ok_or_else(|| anyhow!("all {} slots in {} are in use (`velmux add-slot` adds one)", count, self.name))?;
             slot.status = Status::InUse;
             slot.branch = opts.branch.clone();
             slot.claimed_by = opts.by.clone();

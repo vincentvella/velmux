@@ -55,6 +55,8 @@ pub enum Action {
     Update,
     /// Sync every claimed slot that's behind the base.
     SyncAll,
+    /// One more slot for the repo.
+    AddSlot,
     /// Move the checkout's uncommitted changes into a new slot.
     MoveToSlot,
     /// Pick the finished / blocked sounds, hearing each.
@@ -217,6 +219,7 @@ const NAMES: &[(&str, Action)] = &[
     ("agent_picker", Action::AgentPicker),
     ("update", Action::Update),
     ("sync_all", Action::SyncAll),
+    ("add_slot", Action::AddSlot),
     ("move_to_slot", Action::MoveToSlot),
     ("sounds", Action::SoundPicker),
     ("test_sounds", Action::TestSounds),

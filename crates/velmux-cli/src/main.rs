@@ -22,6 +22,8 @@ struct Cli {
 enum Cmd {
     /// Create the pool's slots (idempotent; grows to the configured count).
     Init,
+    /// Add one more slot to the pool (kept, even beyond the configured count).
+    AddSlot,
     /// Claim a free slot and print its path: `cd "$(velmux claim feat/x)"`.
     Claim {
         /// Branch to check out: existing local/remote, else created from the base ref.
@@ -243,6 +245,7 @@ fn run() -> Result<()> {
     let report = |m: &str| eprintln!("{m}");
 
     match cmd {
+        Cmd::AddSlot => print_table(&pool, &pool.add_slot(&report)?),
         Cmd::Init => {
             eprintln!("pool {} → {}", pool.name, pool.dir.display());
             print_table(&pool, &pool.init(&report)?);

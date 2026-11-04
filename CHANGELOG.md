@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- **add a slot** in a repo's menu, and `velmux add-slot`: one more slot for
+  the repo (installed like the rest), kept from then on. A claim that finds
+  every slot in use points to it.
+
 ## [0.19.2] - 2026-11-02
 
 ### Fixed

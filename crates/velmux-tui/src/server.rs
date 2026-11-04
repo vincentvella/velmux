@@ -1204,7 +1204,7 @@ impl App {
                 self.jobs.retain(|(k, _)| k != &job);
                 match result {
                     Ok(msg) => self.toast(&msg),
-                    Err(e) => self.say(format!("sync: {e}")),
+                    Err(e) => self.say(e),
                 }
                 self.refresh_slots();
             }
@@ -2572,6 +2572,7 @@ impl App {
             Action::SyncSlot => self.sync_slot(),
             Action::Update => self.update_velmux(),
             Action::SyncAll => self.sync_all(),
+            Action::AddSlot => self.add_slot(),
             Action::MoveToSlot => match self.current_loc() {
                 Some(loc) if self.projects[loc.project].pool.is_some() => {
                     let n = self.projects[loc.project].base_changes;

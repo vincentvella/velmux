@@ -8,6 +8,7 @@ velmux                           # open velmux (starting its server)
 
 # Slots
 velmux init                      # create the pool's slots (idempotent)
+velmux add-slot                  # one more slot (kept, beyond the configured count)
 velmux claim [branch]            # claim a free slot and print its path
 cd "$(velmux claim feat/login)"
 velmux claim <branch> --repo api      # in a workstream: a slot in that repo, linked there
