@@ -291,6 +291,7 @@ pub enum Confirm {
     RemoveRepo(usize),
     ReleaseWorkstream(Loc),
     DiscardOldParked(usize),
+    CleanMerged(usize),
     Quit,
 }
 
@@ -1868,6 +1869,12 @@ impl App {
         out
     }
 
+    /// `project`'s parked branches whose PR has merged.
+    fn merged_parked(&self, project: usize) -> Vec<String> {
+        let p = &self.projects[project];
+        p.parked.iter().filter(|w| p.prs.get(&w.branch).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged)).map(|w| w.branch.clone()).collect()
+    }
+
     /// The current slot's port, if it has one.
     pub fn loc_port(&self, loc: &Loc) -> Option<u16> {
         let pool = self.projects.get(loc.project)?.pool.as_ref()?;
@@ -2676,6 +2683,15 @@ impl App {
                 let label = format!("discard the parked changes on {}? commits on the branches are kept", old.join(", "));
                 self.mode = Mode::Confirm { label, action: Confirm::DiscardOldParked(project) };
             }
+            Action::CleanMerged => {
+                let Some(project) = self.current_loc().map(|l| l.project) else { return };
+                let merged = self.merged_parked(project);
+                if merged.is_empty() {
+                    return self.toast("no parked branch has merged");
+                }
+                let label = format!("forget {} and delete the branch{}? they've merged", merged.join(", "), if merged.len() > 1 { "es" } else { "" });
+                self.mode = Mode::Confirm { label, action: Confirm::CleanMerged(project) };
+            }
             Action::PlaceMenu => {
                 if let Some(loc) = self.current_loc() {
                     let at = self.menu_at.take().unwrap_or((ui::sidebar_width(self.size.0, self.sidebar_hidden, self.sidebar_cols) + 2, 2));
@@ -3375,6 +3391,15 @@ impl App {
                 self.refresh_slots();
             }
             Confirm::ReleaseWorkstream(loc) => self.release_workstream(loc),
+            Confirm::CleanMerged(project) => {
+                let Some(pool) = self.projects[project].pool.clone() else { return };
+                let merged = self.merged_parked(project);
+                match pool.clean_merged(&|b| merged.iter().any(|m| m == b)) {
+                    Ok(done) => self.say(format!("cleaned up {}", done.join(", "))),
+                    Err(e) => self.say(format!("clean-up failed: {e:#}")),
+                }
+                self.refresh_slots();
+            }
             Confirm::DiscardOldParked(project) => {
                 let Some(pool) = self.projects[project].pool.clone() else { return };
                 match pool.discard_older_than(velmux_pool::OLD_DAYS) {

@@ -97,6 +97,13 @@ right-click menu then has **discard parked work older than 30 days…** to clear
 it all out at once (the branches and their commits stay), and
 `velmux gc --parked-older-than <days>` does the same from the command line.
 
+A branch released before its PR merged stays parked after it merges (a squash
+merge leaves its own commits off the base). Once velmux sees the PR merged, the
+repo's menu has **clean up merged branches…**: it forgets them and deletes the
+branches. `velmux gc --merged` does it from the command line, catching squash
+merges git can see even without `gh`. Parked uncommitted changes are never
+thrown away this way.
+
 Commits made on a detached slot are kept on a `velmux/rescue/*` branch and parked
 like any other.
 

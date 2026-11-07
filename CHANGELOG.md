@@ -5,6 +5,13 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- `velmux gc --merged`, and **clean up merged branches…** in a repo's menu:
+  parked branches whose PR merged after they were released (or whose changes
+  the base already has, as after a squash merge) are forgotten and deleted.
+  Parked uncommitted changes are kept.
+
 ## [0.21.0] - 2026-11-07
 
 ### Added

@@ -210,6 +210,43 @@ fn a_claude_is_still_known_after_an_update_removes_its_version() {
 }
 
 #[test]
+fn parked_branches_that_merged_are_cleaned_up() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    env.run_in(&repo, "git remote add origin https://github.com/acme/app.git");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    // Two branches released with a commit each, so parked; one merges afterwards.
+    for branch in ["feat/merged", "feat/open"] {
+        assert!(env.velmux(&repo, &["claim", branch, "--no-fetch", "--no-install"]).status.success());
+        let slot = env.json(&repo, &["status", "--json"]).as_array().unwrap().iter().find(|s| s["branch"] == branch).cloned().unwrap();
+        env.run_in(Path::new(slot["path"].as_str().unwrap()), "echo x > x && git add x && git commit -qm x");
+        assert!(env.velmux(&repo, &["release", slot["id"].as_str().unwrap()]).status.success());
+    }
+    let prs = r#"[{"headRefName":"feat/merged","number":7,"url":"https://github.com/acme/app/pull/7","state":"MERGED","isDraft":false,"statusCheckRollup":[]}]"#;
+    std::fs::write(env.root.join("prs.json"), prs).unwrap();
+    let ui = env.attach(&repo);
+    ui.wait_for("◌ feat/merged");
+    // The repo's menu offers to clean it up, once it knows the PR merged.
+    env.until("the repo's menu to offer it", || {
+        ui.click_on("app", true);
+        let offered = ui.wait_for("rename space").contains("clean up merged branches…");
+        if !offered {
+            ui.send(b"\x1b");
+        }
+        offered
+    });
+    ui.click_on("clean up merged branches…", false);
+    ui.wait_for("forget feat/merged and delete the branch?");
+    ui.send(b"y");
+    ui.wait_gone_text("◌ feat/merged");
+    ui.wait_for("◌ feat/open");
+    assert!(!env.run_in(&repo, "git branch").contains("feat/merged"));
+    // And from the command line (gh says nothing of feat/open: it stays).
+    assert!(env.velmux(&repo, &["gc", "--merged"]).status.success());
+    assert!(env.run_in(&repo, "git branch").contains("feat/open"));
+}
+
+#[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
     let repo = env.repo("app");

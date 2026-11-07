@@ -92,10 +92,13 @@ enum Cmd {
     Open { slot: Option<String> },
     /// Prune dead worktrees and recreate missing slots; with
     /// `--parked-older-than <days>`, also discard parked work that old
-    /// (its stashed changes; commits stay on the branch).
+    /// (its stashed changes; commits stay on the branch); with `--merged`,
+    /// forget parked branches that have merged and delete them.
     Gc {
         #[arg(long, value_name = "DAYS")]
         parked_older_than: Option<u64>,
+        #[arg(long)]
+        merged: bool,
     },
     /// Import a herdr session: workspaces in git repos become velmux layouts.
     ImportHerdr {
@@ -356,8 +359,16 @@ fn run() -> Result<()> {
                 bail!("editor exited with {status}");
             }
         }
-        Cmd::Gc { parked_older_than } => {
+        Cmd::Gc { parked_older_than, merged } => {
             pool.gc(&report)?;
+            if merged {
+                // Their PRs, when gh can say (a squash merge is caught without it too).
+                let prs = (velmux_pool::gh::available() && velmux_pool::gh::on_github(&pool.base)).then(|| velmux_pool::gh::prs(&pool.base).ok()).flatten().unwrap_or_default();
+                let is_merged = |b: &str| prs.get(b).is_some_and(|pr| pr.state == velmux_pool::gh::PrState::Merged);
+                for branch in pool.clean_merged(&is_merged)? {
+                    eprintln!("{branch} has merged: forgotten, and its branch deleted");
+                }
+            }
             if let Some(days) = parked_older_than {
                 for branch in pool.discard_older_than(days)? {
                     eprintln!("discarded the parked changes on {branch} (the branch is kept)");

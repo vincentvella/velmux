@@ -23,6 +23,7 @@ velmux path <slot>               # a slot's path
 velmux open [slot]               # open it in your editor
 velmux gc                        # prune dead worktrees, recreate missing slots
 velmux gc --parked-older-than 30 # …and discard parked work older than that (branches stay)
+velmux gc --merged               # …and forget parked branches that have merged, deleting them
 
 # Parked work
 velmux parked [--json]           # branches released with work on them

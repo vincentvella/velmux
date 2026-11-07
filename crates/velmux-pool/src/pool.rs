@@ -580,8 +580,6 @@ impl Pool {
         Ok(views)
     }
 
-    /// Throw parked work away: drop its stashes and forget it. The branch (and
-    /// any commits on it) is kept; delete it with git if you mean to.
     /// Discard every parked branch's stashed changes parked more than `days`
     /// ago (their commits stay on the branch). Returns the branches.
     pub fn discard_older_than(&self, days: u64) -> Result<Vec<String>> {
@@ -593,6 +591,32 @@ impl Pool {
         Ok(old)
     }
 
+    /// Parked branches that are done: merged (their PR, when `merged` says
+    /// so, from GitHub) or with nothing left to merge into the base (a squash
+    /// merge leaves the branch's own commits off it). Each is forgotten and its
+    /// local branch deleted; one with stashed changes is kept (that's work).
+    /// Returns the branches.
+    pub fn clean_merged(&self, merged: &dyn Fn(&str) -> bool) -> Result<Vec<String>> {
+        let base_tree = git(&self.base, &["rev-parse", &format!("{}^{{tree}}", self.base_ref)])?;
+        let mut done = Vec::new();
+        for p in self.parked()? {
+            if !git::stashes_with(&self.base, &stash_marker(&p.branch)).is_empty() {
+                continue;
+            }
+            // Merging it into the base would change nothing (git 2.38+).
+            let contained = || git(&self.base, &["merge-tree", "--write-tree", &self.base_ref, &p.branch]).is_ok_and(|t| t.lines().next() == Some(base_tree.as_str()));
+            if merged(&p.branch) || contained() {
+                self.discard(&p.branch)?;
+                // (Checked out somewhere, say by hand: left alone.)
+                let _ = git(&self.base, &["branch", "-D", &p.branch]);
+                done.push(p.branch);
+            }
+        }
+        Ok(done)
+    }
+
+    /// Throw parked work away: drop its stashes and forget it. The branch (and
+    /// any commits on it) is kept; delete it with git if you mean to.
     pub fn discard(&self, branch: &str) -> Result<usize> {
         let stashes = git::stashes_with(&self.base, &stash_marker(branch));
         // Highest index first, so dropping doesn't renumber the rest.

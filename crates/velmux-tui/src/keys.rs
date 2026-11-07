@@ -94,6 +94,8 @@ pub enum Action {
     DiscardParked,
     /// Discard a repo's parked work older than `OLD_DAYS` days (asks first).
     DiscardOldParked,
+    /// Forget parked branches that have merged, and delete them.
+    CleanMerged,
     /// Copy the current place's folder path.
     CopyPath,
     NewShell,

@@ -64,6 +64,9 @@ impl App {
                 if p.parked.iter().any(|w| w.is_old(now)) {
                     items.insert(items.len() - 2, ("discard parked work older than 30 days…", Action::DiscardOldParked));
                 }
+                if !self.merged_parked(target.project).is_empty() {
+                    items.insert(items.len() - 2, ("clean up merged branches…", Action::CleanMerged));
+                }
                 items
             }
             // A slot: work on what's already there, get it reviewed, hand it back.

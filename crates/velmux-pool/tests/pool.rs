@@ -351,6 +351,37 @@ fn add_slot_goes_beyond_the_configured_count_and_stays() {
 }
 
 #[test]
+fn merged_parked_branches_are_cleaned_up_and_the_rest_kept() {
+    let f = fixture("slots = 1\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    pool.init(&quiet).unwrap();
+    let park = |branch: &str, file: &str, uncommitted: bool| {
+        let s = pool.claim(&opts(Some(branch)), &quiet).unwrap();
+        sh(&s.path, &format!("echo {branch} > {file} && git add {file} && git commit -qm {branch}"));
+        if uncommitted {
+            sh(&s.path, "echo wip >> README.md");
+        }
+        pool.release(&s.id, false).unwrap();
+    };
+    park("squashed", "a.txt", false);
+    park("open", "b.txt", false);
+    park("stashed", "c.txt", true);
+    park("pr-merged", "d.txt", false);
+    // Squash-merged into main: the branch's own commit isn't on it.
+    sh(&f.base, "git merge -q --squash squashed && git commit -qm 'Squashed (#1)'");
+    sh(&f.base, "git merge -q --squash stashed && git commit -qm 'Stashed (#2)'");
+    let mut done = pool.clean_merged(&|b| b == "pr-merged").unwrap();
+    done.sort();
+    assert_eq!(done, ["pr-merged", "squashed"]);
+    let parked: Vec<String> = pool.parked().unwrap().into_iter().map(|p| p.branch).collect();
+    assert_eq!(parked.len(), 2, "{parked:?}");
+    assert!(parked.contains(&"open".to_string()) && parked.contains(&"stashed".to_string()), "not merged, and work stashed: kept");
+    let branches = sh(&f.base, "git branch --format='%(refname:short)'");
+    assert!(!branches.contains("squashed") && !branches.contains("pr-merged"), "{branches}");
+    assert!(branches.contains("open") && branches.contains("stashed"));
+}
+
+#[test]
 fn adopts_a_pool_laid_out_beside_the_repo() {
     let f = fixture("slots = 3\n");
     let ws = f.base.parent().unwrap().to_path_buf();
