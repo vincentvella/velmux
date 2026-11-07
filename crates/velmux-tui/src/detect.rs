@@ -33,12 +33,19 @@ pub fn foreground_agent(pgid: Option<Pid>) -> Option<&'static str> {
     pids.into_iter().find_map(agent_of)
 }
 
+/// `pid`'s executable, or the path it was started as when that's gone: an
+/// agent that updated itself deletes the version still running (macOS then
+/// can't say where it ran from).
+fn program_path(pid: Pid) -> Option<PathBuf> {
+    exe_path(pid).or_else(|| process_args(pid)?.into_iter().next().map(PathBuf::from))
+}
+
 /// The agent process `pid` is, if any: by its executable's path (Claude installs
 /// as `…/claude/versions/<semver>`, so path components are matched), or, for
 /// agents that run under Node (npm installs of Codex and Gemini), by the
 /// script it runs.
 fn agent_of(pid: Pid) -> Option<&'static str> {
-    let path = normal(&exe_path(pid)?.to_string_lossy());
+    let path = normal(&program_path(pid)?.to_string_lossy());
     // The first few also by a folder they're installed in (`…/codex/bin/codex`);
     // the rest by the executable's own name only (a user called devin…).
     let file = path.rsplit('/').next().unwrap_or_default();
@@ -149,7 +156,7 @@ pub fn foreground(pgid: Option<Pid>) -> Foreground {
     let named: Vec<(Pid, String)> = pids
         .into_iter()
         .filter_map(|pid| {
-            let path = exe_path(pid)?;
+            let path = program_path(pid)?;
             // Agents take their own name (`…/claude/versions/2.1.303`, `node …/codex.js`).
             let file = if cfg!(windows) { path.file_stem() } else { path.file_name() };
             let name = agent_of(pid).map(String::from).or_else(|| file.map(|f| f.to_string_lossy().into_owned()))?;

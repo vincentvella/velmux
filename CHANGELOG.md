@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- An agent that outlived an update of itself (Claude Code deletes the version
+  still running) stopped being recognised: its pane lost its state (no working
+  dot) and showed one of its helpers (an MCP server's `node`) instead.
+
 ### Added
 
 - `velmux claim --rehome`: a pane claiming a slot in another repo moves there

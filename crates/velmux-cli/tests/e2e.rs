@@ -192,6 +192,23 @@ fn a_slot_is_added_from_the_repos_menu_and_the_cli() {
     assert_eq!(count(), 4);
 }
 
+// (Windows won't delete a running program's file.)
+#[cfg(unix)]
+#[test]
+fn a_claude_is_still_known_after_an_update_removes_its_version() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("a");
+    ui.claude_id();
+    let agent = || env.json(&repo, &["panes", "--json"])[0]["agent"].as_str().map(String::from);
+    env.until("it to be seen as Claude", || agent().as_deref() == Some("claude"));
+    // Claude's updater deletes the version that's running.
+    std::fs::remove_file(env.root.join("install/claude/versions/9.9.9")).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(agent().as_deref(), Some("claude"));
+}
+
 #[test]
 fn parked_work_resumes_with_its_claude() {
     let env = Env::new();
