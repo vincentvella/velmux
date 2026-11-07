@@ -80,8 +80,10 @@ velmux release
 This hands the slot back. Uncommitted changes are stashed and the branch is
 **parked** (it shows in the sidebar to resume later), the slot is reset with its
 dependencies kept, and your conversation moves back where it came from (your
-own repo's base, even when the slot was in another repo). Release once
-the work is committed (or merged), not mid-task.
+own repo's base, even when the slot was in another repo). When the user has
+moved you to another repo for good, claim there with `--rehome`
+(`velmux claim -C <repo> <branch> --rehome`), so a release leaves you at that
+repo's base instead. Release once the work is committed (or merged), not mid-task.
 
 ## Other commands
 

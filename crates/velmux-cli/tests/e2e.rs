@@ -853,6 +853,32 @@ fn a_claude_claims_in_another_repo_and_comes_back_home() {
 }
 
 #[test]
+fn a_claude_rehomed_by_its_claim_stays_in_the_new_repo() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let api = env.repo("api");
+    for repo in [&app, &api] {
+        assert!(env.velmux(repo, &["init"]).status.success());
+    }
+    let ui = env.attach(&app);
+    ui.prefix("a");
+    let id = ui.claude_id();
+    // Started in app, moving to api for good: a release leaves it in api's checkout.
+    ui.line(&format!("claim feat/x --repo {} --rehome", api.display()));
+    ui.wait_for("api › slot-1 · feat/x");
+    ui.line("release");
+    env.until("api's slot to be free", || env.slot(&api, "slot-1")["status"] == "free");
+    ui.wait_for("api › base");
+    assert!(ui.screen().contains(&format!("FAKE-CLAUDE id={id}")), "still the same conversation");
+    // At api's checkout it is home: the next borrowed slot comes back here, not to app.
+    ui.line(&format!("claim feat/y --repo {}", app.display()));
+    ui.wait_for("app › slot-1 · feat/y");
+    ui.line("release");
+    env.until("app's slot to be free", || env.slot(&app, "slot-1")["status"] == "free");
+    ui.wait_for("api › base");
+}
+
+#[test]
 fn a_workstream_slot_released_from_its_own_pane_leaves_it() {
     let env = Env::new();
     let app = env.repo("app");

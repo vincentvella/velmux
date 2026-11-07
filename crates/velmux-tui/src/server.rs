@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Arc;
@@ -381,6 +381,8 @@ pub struct App {
     repeat_until: Option<Instant>,
     /// Claims (by job) whose slot goes into a workstream instead of moving the pane.
     claim_into: HashMap<String, Loc>,
+    /// Claims (by job) whose pane moves to the slot's repo for good (`claim --rehome`).
+    rehome: HashSet<String>,
     /// Whether the next claim fetches and installs (`velmux claim --no-fetch`
     /// / `--no-install` from a pane set it): taken by that claim.
     next_claim: Option<(bool, bool)>,
@@ -658,6 +660,7 @@ impl App {
             prefix,
             repeat_until: None,
             claim_into: HashMap::new(),
+            rehome: HashSet::new(),
             next_claim: None,
             claiming: HashMap::new(),
             interned: HashMap::new(),
@@ -966,9 +969,9 @@ impl App {
                         self.claim_in(project, branch, Some((pane, stream)));
                         return;
                     }
-                    ClientMsg::ClaimInto { pane, branch, repo, workstream, fetch, install } => {
+                    ClientMsg::ClaimInto { pane, branch, repo, workstream, rehome, fetch, install } => {
                         self.next_claim = Some((fetch, install));
-                        self.claim_into_for(pane, branch, repo, workstream, stream);
+                        self.claim_into_for(pane, branch, repo, workstream, rehome, stream);
                         // (Not taken when it failed before claiming.)
                         self.next_claim = None;
                         return;
@@ -1038,6 +1041,7 @@ impl App {
                 self.jobs.retain(|(k, _)| k != &job);
                 self.preparing.retain(|_, (k, _)| k != &job);
                 self.claiming.retain(|_, k| k != &job);
+                let rehome = self.rehome.remove(&job);
                 self.refresh_slots();
                 let install_failed = result.as_ref().ok().filter(|s| s.install_error.is_some()).map(|s| s.id.clone());
                 match (result, for_pane) {
@@ -1079,6 +1083,12 @@ impl App {
                     (Ok(slot), Some((pane, mut stream))) => {
                         let loc = Loc { project, slot: Some(slot.id.clone()) };
                         self.relocate(pane, loc);
+                        if rehome {
+                            if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
+                                p.home = None;
+                            }
+                            self.save();
+                        }
                         let branch = slot.branch.clone().map(|b| format!(" on {b}")).unwrap_or_default();
                         self.say(format!("claimed {}{branch}", slot.id));
                         let _ = ServerMsg::Reply(slot.path.display().to_string()).write(&mut stream);

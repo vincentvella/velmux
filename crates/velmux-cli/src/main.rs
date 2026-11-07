@@ -35,6 +35,11 @@ enum Cmd {
         /// this pane into it; in velmux only. In a workstream, it's that one.
         #[arg(long)]
         workstream: Option<String>,
+        /// The pane moves to this repo for good: a release leaves it at this
+        /// repo's checkout rather than taking it back where it came from. In
+        /// velmux only.
+        #[arg(long)]
+        rehome: bool,
         #[arg(long)]
         no_fetch: bool,
         #[arg(long)]
@@ -220,8 +225,8 @@ fn run() -> Result<()> {
         }
         // Inside a velmux pane: the server claims (it knows the pane's place:
         // a workstream there, or a repo whose slot this pane moves into).
-        Some(Cmd::Claim { branch, workstream, no_fetch, no_install, json: false, .. }) if velmux_tui::current_pane().is_some() => {
-            let (path, ws) = velmux_tui::claim_into(velmux_tui::current_pane().unwrap(), branch, repo_arg, workstream, !no_fetch, !no_install)?;
+        Some(Cmd::Claim { branch, workstream, rehome, no_fetch, no_install, json: false, .. }) if velmux_tui::current_pane().is_some() => {
+            let (path, ws) = velmux_tui::claim_into(velmux_tui::current_pane().unwrap(), branch, repo_arg, workstream, rehome, !no_fetch, !no_install)?;
             match ws {
                 Some(ws) => eprintln!("claimed a slot into the workstream {ws}; it's linked in its folder"),
                 None => eprintln!("claimed a slot; work in it from here (this pane now lives there in velmux)"),
@@ -238,6 +243,7 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Claim { workstream: Some(_), .. }) => bail!("--workstream works inside velmux (a pane), where workstreams live"),
+        Some(Cmd::Claim { rehome: true, .. }) => bail!("--rehome works inside velmux (a pane), which is what it moves"),
         Some(Cmd::Workstream { name, json }) => return workstream(name, json),
         Some(cmd) => cmd,
     };

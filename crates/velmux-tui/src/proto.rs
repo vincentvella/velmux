@@ -26,7 +26,7 @@ pub enum ClientMsg {
     /// which workstream (`--workstream`, or the one the pane is in) when it's
     /// for one. Without either, the same as `ClaimFor`.
     /// `fetch` / `install`: `--no-fetch` / `--no-install` not given.
-    ClaimInto { pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, fetch: bool, install: bool },
+    ClaimInto { pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, rehome: bool, fetch: bool, install: bool },
     /// One-shot: an agent's hook says which session that pane's agent is in
     /// (a session reference, see `agents`).
     ReportSession { pane: u64, session: String },
@@ -97,9 +97,9 @@ impl ClientMsg {
                 write_frame(w, 6, &p)
             }
             ClientMsg::ReleaseFor { pane } => write_frame(w, 7, &pane.to_be_bytes()),
-            ClientMsg::ClaimInto { pane, branch, repo, workstream, fetch, install } => {
+            ClientMsg::ClaimInto { pane, branch, repo, workstream, rehome, fetch, install } => {
                 let mut p = pane.to_be_bytes().to_vec();
-                p.extend_from_slice(serde_json::json!({ "branch": branch, "repo": repo, "workstream": workstream, "fetch": fetch, "install": install }).to_string().as_bytes());
+                p.extend_from_slice(serde_json::json!({ "branch": branch, "repo": repo, "workstream": workstream, "rehome": rehome, "fetch": fetch, "install": install }).to_string().as_bytes());
                 write_frame(w, 11, &p)
             }
             ClientMsg::ReportSession { pane, session } => {
@@ -157,7 +157,15 @@ impl ClientMsg {
                 let text = |k: &str| v[k].as_str().map(String::from);
                 // (An older client sends neither: both on.)
                 let on = |k: &str| v[k].as_bool().unwrap_or(true);
-                Ok(ClientMsg::ClaimInto { pane: u64::from_be_bytes(p[..8].try_into().unwrap()), branch: text("branch"), repo: text("repo"), workstream: text("workstream"), fetch: on("fetch"), install: on("install") })
+                Ok(ClientMsg::ClaimInto {
+                    pane: u64::from_be_bytes(p[..8].try_into().unwrap()),
+                    branch: text("branch"),
+                    repo: text("repo"),
+                    workstream: text("workstream"),
+                    rehome: v["rehome"].as_bool().unwrap_or(false),
+                    fetch: on("fetch"),
+                    install: on("install"),
+                })
             }
             10 if p.len() > 8 => Ok(ClientMsg::ReportSession {
                 pane: u64::from_be_bytes(p[..8].try_into().unwrap()),

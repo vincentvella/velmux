@@ -313,8 +313,9 @@ impl App {
     /// `repo`, else the pane's own), and which workstream (`workstream`,
     /// made if it doesn't exist, else the one the pane is in). For a
     /// workstream the slot joins it and the pane stays; otherwise the pane
-    /// moves into the slot, as a plain claim does.
-    pub(super) fn claim_into_for(&mut self, pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, mut stream: UnixStream) {
+    /// moves into the slot, as a plain claim does (for good with `rehome`: a
+    /// release leaves it at that repo's checkout, not where it came from).
+    pub(super) fn claim_into_for(&mut self, pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, rehome: bool, mut stream: UnixStream) {
         let mut fail = |msg: String| {
             let _ = ServerMsg::Reply(format!("error: {msg}")).write(&mut stream);
         };
@@ -348,7 +349,9 @@ impl App {
                 }
             }
             None => {
-                self.claim_in(project, branch, for_pane);
+                if let Some(job) = self.claim_in(project, branch, for_pane).filter(|_| rehome) {
+                    self.rehome.insert(job);
+                }
             }
         }
     }

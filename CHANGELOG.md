@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Added
+
+- `velmux claim --rehome`: a pane claiming a slot in another repo moves there
+  for good, so a release leaves it at that repo's checkout instead of taking
+  it back to the repo it started in.
+
 ## [0.20.0] - 2026-11-04
 
 ### Added

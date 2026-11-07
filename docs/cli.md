@@ -13,6 +13,7 @@ velmux claim [branch]            # claim a free slot and print its path
 cd "$(velmux claim feat/login)"
 velmux claim <branch> --repo api      # in a workstream: a slot in that repo, linked there
 velmux claim <branch> --workstream x  # from a checkout: into workstream x, not this pane
+velmux claim -C ../api <branch> --rehome  # move this pane to api for good: release leaves it there
 velmux workstream [name] [--json]     # its slots (the one you're in, or all of them)
 velmux release [slot]            # park the work, reset the slot, keep its dependencies
 velmux status [--json]           # every slot: branch, dirty, ↓ behind / ↑ ahead, port; parked work

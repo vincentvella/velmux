@@ -60,10 +60,10 @@ pub fn report_session(pane: u64, session: String) -> anyhow::Result<()> {
 
 /// `velmux claim` inside a pane: the server claims a slot, in `repo` (by
 /// name, or a path) when given, and puts it in `workstream` (or the
-/// workstream the pane is in); else this pane moves into it. Returns the
-/// slot's path, and the workstream it joined.
-pub fn claim_into(pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, fetch: bool, install: bool) -> anyhow::Result<(String, Option<String>)> {
-    let reply = client::request(proto::ClientMsg::ClaimInto { pane, branch, repo, workstream, fetch, install })?;
+/// workstream the pane is in); else this pane moves into it, for good with
+/// `rehome`. Returns the slot's path, and the workstream it joined.
+pub fn claim_into(pane: u64, branch: Option<String>, repo: Option<String>, workstream: Option<String>, rehome: bool, fetch: bool, install: bool) -> anyhow::Result<(String, Option<String>)> {
+    let reply = client::request(proto::ClientMsg::ClaimInto { pane, branch, repo, workstream, rehome, fetch, install })?;
     if let Some(e) = reply.strip_prefix("error: ") {
         anyhow::bail!("{e}");
     }
