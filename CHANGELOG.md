@@ -5,17 +5,19 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
-### Fixed
-
-- An agent that outlived an update of itself (Claude Code deletes the version
-  still running) stopped being recognised: its pane lost its state (no working
-  dot) and showed one of its helpers (an MCP server's `node`) instead.
+## [0.21.0] - 2026-11-07
 
 ### Added
 
 - `velmux claim --rehome`: a pane claiming a slot in another repo moves there
   for good, so a release leaves it at that repo's checkout instead of taking
   it back to the repo it started in.
+
+### Fixed
+
+- An agent that outlived an update of itself (Claude Code deletes the version
+  still running) stopped being recognised: its pane lost its state (no working
+  dot) and showed one of its helpers (an MCP server's `node`) instead.
 
 ## [0.20.0] - 2026-11-04
 
@@ -417,7 +419,8 @@ The first release.
   and CI status per slot, per-slot ports, and live restarts that keep every
   pane running.
 
-[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/vincentvella/velmux/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/vincentvella/velmux/releases/tag/v0.21.0
 [0.20.0]: https://github.com/vincentvella/velmux/releases/tag/v0.20.0
 [0.19.2]: https://github.com/vincentvella/velmux/releases/tag/v0.19.2
 [0.19.1]: https://github.com/vincentvella/velmux/releases/tag/v0.19.1
