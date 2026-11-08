@@ -5,6 +5,12 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- `velmux gc` set up a whole pool for a repo that had none (and grew one to
+  its configured size, installing in every slot). It now only recreates slots
+  whose folders are gone.
+
 ## [0.22.0] - 2026-11-07
 
 ### Added

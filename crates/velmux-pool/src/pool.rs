@@ -653,23 +653,22 @@ impl Pool {
             .map(|s| s.id))
     }
 
-    /// Reconcile state with disk: prune dead worktrees and recreate missing slots.
+    /// Reconcile state with disk: prune dead worktrees and recreate slots
+    /// whose folders are gone.
     pub fn gc(&self, report: &dyn Fn(&str)) -> Result<()> {
         git(&self.base, &["worktree", "prune"])?;
-        let missing: Vec<String> = self
-            .status()?
-            .into_iter()
-            .filter(|s| !s.path.exists())
-            .map(|s| s.id)
-            .collect();
+        let slots = self.status()?;
+        let missing: Vec<String> = slots.iter().filter(|s| !s.path.exists()).map(|s| s.id.clone()).collect();
+        // Only what the pool lost: no pool is made, and none grows (that's `init`).
         if !missing.is_empty() {
             self.store.with(&self.base, |st| {
                 st.slots.retain(|s| !missing.contains(&s.id));
                 Ok(())
             })?;
             report(&format!("recreating missing: {}", missing.join(", ")));
+            let highest = slots.iter().map(|s| slot_number(&s.id) as usize).max().unwrap_or(0);
+            self.set_up(highest, true, report)?;
         }
-        self.init(report)?;
         Ok(())
     }
 

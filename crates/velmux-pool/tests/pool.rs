@@ -382,6 +382,24 @@ fn merged_parked_branches_are_cleaned_up_and_the_rest_kept() {
 }
 
 #[test]
+fn gc_restores_lost_slots_but_never_makes_or_grows_a_pool() {
+    let f = fixture("slots = 2\n");
+    let pool = Pool::discover(f.env.clone(), &f.base).unwrap();
+    // No pool yet: gc leaves it that way.
+    pool.gc(&quiet).unwrap();
+    assert!(pool.status().unwrap().is_empty());
+    assert!(!pool.dir.join("slot-1").exists());
+    pool.init(&quiet).unwrap();
+    // A slot's folder deleted: it comes back, and no others are added.
+    let lost = pool.status().unwrap()[1].path.clone();
+    std::fs::remove_dir_all(&lost).unwrap();
+    pool.gc(&quiet).unwrap();
+    let slots = pool.status().unwrap();
+    assert_eq!(slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["slot-1", "slot-2"]);
+    assert!(lost.join("README.md").exists());
+}
+
+#[test]
 fn adopts_a_pool_laid_out_beside_the_repo() {
     let f = fixture("slots = 3\n");
     let ws = f.base.parent().unwrap().to_path_buf();
