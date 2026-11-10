@@ -216,6 +216,17 @@ impl Env {
         }
     }
 
+    /// A workstream's folder (velmux names it: `pools/.persistent/ws-<id>`).
+    pub fn ws_dir(&self, dir: &Path, name: &str) -> PathBuf {
+        let mut found = None;
+        self.until("the workstream's folder", || {
+            let out = self.velmux(dir, &["workstream", name, "--json"]);
+            found = serde_json::from_slice::<serde_json::Value>(&out.stdout).ok().and_then(|w| w["folder"].as_str().map(PathBuf::from));
+            found.is_some()
+        });
+        found.unwrap()
+    }
+
     pub fn slot(&self, repo: &Path, id: &str) -> serde_json::Value {
         let slots = self.json(repo, &["status", "--json"]);
         slots.as_array().unwrap().iter().find(|s| s["id"] == id).cloned().unwrap()

@@ -2,7 +2,7 @@
 
 Some work spans repos: an API change and the app that uses it, a library and
 the services that depend on it. A **workstream** groups slots from one or more
-repos as one piece of work, with a place of its own where one agent can work
+repos as one piece of work, with a place of its own where its one Claude works
 across all of them.
 
 ```
@@ -23,14 +23,21 @@ behind its base up to date, and **push & open PRs** pushes every slot that has
 no PR yet and opens one for each. Once every slot's PR has merged, it says so
 (a notification) and its row shows **⏏ release**: a click hands it all back.
 
-## Its place
+## Its place, and its one Claude
 
-A workstream is a place like any other: open panes there, start a Claude there.
-Its folder (`.pools/.workstreams/<name>/`, next to the repos' pools) holds a link
-to each of its slots, named after the repo (`webapp/`, `api/`; `webapp-2/` for a
-second slot from the same repo), so an agent started there sees every repo as a
-subfolder, and has each slot in reach. It's told it's in a workstream: change
-code in those subfolders and commit in each repo's own git. Panes there get
+A workstream has **one Claude**, started when you make it. Asking for another
+there (or in one of its slots) takes you to that one. Shells, dev servers and
+editors open there as anywhere else. A slot that joins with a Claude of its
+own has that conversation parked with it; it comes back if the slot leaves the
+workstream, and goes with the branch if the slot is released.
+
+Its folder (`.pools/.persistent/ws-<id>/`, next to the repos' pools; the id is
+random, so a later workstream of the same name never shares its conversation)
+holds a link to each of its slots, named after the repo (`webapp/`, `api/`;
+`webapp-2/` for a second slot from the same repo), so its Claude sees every
+repo as a subfolder, and has each slot in reach. velmux also writes a
+`CLAUDE.md` there naming the slots and importing each repo's own `CLAUDE.md`,
+so their instructions load from the start. Panes there get
 `$VELMUX_WORKSTREAM`.
 
 ## Making one, adding slots
@@ -63,12 +70,13 @@ it (unfinished work is parked, as a release does) and removes it. Panes open in
 its slots move back to their repo's checkout, still running (their
 conversations are kept with the parked work too), and the workstream's own
 panes (the conversation that worked across the repos) move to its first repo's
-checkout. Its folder goes once nothing is working in it any more. Released
-with work still unfinished, it's kept as one: `◌ checkout   2 branches · 3h`
+checkout. Released with work still unfinished, it's kept as one, folder and
+all: `◌ checkout   2 branches · 3h`
 under Workstreams (its branches aren't listed under their repos meanwhile).
-Click it for **resume workstream**: it's made again, every branch still
-parked is claimed back into it with its work and conversations, and its own
-conversation returns too. **forget it** drops it and leaves the branches parked
-in their repos. **remove
+Click it for **resume workstream**: it's made again in the same folder, every
+branch still parked is claimed back into it with its work and conversations,
+and its Claude resumes its conversation there. **forget it** drops it and leaves
+the branches parked in their repos. Its folder goes once nothing is working in
+it and it isn't kept to resume. **remove
 workstream** only ungroups: its slots go back to their repos, still claimed.
 A slot released on its own leaves its workstream.

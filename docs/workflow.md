@@ -75,8 +75,8 @@ its scrollback, and each Claude resumes its conversation.
 
 When one change needs two repos (an API and the app that calls it), make it a
 **[workstream](workstreams.md)**: the `+` on the Workstreams heading, or a
-slot's **add to workstream…**. A Claude started in the workstream sees each
-repo as a subfolder and can claim a slot in another repo itself
+slot's **add to workstream…**. It has one Claude, started with it, which sees
+each repo as a subfolder and can claim a slot in another repo itself
 (`velmux claim <branch> --repo api`).
 
 Its row sums up all its PRs (`3 PR ✗1`), its menu syncs every slot and pushes

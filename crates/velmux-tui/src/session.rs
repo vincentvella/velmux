@@ -40,6 +40,9 @@ pub struct ParkedWorkstream {
     #[serde(default)]
     pub sessions: Vec<String>,
     pub parked_at: u64,
+    /// Its folder, kept while it's parked so its conversation resumes there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +59,10 @@ pub struct SavedFolder {
 pub struct Member {
     pub base: PathBuf,
     pub slot: String,
+    /// The slot's own conversations, parked when it joined (the workstream
+    /// has one Claude); they come back if it leaves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]

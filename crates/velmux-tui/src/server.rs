@@ -2031,9 +2031,12 @@ impl App {
     }
 
     /// Where a new agent starts for `loc`: a repo's checkout, even from one of
-    /// its slots (it plans there and claims a slot of its own); a folder, there.
+    /// its slots (it plans there and claims a slot of its own); a folder, there;
+    /// a workstream's slot, the workstream (whose one Claude works in it).
     fn agent_loc(&self, loc: Loc) -> Loc {
-        if self.projects[loc.project].is_unclassified() {
+        if let Some(ws) = self.workstream_of(&loc) {
+            ws
+        } else if self.projects[loc.project].is_unclassified() {
             loc
         } else {
             Loc { slot: None, ..loc }
@@ -2255,12 +2258,13 @@ impl App {
                         self.claim_into.insert(job, ws);
                     }
                 }
-                PromptFor::NewWorkstream(slot) => match self.new_workstream(&answer) {
+                PromptFor::NewWorkstream(slot) => match self.new_workstream(&answer, None) {
                     Some(ws) => {
                         if let Some(slot) = slot {
                             self.add_to_workstream(&ws, &slot);
                         }
-                        self.go_to(ws);
+                        self.go_to(ws.clone());
+                        self.open_workstream_agent(ws, LaunchOpts::default());
                     }
                     None => self.say("a workstream needs a name"),
                 },
@@ -3468,6 +3472,19 @@ impl App {
     }
 
     fn spawn_with(&mut self, loc: Loc, kind: Kind, dir: Option<Dir>, opts: LaunchOpts) {
+        // A workstream (or one of its slots) has one Claude: show that one.
+        if kind == Kind::Agent {
+            if let Some(ws) = self.is_workstream(&loc).then(|| loc.clone()).or_else(|| self.workstream_of(&loc)) {
+                if self.workstream_agent(&ws).is_some() {
+                    self.open_workstream_agent(ws, opts);
+                    self.toast("a workstream has one Claude: this is it");
+                    return;
+                }
+                if ws != loc {
+                    return self.spawn_with(ws, kind, None, opts);
+                }
+            }
+        }
         match self.launch(&loc, kind, opts) {
             Ok(id) => {
                 self.insert_into_view(&loc, id, dir);

@@ -5,6 +5,18 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Changed
+
+- A workstream has one Claude: it starts when the workstream is made, and
+  asking for another there (or in one of its slots) shows that one. A slot
+  joining with a Claude of its own has that conversation parked, back when the
+  slot leaves.
+- Workstream folders live in `.pools/.persistent/ws-<id>/` (a random id, so a
+  later workstream of the same name doesn't pick up the old conversation),
+  with a `CLAUDE.md` that names the slots and imports each repo's own. A
+  released workstream keeps its folder while it's parked, and resuming it
+  resumes its Claude there. Existing workstreams keep their folders.
+
 ## [0.22.1] - 2026-11-07
 
 ### Fixed

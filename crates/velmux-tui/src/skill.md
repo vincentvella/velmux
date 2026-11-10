@@ -68,6 +68,8 @@ slots, named after the repo, each a worktree on its own branch.
   your pane stays where it is.
 - From a repo's checkout, `velmux claim <branch> --workstream <name>` claims a
   slot into a workstream (making it if needed) instead of moving you there.
+- You are the workstream's one agent: there's no other agent here to hand
+  work to, and velmux won't start one.
 - Don't release a workstream's slots yourself; the user releases the workstream
   when it's done.
 

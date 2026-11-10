@@ -769,13 +769,16 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.wait_for("WORKSTREAMS");
     ui.wait_for("◇ checkout");
     ui.wait_for("@1 app");
-    let dir = env.root.join("pools/.workstreams/checkout");
+    // Its folder has a random name (not the workstream's) beside the pools.
+    let dir = env.ws_dir(&app, "checkout");
+    assert_eq!(dir.parent(), Some(env.root.join("pools/.persistent").as_path()));
+    assert!(dir.file_name().unwrap().to_string_lossy().starts_with("ws-"), "{}", dir.display());
     let app_slot = env.slot(&app, "slot-1")["path"].as_str().unwrap().to_string();
     env.until("the folder to link the app's slot", || velmux_pool::sys::read_link(&dir.join("app")).is_ok_and(|t| t.to_string_lossy() == app_slot));
-    // From a shell in the workstream, claim a slot in another repo into it.
-    ui.send(b"c");
-    ui.wait_for(PROMPT);
-    ui.line(&format!("velmux claim feat/b --repo {} --no-fetch", api.display()));
+    env.until("its CLAUDE.md to list the slot", || std::fs::read_to_string(dir.join("CLAUDE.md")).is_ok_and(|t| t.contains("## app/")));
+    // Its one Claude started with it; it claims a slot in another repo into it.
+    ui.claude_id();
+    ui.line(&format!("sh velmux claim feat/b --repo {} --no-fetch", api.display()));
     ui.wait_for("into the workstream checkout");
     ui.wait_for("@1 api");
     let api_slot = env.slot(&api, "slot-1");
@@ -789,8 +792,12 @@ fn a_workstream_groups_slots_from_several_repos() {
         w["name"] == "checkout" && has("app", "feat/a") && has("api", "feat/b")
     });
     // …and, inside it, the one you're in.
-    ui.line("velmux workstream");
+    ui.line("sh velmux workstream");
     ui.wait_for("checkout  (");
+    // Another Claude here is the same one: a workstream has one.
+    ui.prefix("a");
+    ui.wait_for("a workstream has one Claude");
+    assert_eq!(env.json(&app, &["panes", "--json"]).as_array().unwrap().len(), 1);
     // A shell open in one of its slots…
     ui.click_on("feat/a", false);
     ui.wait_for("app › slot-1");
@@ -805,23 +812,13 @@ fn a_workstream_groups_slots_from_several_repos() {
     ui.send(b"y");
     env.until("both slots to be free", || env.slot(&app, "slot-1")["status"] == "free" && env.slot(&api, "slot-1")["status"] == "free");
     ui.wait_gone_text("◇ checkout");
-    // …the shells (the slot's, and the workstream's own) are still running, in
+    // …the slot's shell and the workstream's Claude are still running, in
     // app's checkout…
     ui.click_on("◆ base", false);
-    ui.wait_for("app › base · shell");
     ui.wait_for("still-here");
     ui.wait_for("into the workstream checkout");
-    ui.line("echo alive");
-    ui.wait_for("alive");
-    // …and its folder, emptied of links, goes once nothing works in it.
-    assert!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) == 0, "no links left");
-    // (Both shells are in the checkout now: leave the folder in each.
-    // PowerShell's `cd` keeps the process where it was: move that too.)
-    let leave = if cfg!(windows) { "cd /; [Environment]::CurrentDirectory = 'C:\\'" } else { "cd /" };
-    ui.line(leave);
-    ui.prefix("j");
-    ui.line(leave);
-    env.until("its folder to go", || !dir.exists());
+    // …and its folder is emptied of links (kept while it may be resumed).
+    env.until("no links left", || std::fs::read_dir(&dir).into_iter().flatten().flatten().all(|e| e.file_name() == "CLAUDE.md"));
 }
 
 #[test]
@@ -839,6 +836,7 @@ fn slots_drag_into_a_workstream_and_leave_it() {
     ui.wait_for("name for the workstream");
     ui.line("dragged");
     ui.wait_for("◇ dragged");
+    let id = ui.claude_id();
     // Drag the slot onto it (SGR: press, move, release).
     let (sx, sy) = ui.find("feat/drag").unwrap();
     let (_, wy) = ui.find("◇ dragged").unwrap();
@@ -860,11 +858,9 @@ fn slots_drag_into_a_workstream_and_leave_it() {
         let (repos, slot) = (ui.find("REPOS"), ui.find("▣ feat/drag"));
         !ui.screen().contains("@1 app") && matches!((repos, slot), (Some((_, r)), Some((_, s))) if r < s)
     });
-    // A conversation in the workstream is named after it.
+    // Its Claude (restored with it) is named after it.
     ui.click_on("◇ dragged", false);
-    ui.wait_for("a workstream:");
-    ui.send(b"a");
-    let id = ui.claude_id();
+    ui.wait_for(&format!("FAKE-CLAUDE id={id}"));
     ui.line("say hi");
     env.until("its conversation to be named after the workstream", || {
         std::fs::read_dir(env.claude_dir.join("projects"))
@@ -877,6 +873,35 @@ fn slots_drag_into_a_workstream_and_leave_it() {
             .as_deref()
             == Some("dragged")
     });
+}
+
+#[test]
+fn a_slots_claude_is_parked_while_it_is_in_a_workstream() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    let ui = env.attach(&app);
+    ui.prefix("a");
+    let id = ui.claude_id();
+    ui.line("claim feat/own");
+    ui.wait_for("app › slot-1 · feat/own");
+    let in_slot = || {
+        env.json(&app, &["panes", "--json"]).as_array().unwrap().iter().any(|p| p["slot"] == "slot-1" && p["session"].as_str().is_some_and(|s| s.contains(&id)))
+    };
+    assert!(in_slot());
+    // It joins a workstream, which has one Claude (its own): the slot's is parked…
+    ui.click_on("feat/own", true);
+    ui.click_on("add to workstream…", false);
+    ui.click_on("new workstream…", false);
+    ui.wait_for("name for the workstream");
+    ui.line("solo");
+    ui.wait_for("@1 app");
+    env.until("the slot's Claude to close", || !in_slot());
+    env.until("the workstream's Claude", || env.json(&app, &["panes", "--json"]).as_array().unwrap().iter().any(|p| p["workstream"] == "solo"));
+    // …and comes back when it leaves.
+    ui.click_on("feat/own", true);
+    ui.click_on("leave workstream", false);
+    env.until("the slot's Claude to resume", in_slot);
 }
 
 #[test]
@@ -945,7 +970,7 @@ fn a_workstream_slot_released_from_its_own_pane_leaves_it() {
     ui.wait_for("name for the workstream");
     ui.line("ws");
     ui.wait_for("@1 app");
-    let link = env.root.join("pools/.workstreams/ws/app");
+    let link = env.ws_dir(&app, "ws").join("app");
     env.until("the link", || velmux_pool::sys::read_link(&link).is_ok());
     // A shell in the slot (under the workstream) releases it.
     ui.click_on("feat/w", false);
@@ -1003,9 +1028,10 @@ fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
     ui.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", plus + 1, y + 1, plus + 1, y + 1).as_bytes());
     ui.wait_for("name for the workstream");
     ui.line("pair");
-    ui.wait_for("claim a slot in a repo");
-    // n: pick the repo, then name the branch.
-    ui.send(b"n");
+    ui.claude_id();
+    // Its menu: pick the repo, then name the branch.
+    ui.click_on("◇ pair", true);
+    ui.click_on("claim a slot in a repo", false);
     ui.wait_for("a slot in…");
     let menu = ui.screen();
     let at = menu.lines().skip_while(|l| !l.contains("a slot in…")).skip(1).position(|l| l.contains(" api")).unwrap();
@@ -1019,7 +1045,7 @@ fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
     ui.wait_for("@1 api");
     assert_eq!(env.slot(&api, "slot-1")["branch"], "feat/pair");
     assert_eq!(env.slot(&app, "slot-1")["status"], "free");
-    env.until("its link", || velmux_pool::sys::read_link(&env.root.join("pools/.workstreams/pair/api")).is_ok());
+    env.until("its link", || velmux_pool::sys::read_link(&env.ws_dir(&app, "pair").join("api")).is_ok());
 }
 
 #[test]
@@ -1231,6 +1257,10 @@ fn a_released_workstream_comes_back_whole() {
         }
     }
     ui.wait_for("@1 api");
+    let dir = env.ws_dir(&app, "pair");
+    ui.click_on("◇ pair", false);
+    let id = ui.claude_id();
+    ui.exit_claude(); // (closed: resumed from its transcript, below)
     // Released half-way: both branches park, and it's kept as one.
     ui.click_on("◇ pair", true);
     ui.click_on("release workstream…", false);
@@ -1262,6 +1292,11 @@ fn a_released_workstream_comes_back_whole() {
         assert!(Path::new(slot["path"].as_str().unwrap()).join("wip.txt").exists(), "its uncommitted work came back");
     }
     ui.wait_gone_text("◌ pair");
+    // In the folder it had, its Claude resumed: the same conversation.
+    assert_eq!(env.ws_dir(&app, "pair"), dir);
+    env.until("its links back", || velmux_pool::sys::read_link(&dir.join("api")).is_ok());
+    ui.click_on("◇ pair", false);
+    ui.wait_for(&format!("FAKE-CLAUDE id={id}"));
 }
 
 #[test]

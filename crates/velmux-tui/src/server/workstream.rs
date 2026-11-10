@@ -1,8 +1,10 @@
 //! Workstreams: slots from one or more repos, grouped as one piece of work.
 //! A workstream is a place of its own (a folder in the unclassified group,
 //! like a scratch session) whose folder links to each of its slots, named
-//! after its repo, so an agent started there reaches every one. Its slots
-//! leave their repo's list in the sidebar and show under it instead.
+//! after its repo, so its one Claude, started there, reaches every one. Its
+//! slots leave their repo's list in the sidebar and show under it instead.
+//! The folder (`.pools/.persistent/<random id>`) outlives a release while the
+//! workstream is parked, so that Claude's conversation resumes where it ran.
 
 use super::*;
 
@@ -15,6 +17,17 @@ pub(super) const PROMPT: &str = "You are running inside velmux, in the workstrea
      when it's done.";
 
 impl App {
+    /// Start a new workstream's Claude in it, without leaving where you are.
+    pub(super) fn start_workstream_agent(&mut self, ws: &Loc) {
+        match self.launch(ws, Kind::Agent, LaunchOpts::default()) {
+            Ok(id) => {
+                self.insert_into_view(ws, id, None);
+                self.relayout();
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
     /// `name` as a `&'static str` for a menu row; each distinct one is kept once.
     pub(super) fn intern(&mut self, name: &str) -> &'static str {
         if let Some(s) = self.interned.get(name) {
@@ -74,6 +87,37 @@ impl App {
             .collect()
     }
 
+    /// The workstream's one Claude: its live agent pane (or one just started,
+    /// before its agent is seen).
+    pub fn workstream_agent(&self, ws: &Loc) -> Option<u64> {
+        let just_started = |p: &Pane| p.started_at.elapsed().is_ok_and(|e| e < Duration::from_secs(10));
+        self.panes.iter().find(|p| &p.loc == ws && (p.agent.is_some() || (p.kind == Kind::Agent && just_started(p)))).map(|p| p.id)
+    }
+
+    /// Show the workstream's Claude, starting it if it has none.
+    pub(super) fn open_workstream_agent(&mut self, ws: Loc, opts: LaunchOpts) {
+        match self.workstream_agent(&ws) {
+            Some(id) => {
+                if let Some(view) = self.views.get_mut(&ws) {
+                    if let Some(t) = view.tab_of(id) {
+                        view.set_active(t);
+                    }
+                }
+                self.focus = Some(id);
+                self.current = Some(ws);
+                self.full_redraw = true;
+            }
+            None => self.spawn_with(ws, Kind::Agent, None, opts),
+        }
+    }
+
+    /// A workstream slot's own conversations, parked when it joined.
+    pub(super) fn member_sessions(&self, slot: &Loc) -> Vec<String> {
+        let (Some(ws), Some(base)) = (self.workstream_of(slot), self.projects.get(slot.project).and_then(|p| p.base())) else { return Vec::new() };
+        let members = self.folder(&ws).and_then(|f| f.members.as_ref());
+        members.and_then(|m| m.iter().find(|m| m.base == base && Some(&m.slot) == slot.slot.as_ref())).map(|m| m.sessions.clone()).unwrap_or_default()
+    }
+
     /// Every slot in the workstream has a PR, and all of them have merged:
     /// it's done, and ready to release.
     pub fn workstream_ready(&self, ws: &Loc) -> bool {
@@ -91,17 +135,20 @@ impl App {
         })
     }
 
-    /// Where workstream folders go: beside the repos' pools (`.pools/.workstreams`).
-    fn workstreams_root(&self) -> PathBuf {
+    /// Where workstream folders go: beside the repos' pools (`.pools/.persistent`),
+    /// and, for `legacy`, where older velmux put them (named after the workstream).
+    fn workstreams_root(&self, legacy: bool) -> PathBuf {
+        let name = if legacy { ".workstreams" } else { ".persistent" };
         self.projects
             .iter()
-            .find_map(|p| p.pool.as_ref().and_then(|pool| pool.dir.parent().map(|d| d.join(".workstreams"))))
-            .or_else(|| paths::state_dir().ok().map(|d| d.join("workstreams")))
-            .unwrap_or_else(|| PathBuf::from("/tmp/velmux-workstreams"))
+            .find_map(|p| p.pool.as_ref().and_then(|pool| pool.dir.parent().map(|d| d.join(name))))
+            .or_else(|| paths::state_dir().ok().map(|d| d.join(&name[1..])))
+            .unwrap_or_else(|| PathBuf::from(format!("/tmp/velmux-{}", &name[1..])))
     }
 
-    /// A new, empty workstream called `name`.
-    pub(super) fn new_workstream(&mut self, name: &str) -> Option<Loc> {
+    /// A new, empty workstream called `name`, in folder `dir` (a parked one's,
+    /// resumed) or a fresh one.
+    pub(super) fn new_workstream(&mut self, name: &str, dir: Option<PathBuf>) -> Option<Loc> {
         let name: String = name.trim().replace('/', "-");
         let name = name.trim_start_matches('.').to_string();
         if name.is_empty() {
@@ -115,7 +162,9 @@ impl App {
             id = format!("{name}-{n}");
             n += 1;
         }
-        let dir = self.workstreams_root().join(&id);
+        // A random folder name: its conversation's transcripts are kept by
+        // folder, so a later workstream of the same name doesn't pick them up.
+        let dir = dir.unwrap_or_else(|| self.workstreams_root(false).join(format!("ws-{}", &session::new_session_id()[..8])));
         if let Err(e) = std::fs::create_dir_all(&dir) {
             self.say(format!("can't make {}: {e}", dir.display()));
             return None;
@@ -136,8 +185,15 @@ impl App {
             }
             self.remove_from_workstream(slot);
         }
+        // The workstream has one Claude: the slot's own conversations are
+        // parked with it, to come back if it leaves.
+        let mut sessions = Vec::new();
+        for pane in self.panes.iter_mut().filter(|p| &p.loc == slot && (p.agent.is_some() || p.kind == Kind::Agent)) {
+            sessions.extend(pane.session.clone());
+            pane.kill();
+        }
         if let Some(members) = self.folder_mut(ws).and_then(|f| f.members.as_mut()) {
-            members.push(session::Member { base, slot: id });
+            members.push(session::Member { base, slot: id, sessions });
         }
         self.link_workstream(ws);
         self.full_redraw = true;
@@ -148,10 +204,16 @@ impl App {
     pub(super) fn remove_from_workstream(&mut self, slot: &Loc) {
         let Some(ws) = self.workstream_of(slot) else { return };
         let base = self.projects[slot.project].base().map(Path::to_path_buf);
+        let sessions = self.member_sessions(slot);
         if let Some(members) = self.folder_mut(&ws).and_then(|f| f.members.as_mut()) {
             members.retain(|m| Some(&m.base) != base.as_ref() || Some(&m.slot) != slot.slot.as_ref());
         }
         self.link_workstream(&ws);
+        // Its own conversations, parked when it joined, come back to it.
+        let still_claimed = self.projects[slot.project].slots.iter().any(|s| Some(&s.id) == slot.slot.as_ref() && s.status == Status::InUse);
+        if !sessions.is_empty() && still_claimed {
+            self.resume_sessions(slot.clone(), &sessions);
+        }
         self.full_redraw = true;
         self.save();
     }
@@ -174,10 +236,11 @@ impl App {
     }
 
     /// Make a workstream's folder link to exactly its slots (other links go;
-    /// anything else in it is left alone).
+    /// anything else in it is left alone), and its `CLAUDE.md` say so.
     pub(super) fn link_workstream(&self, ws: &Loc) {
         let Some(dir) = self.folder(ws).map(|f| f.path.clone()) else { return };
         let want = self.workstream_links(ws);
+        write_claude_md(&dir, ws.slot.as_deref().unwrap_or_default(), &want);
         for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let path = entry.path();
             let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
@@ -200,15 +263,19 @@ impl App {
         self.panes.iter().any(|p| p.fg.cwd.as_ref().is_some_and(|c| c.starts_with(dir)))
     }
 
-    /// Empty folders left in the workstreams' folder by removed workstreams,
-    /// once nothing runs in them.
+    /// A workstream's folder is still wanted: it's open, or parked (to resume in).
+    fn kept_dir(&self, dir: &Path) -> bool {
+        self.workstreams().iter().any(|w| self.folder(w).is_some_and(|f| f.path == dir)) || self.parked_workstreams.iter().any(|p| p.path.as_deref() == Some(dir))
+    }
+
+    /// Folders left by removed (or forgotten) workstreams, once nothing runs in them.
     fn sweep_workstream_dirs(&self) {
-        let root = self.workstreams_root();
-        let ours: Vec<PathBuf> = self.workstreams().iter().filter_map(|w| self.folder(w).map(|f| f.path.clone())).collect();
-        for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-            let dir = entry.path();
-            if dir.is_dir() && !ours.contains(&dir) && !self.in_use(&dir) {
-                let _ = std::fs::remove_dir(&dir); // only if it's empty
+        for root in [self.workstreams_root(false), self.workstreams_root(true)] {
+            for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+                let dir = entry.path();
+                if dir.is_dir() && !self.kept_dir(&dir) && !self.in_use(&dir) {
+                    drop_workstream_dir(&dir);
+                }
             }
         }
     }
@@ -264,8 +331,9 @@ impl App {
         let sessions: Vec<String> = self.panes.iter().filter(|p| p.loc == ws).filter_map(|p| p.session.clone()).collect();
         if !branches.is_empty() {
             let name = ws.slot.clone().unwrap_or_default();
+            let path = self.folder(&ws).map(|f| f.path.clone());
             self.parked_workstreams.retain(|p| p.name != name);
-            self.parked_workstreams.push(session::ParkedWorkstream { name, branches, sessions, parked_at: velmux_pool::state::now() });
+            self.parked_workstreams.push(session::ParkedWorkstream { name, branches, sessions, parked_at: velmux_pool::state::now(), path });
         }
         // The workstream's own panes (the conversation that worked across the
         // repos) go to its first repo's checkout, still running.
@@ -295,13 +363,13 @@ impl App {
         }
         self.link_workstream(&ws);
         self.close_panes_where(|p| p.loc == ws);
-        // Its folder goes once nothing runs in it (a pane moved out may still);
-        // `prune_workstreams` takes it then.
-        if let Some(dir) = dir.filter(|d| !self.in_use(d)) {
-            let _ = std::fs::remove_dir(dir);
-        }
         if let (Some(id), Some(project)) = (&ws.slot, self.projects.get_mut(ws.project)) {
             project.folders.retain(|f| &f.id != id);
+        }
+        // Its folder goes once nothing runs in it (a pane moved out may still;
+        // `prune_workstreams` takes it then), unless it's parked to resume.
+        if let Some(dir) = dir.filter(|d| !self.in_use(d) && !self.kept_dir(d)) {
+            drop_workstream_dir(&dir);
         }
         self.views.remove(&ws);
         self.leave(&ws);
@@ -323,8 +391,11 @@ impl App {
         let ws = match &workstream {
             Some(name) => match self.workstreams().into_iter().find(|w| w.slot.as_deref() == Some(name.as_str())) {
                 Some(ws) => Some(ws),
-                None => match self.new_workstream(name) {
-                    Some(ws) => Some(ws),
+                None => match self.new_workstream(name, None) {
+                    Some(ws) => {
+                        self.start_workstream_agent(&ws);
+                        Some(ws)
+                    }
                     None => return fail(format!("can't make a workstream called {name:?}")),
                 },
             },
@@ -405,7 +476,7 @@ impl App {
             return;
         }
         let pw = self.parked_workstreams.remove(i);
-        let Some(ws) = self.new_workstream(&pw.name) else { return };
+        let Some(ws) = self.new_workstream(&pw.name, pw.path.clone().filter(|p| p.is_dir())) else { return };
         for (project, branch) in &branches {
             if let Some(job) = self.claim_in(*project, Some(branch.clone()), None) {
                 self.claim_into.insert(job, ws.clone());
@@ -413,7 +484,9 @@ impl App {
         }
         let open: Vec<String> = pw.sessions.iter().filter(|s| crate::agents::exists(s, &self.claude_dir) || self.live_session_pane(s, None).is_some()).cloned().collect();
         self.go_to(ws.clone());
-        if !open.is_empty() {
+        if open.is_empty() {
+            self.start_workstream_agent(&ws);
+        } else {
             self.resume_sessions(ws, &open);
         }
         self.save();
@@ -500,4 +573,40 @@ impl App {
             let _ = tx.send(Event::PrOpened { job, result: Ok(format!("{}; finish the PRs in your browser", results.join(" · "))) });
         });
     }
+}
+
+/// What a workstream's folder tells an agent started there (Claude reads
+/// `CLAUDE.md`, from its own folder, at the start): its slots, and each
+/// repo's own instructions, imported. Rewritten only when that changes.
+fn write_claude_md(dir: &Path, name: &str, links: &[(String, PathBuf)]) {
+    let mut text = format!(
+        "<!-- Written by velmux for the workstream \"{name}\"; rewritten as its slots change. -->\n\
+         # Workstream: {name}\n\n\
+         Each folder here is a slot: a git worktree of that repo, on its own branch. Make changes inside them \
+         and commit in each one's own git. Bring another repo in with `velmux claim <branch> --repo <repo>`.\n"
+    );
+    for (link, target) in links {
+        text.push_str(&format!("\n## {link}/\n"));
+        if target.join("CLAUDE.md").is_file() {
+            text.push_str(&format!("\n@{link}/CLAUDE.md\n"));
+        }
+    }
+    let path = dir.join("CLAUDE.md");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Remove a workstream's folder: its links and `CLAUDE.md` (velmux's), then
+/// the folder, if nothing else was put in it.
+fn drop_workstream_dir(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            let _ = velmux_pool::sys::remove_link(&path);
+        } else if entry.file_name() == "CLAUDE.md" && std::fs::read_to_string(&path).is_ok_and(|t| t.starts_with("<!-- Written by velmux")) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let _ = std::fs::remove_dir(dir); // only if it's empty
 }

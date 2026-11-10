@@ -147,6 +147,12 @@ impl App {
     pub(super) fn release_keeping(&mut self, loc: Loc, mut sessions: Vec<String>) {
         let Some(slot) = loc.slot.clone() else { return };
         let Some(pool) = self.projects[loc.project].pool.clone() else { return };
+        // In a workstream, its own conversations were parked when it joined.
+        for s in self.member_sessions(&loc) {
+            if !sessions.contains(&s) {
+                sessions.push(s);
+            }
+        }
         for pane in self.panes.iter_mut().filter(|p| p.loc == loc) {
             if let Some(s) = pane.session.clone().filter(|s| !sessions.contains(s)) {
                 sessions.push(s);
