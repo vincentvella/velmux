@@ -5,6 +5,14 @@ What changed in each release of velmux. Each version links to its release
 
 ## [Unreleased]
 
+### Fixed
+
+- Text cut off in a pane that narrowed (a split opened, the window shrank)
+  stayed cut off when it widened again, leaving ragged narrow columns of
+  output. Panes now re-wrap their lines and scrollback on resize, as a
+  terminal does, and saved history keeps wrapped lines whole so it re-wraps
+  when restored.
+
 ### Changed
 
 - A workstream has one Claude: it starts when the workstream is made, and

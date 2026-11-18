@@ -1048,6 +1048,26 @@ fn a_workstream_claims_a_slot_in_a_repo_from_its_screen() {
     env.until("its link", || velmux_pool::sys::read_link(&env.ws_dir(&app, "pair").join("api")).is_ok());
 }
 
+// (A POSIX shell prints the line.)
+#[cfg(unix)]
+#[test]
+fn a_pane_gets_its_text_back_when_a_split_closes() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    let long = format!("{}END", "x".repeat(70));
+    ui.line("printf 'x%.0s' $(seq 70); echo END");
+    ui.wait_for(&long);
+    // A split narrows the pane: the line wraps…
+    ui.prefix("|");
+    env.until("the line to wrap", || !ui.screen().contains(&long));
+    // …and closing it gives the whole line back (vt100 alone cut it off for good).
+    ui.line("exit");
+    ui.wait_for(&long);
+}
+
 #[test]
 fn a_panes_right_click_menu_splits_zooms_and_closes_it() {
     let env = Env::new();

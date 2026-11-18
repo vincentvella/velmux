@@ -136,15 +136,163 @@ pub struct Pane {
     pub dumped_seq: u64,
 }
 
-/// Every scrollback row (and, `with_screen` and not on the alternate screen,
-/// the visible rows), formatted, one per line, oldest first.
+/// Every scrollback line (and, `with_screen` and not on the alternate screen,
+/// the visible ones), formatted, one per line, oldest first. A line wrapped
+/// over several rows is kept as one, so it re-wraps at whatever width it's
+/// replayed at.
 pub fn history_formatted<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, with_screen: bool) -> String {
     let mut out = String::new();
-    for text in history_rows(p, with_screen, true) {
-        out.push_str(text.trim_end_matches(' '));
+    for line in logical_lines(p, with_screen, false).0 {
+        out.push_str(&line.text);
         out.push_str("\x1b[m\r\n");
     }
     out
+}
+
+/// A line of output as the program wrote it, however many rows it wrapped
+/// over: its text (with colours) and how many cells wide it is.
+struct Line {
+    text: String,
+    width: usize,
+}
+
+/// The scrollback, then (`with_screen`, main screen only) the screen, as
+/// lines: the screen's down to its last non-blank row, or (`to_cursor`) the
+/// cursor's, if that's lower. With it, where the cursor is: (line, cells into it).
+fn logical_lines<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, with_screen: bool, to_cursor: bool) -> (Vec<Line>, Option<(usize, usize)>) {
+    let saved = p.screen().scrollback();
+    let total = p.screen().scrollback_len();
+    let (rows, cols) = p.screen().size();
+    let (rows, cols) = (rows.get(), cols.get());
+    let mut lines = Vec::new();
+    let mut cur = Line { text: String::new(), width: 0 };
+    let take = |screen: &vt100::Screen, row: u16, lines: &mut Vec<Line>, cur: &mut Line| {
+        let wrapped = screen.row_wrapped(row);
+        let (text, width) = encode_row(screen, row, cols, wrapped);
+        cur.text.push_str(&text);
+        cur.width += width;
+        if !wrapped {
+            lines.push(std::mem::replace(cur, Line { text: String::new(), width: 0 }));
+        }
+    };
+    // At offset `o` the top visible row is history line `total - o`.
+    let mut offset = total;
+    while offset > 0 {
+        p.screen_mut().set_scrollback(offset);
+        for row in 0..rows.min(offset as u16) {
+            take(p.screen(), row, &mut lines, &mut cur);
+        }
+        offset -= rows.min(offset as u16) as usize;
+    }
+    p.screen_mut().set_scrollback(0);
+    let mut cursor = None;
+    if with_screen && !p.screen().alternate_screen() {
+        let screen = p.screen();
+        let blank = |r: u16| (0..cols).all(|c| screen.cell(r, c).is_none_or(|c| !c.has_contents()));
+        let (crow, ccol) = screen.cursor_position();
+        let mut last = (0..rows).rev().find(|r| !blank(*r)).map_or(0, |r| r + 1);
+        if to_cursor {
+            last = last.max(crow + 1);
+        }
+        for row in 0..last {
+            if row == crow {
+                cursor = Some((lines.len(), cur.width + ccol as usize));
+            }
+            take(screen, row, &mut lines, &mut cur);
+        }
+    }
+    if !cur.text.is_empty() || cur.width > 0 {
+        lines.push(cur);
+    }
+    p.screen_mut().set_scrollback(saved);
+    (lines, cursor)
+}
+
+/// A row's cells as text that can be replayed anywhere (no cursor moves, so
+/// it wraps at the width it's replayed at), and how many cells it covers: all
+/// of them when it wraps on, else up to its last used one.
+fn encode_row(screen: &vt100::Screen, row: u16, cols: u16, wrapped: bool) -> (String, usize) {
+    let cell = |c: u16| screen.cell(row, c);
+    let used = if wrapped {
+        cols
+    } else {
+        (0..cols).rev().find(|c| cell(*c).is_some_and(|c| c.has_contents() || c.bgcolor() != vt100::Color::Default)).map_or(0, |c| c + 1)
+    };
+    let mut out = String::new();
+    let default = (vt100::Color::Default, vt100::Color::Default, [false; 5]);
+    let mut look = default;
+    for c in 0..used {
+        let Some(cell) = cell(c) else { break };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let this = (cell.fgcolor(), cell.bgcolor(), [cell.bold(), cell.dim(), cell.italic(), cell.underline(), cell.inverse()]);
+        if this != look {
+            out.push_str(if this == default { "\x1b[m" } else { "" });
+            out.push_str(&sgr(cell));
+            look = this;
+        }
+        out.push_str(if cell.has_contents() { cell.contents() } else { " " });
+    }
+    if look != default {
+        out.push_str("\x1b[m");
+    }
+    (out, used as usize)
+}
+
+/// The SGR sequence for a cell's look (empty for the default one).
+fn sgr(cell: &vt100::Cell) -> String {
+    fn color(out: &mut Vec<String>, c: vt100::Color, base: u8) {
+        match c {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(i) if i < 8 => out.push((base + i).to_string()),
+            vt100::Color::Idx(i) if i < 16 => out.push((base + 60 + i - 8).to_string()),
+            vt100::Color::Idx(i) => out.push(format!("{};5;{i}", base + 8)),
+            vt100::Color::Rgb(r, g, b) => out.push(format!("{};2;{r};{g};{b}", base + 8)),
+        }
+    }
+    let mut parts = Vec::new();
+    for (on, code) in [(cell.bold(), "1"), (cell.dim(), "2"), (cell.italic(), "3"), (cell.underline(), "4"), (cell.inverse(), "7")] {
+        if on {
+            parts.push(code.to_string());
+        }
+    }
+    color(&mut parts, cell.fgcolor(), 30);
+    color(&mut parts, cell.bgcolor(), 40);
+    if parts.is_empty() { String::new() } else { format!("\x1b[0;{}m", parts.join(";")) }
+}
+
+/// Resize, re-wrapping the main screen's lines (and the scrollback) to the
+/// new width, as a terminal does: vt100 cuts rows to a narrower width for
+/// good, so text a split hid stayed cut off when it closed. A program on
+/// the alternate screen redraws itself.
+pub fn reflow<CB: vt100::Callbacks>(p: &mut vt100::Parser<CB>, rows: u16, cols: u16) {
+    let old_cols = p.screen().size().1.get();
+    if cols == old_cols || p.screen().alternate_screen() {
+        return p.set_size(nz(rows), nz(cols));
+    }
+    let (lines, cursor) = logical_lines(p, true, true);
+    let attrs = p.screen().attributes_formatted();
+    p.screen_mut().clear_scrollback();
+    p.process(b"\x1b[m\x1b[H\x1b[2J");
+    p.set_size(nz(rows), nz(cols));
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            p.process(b"\r\n");
+        }
+        p.process(line.text.as_bytes());
+    }
+    // The cursor goes where it was in its line, counting from the bottom
+    // (the top may have scrolled out of the scrollback).
+    if let Some((at, into)) = cursor {
+        let cols = cols.max(1) as usize;
+        let span = |w: usize| w.div_ceil(cols).max(1) as isize;
+        let below: isize = lines[at + 1..].iter().map(|l| span(l.width)).sum();
+        let start = p.screen().cursor_position().0 as isize - below - (span(lines[at].width) - 1);
+        let row = (start + (into / cols) as isize).clamp(0, rows.max(1) as isize - 1);
+        p.process(format!("\x1b[{};{}H", row + 1, into % cols + 1).as_bytes());
+    }
+    p.process(attrs.as_bytes());
 }
 
 /// The same rows as plain text, for reading in an editor.
@@ -399,7 +547,7 @@ impl Pane {
             pixel_width: 0,
             pixel_height: 0,
         });
-        self.parser.set_size(nz(rows), nz(cols));
+        reflow(&mut self.parser, rows.max(1), cols.max(1));
     }
 
     /// Forward client keystrokes, adapting them to the modes the app asked for.
@@ -693,6 +841,47 @@ mod tests {
         assert!(history_text(&mut r).trim_end().ends_with("── restored ──"));
         p.process(b"\x1b[?1049hfullscreen app");
         assert!(!history_text(&mut p).contains("fullscreen app"));
+    }
+
+    fn screen_lines(p: &vt100::Parser<Term>) -> Vec<String> {
+        p.screen().rows(0, p.screen().size().1.get()).map(|r| r.trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn a_narrowed_pane_gets_its_text_back_when_it_widens() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(6), nz(30), 100, Term::default());
+        p.process(b"\x1b[32mpublishing I'm Not a Robot Shirt\x1b[m (f8d03cc)\r\n$ ");
+        reflow(&mut p, 6, 12);
+        assert_eq!(screen_lines(&p)[..5], ["publishing I", "'m Not a Rob", "ot Shirt (f8", "d03cc)", "$"]);
+        assert_eq!(p.screen().cursor_position(), (4, 2), "the cursor stays after the prompt");
+        reflow(&mut p, 6, 50);
+        assert_eq!(screen_lines(&p)[..2], ["publishing I'm Not a Robot Shirt (f8d03cc)", "$"]);
+        assert_eq!(p.screen().cursor_position(), (1, 2));
+        assert_eq!(p.screen().cell(0, 0).unwrap().fgcolor(), vt100::Color::Idx(2), "colours kept");
+        // Typing carries on where the cursor is.
+        p.process(b"ls");
+        assert_eq!(screen_lines(&p)[1], "$ ls");
+    }
+
+    #[test]
+    fn reflow_keeps_the_scrollback_and_the_bottom_line() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(4), nz(20), 100, Term::default());
+        for i in 0..10 {
+            p.process(format!("line {i} is longish\r\n").as_bytes());
+        }
+        p.process(b"$ ");
+        reflow(&mut p, 4, 10);
+        reflow(&mut p, 4, 20);
+        let text = history_text(&mut p);
+        for i in 0..10 {
+            assert!(text.contains(&format!("line {i} is longish\n")), "{text}");
+        }
+        assert_eq!(screen_lines(&p)[3], "$");
+        assert_eq!(p.screen().cursor_position(), (3, 2));
+        // The alternate screen is left to its program.
+        p.process(b"\x1b[?1049hfull");
+        reflow(&mut p, 4, 8);
+        assert_eq!(screen_lines(&p)[0], "full");
     }
 
     #[test]
