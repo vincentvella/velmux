@@ -12,6 +12,8 @@ What changed in each release of velmux. Each version links to its release
   output. Panes now re-wrap their lines and scrollback on resize, as a
   terminal does, and saved history keeps wrapped lines whole so it re-wraps
   when restored.
+- On Windows, `velmux move <path>` into a slot landed in the repo's checkout
+  instead: the path kept Windows' `\\?\` prefix and matched no slot.
 
 ### Changed
 

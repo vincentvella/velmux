@@ -208,8 +208,9 @@ fn run() -> Result<()> {
         }
         Some(Cmd::Move { to }) => {
             let Some(pane) = velmux_tui::current_pane() else { anyhow::bail!("velmux move runs inside a velmux pane") };
-            // A path is the server's to resolve from anywhere, so it goes absolute.
-            let to = match std::fs::canonicalize(&to) {
+            // A path is the server's to resolve from anywhere, so it goes absolute
+            // (without Windows' `\\?\` prefix, or it matches no slot's path).
+            let to = match Path::new(&to).canonical() {
                 Ok(path) => path.display().to_string(),
                 Err(_) => to,
             };
