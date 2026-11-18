@@ -1308,9 +1308,9 @@ fn a_released_workstream_comes_back_whole() {
     env.until("both branches back in slots", || slot_on(&app, "feat/a").is_some() && slot_on(&api, "feat/b").is_some());
     ui.wait_for(" app");
     ui.wait_for(" api");
+    // (A slot shows as claimed a moment before its parked work is back in it.)
     for (repo, branch) in [(&app, "feat/a"), (&api, "feat/b")] {
-        let slot = slot_on(repo, branch).unwrap();
-        assert!(Path::new(slot["path"].as_str().unwrap()).join("wip.txt").exists(), "its uncommitted work came back");
+        env.until("its uncommitted work to come back", || slot_on(repo, branch).is_some_and(|s| Path::new(s["path"].as_str().unwrap()).join("wip.txt").exists()));
     }
     ui.wait_gone_text("◌ pair");
     // In the folder it had, its Claude resumed: the same conversation.
@@ -1813,6 +1813,8 @@ fn quitting_asks_first() {
     env.until("the server to stop", || !env.velmux(&repo, &["panes", "--json"]).status.success());
 }
 
+// (On Windows a restart can't hand the panes over: it restarts them.)
+#[cfg(unix)]
 #[test]
 fn restarting_from_the_keys_keeps_the_panes() {
     let env = Env::new();
