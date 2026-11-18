@@ -1501,3 +1501,343 @@ fn focus_follows_the_mouse_when_turned_on() {
     env.until("focus to follow it back right", || focused() == right);
     assert_ne!(left, right);
 }
+
+#[test]
+fn tabs_open_switch_and_rename() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.line("echo first-tab");
+    ui.wait_for("first-tab");
+    // A new tab: a shell of its own.
+    ui.prefix("t");
+    env.until("the new tab", || !ui.screen().contains("first-tab"));
+    ui.wait_for(PROMPT);
+    ui.line("echo second-tab");
+    ui.wait_for("second-tab");
+    // Next (wrapping round), back to the last one, and previous.
+    ui.prefix("\t");
+    ui.wait_for("first-tab");
+    ui.prefix(";");
+    ui.wait_for("second-tab");
+    ui.prefix("\x1b[Z");
+    ui.wait_for("first-tab");
+    // Named, it shows in the tab bar.
+    ui.prefix("T");
+    ui.wait_for("rename tab 1");
+    ui.line("logs");
+    ui.wait_for("logs");
+}
+
+#[test]
+fn panes_move_focus_and_resize_by_keys() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.prefix("|");
+    let debug = || String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).into_owned();
+    let focused = || debug().split_whitespace().nth(1).unwrap_or_default().to_string();
+    let width = || debug().split(" · ").find_map(|p| p.strip_prefix("parser ")).and_then(|s| s.split('x').next()).and_then(|w| w.parse::<u16>().ok()).unwrap_or(0);
+    env.until("the split", || env.json(&repo, &["panes", "--json"]).as_array().unwrap().len() == 2);
+    let right = focused();
+    // Arrows move focus between them; j and k cycle.
+    ui.prefix("\x1b[D");
+    env.until("focus to move left", || focused() != right);
+    let left = focused();
+    ui.prefix("\x1b[C");
+    env.until("focus back right", || focused() == right);
+    ui.prefix("j");
+    env.until("j to cycle", || focused() == left);
+    ui.prefix("k");
+    env.until("k to cycle back", || focused() == right);
+    // H and L move the divider: the focused (right) pane narrows, then widens.
+    let before = width();
+    ui.prefix("H");
+    env.until("the right pane to widen", || width() > before);
+    ui.prefix("L");
+    ui.prefix("L");
+    env.until("and narrow", || width() < before);
+}
+
+#[test]
+fn the_location_picker_goes_to_a_slot() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    assert!(env.velmux(&repo, &["claim", "feat/pick", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&repo);
+    ui.wait_for("feat/pick");
+    ui.prefix("w");
+    ui.send(b"pick");
+    ui.send(b"\r");
+    ui.wait_for("app › slot-1");
+    // Escape leaves it without going anywhere.
+    ui.prefix("w");
+    ui.send(b"zzz");
+    ui.send(b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(ui.screen().contains("app › slot-1"), "{}", ui.screen());
+}
+
+#[test]
+fn config_reloads_from_the_file_and_says_what_is_wrong() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    let config = env.root.join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap_or_default();
+    // A new prefix applies without a restart…
+    std::fs::write(&config, text.replace("prefix = \"C-a\"", "prefix = \"C-g\"")).unwrap();
+    ui.prefix("R");
+    ui.wait_for("config reloaded · prefix");
+    ui.send(b"\x07c");
+    ui.wait_for(PROMPT);
+    // …and a broken file keeps the old settings.
+    std::fs::write(&config, "prefix = [\n").unwrap();
+    ui.send(b"\x07R");
+    // (The sidebar's width of it: "config error, kept the old settings: …".)
+    env.until("the config error", || ui.screen().contains("config error") || ui.screen().contains("reload failed"));
+}
+
+#[test]
+fn the_theme_and_sound_pickers_save_what_you_pick() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    let config = env.root.join("config.toml");
+    ui.prefix("\x14"); // ctrl+t
+    ui.send(b"j");
+    ui.send(b"\r");
+    ui.wait_for("theme: ");
+    env.until("the theme saved", || std::fs::read_to_string(&config).is_ok_and(|t| t.contains("theme = ")));
+    // Sounds: kept as they are (moving would play them).
+    ui.prefix("m");
+    ui.click_on("sounds…", false);
+    ui.wait_for("blocked on you");
+    ui.send(b"\r");
+    ui.wait_for("sounds: ");
+    env.until("the sounds saved", || std::fs::read_to_string(&config).is_ok_and(|t| t.contains("done_sound")));
+}
+
+// (A POSIX shell script stands in for the editor.)
+#[cfg(unix)]
+#[test]
+fn scrollback_and_settings_open_in_your_editor() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let opened = env.root.join("edited.txt");
+    let editor = env.root.join("editor.sh");
+    std::fs::write(&editor, format!("#!/bin/sh\ncat \"$1\" >> '{}'\necho EDITED\n", opened.display())).unwrap();
+    env.run_in(&env.root, &format!("chmod +x '{}'", editor.display()));
+    let config = env.root.join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap_or_default();
+    std::fs::write(&config, format!("editor = \"{}\"\n{text}", editor.display())).unwrap();
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.line("echo in-the-history");
+    ui.wait_for("in-the-history");
+    // The pane's history, as text, in the editor (in a tab of its own).
+    ui.prefix("]");
+    env.until("the history in the editor", || std::fs::read_to_string(&opened).is_ok_and(|t| t.contains("in-the-history")));
+    // Settings: the config file, in the editor; closing it reloads.
+    ui.prefix("s");
+    env.until("the config in the editor", || std::fs::read_to_string(&opened).is_ok_and(|t| t.contains("editor = ")));
+    ui.wait_for("config reloaded");
+}
+
+#[test]
+fn attention_jumps_to_what_needs_you() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("o");
+    ui.wait_for("nothing needs you right now");
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    // A program that reports it needs you, then focus moves away from it.
+    ui.line("reporter");
+    ui.wait_for("FAKE-REPORTER");
+    ui.line("state error");
+    let pane = env.json(&repo, &["panes", "--json"])[0]["pane"].clone();
+    ui.prefix("|");
+    let focused = || env.json(&repo, &["panes", "--json"]).as_array().unwrap().iter().find(|p| p["focused"] == true).map(|p| p["pane"].clone());
+    env.until("the split to have focus", || focused().is_some_and(|f| f != pane));
+    ui.prefix("o");
+    env.until("attention to jump to it", || focused() == Some(pane.clone()));
+}
+
+#[test]
+fn a_herdr_session_is_imported_into_the_running_server() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.wait_for("app");
+    let session = serde_json::json!({
+        "version": 3,
+        "workspaces": [{
+            "custom_name": "App", "identity_cwd": repo, "active_tab": 0,
+            "tabs": [{
+                "layout": {"Split": {"direction": "Horizontal", "ratio": 0.5, "first": {"Pane": 1}, "second": {"Pane": 2}}},
+                "panes": {"1": {"cwd": repo}, "2": {"cwd": repo}},
+                "zoomed": false
+            }]
+        }]
+    });
+    let file = env.root.join("herdr.json");
+    std::fs::write(&file, session.to_string()).unwrap();
+    let out = env.velmux(&repo, &["import-herdr", "--file", file.to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{text}");
+    env.until("its two panes", || env.json(&repo, &["panes", "--json"]).as_array().unwrap().len() == 2);
+    // Again: velmux already has panes there, so it's skipped.
+    let out = env.velmux(&repo, &["import-herdr", "--file", file.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("already has panes there"), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn number_keys_jump_between_a_repos_places() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    assert!(env.velmux(&repo, &["init"]).status.success());
+    assert!(env.velmux(&repo, &["claim", "feat/one", "--no-fetch", "--no-install"]).status.success());
+    let ui = env.attach(&repo);
+    ui.wait_for("feat/one");
+    // 1: the first slot; 0: back to the checkout.
+    ui.prefix("1");
+    ui.wait_for("app › slot-1");
+    ui.wait_for("no panes");
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.prefix("0");
+    ui.wait_for("app › base");
+    // A free slot, or one there isn't, just says so.
+    ui.prefix("2");
+    ui.wait_for("slot-2 is free");
+    ui.prefix("9");
+    ui.wait_for("no slot-9");
+    // alt+N: the Nth place with panes open, across repos.
+    ui.prefix("\x1b1");
+    ui.wait_for("app › slot-1 · feat/one");
+    ui.prefix("\x1b9");
+    ui.wait_for("no location 9");
+}
+
+#[test]
+fn splits_down_move_focus_vertically_and_resize() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.prefix("-");
+    let debug = || String::from_utf8_lossy(&env.velmux(&repo, &["debug"]).stdout).into_owned();
+    let focused = || debug().split_whitespace().nth(1).unwrap_or_default().to_string();
+    let height = || debug().split(" · ").find_map(|p| p.strip_prefix("parser ")).and_then(|s| s.split('x').nth(1)).and_then(|h| h.parse::<u16>().ok()).unwrap_or(0);
+    env.until("the split", || env.json(&repo, &["panes", "--json"]).as_array().unwrap().len() == 2);
+    let bottom = focused();
+    ui.prefix("\x1b[A");
+    env.until("focus to move up", || focused() != bottom);
+    ui.prefix("\x1b[B");
+    env.until("focus back down", || focused() == bottom);
+    // K and J move the divider: the bottom pane grows, then shrinks.
+    let before = height();
+    ui.prefix("K");
+    env.until("the bottom pane to grow", || height() > before);
+    ui.prefix("J");
+    ui.prefix("J");
+    env.until("and shrink", || height() < before);
+}
+
+#[test]
+fn the_sidebar_hides_and_help_redraw_and_detach_work() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.wait_for("REPOS");
+    ui.prefix("b");
+    ui.wait_gone_text("REPOS");
+    ui.prefix("b");
+    ui.wait_for("REPOS");
+    // Help: every key after the prefix, until a key closes it.
+    ui.prefix("?");
+    ui.wait_for("split right");
+    ui.send(b"\x1b");
+    ui.wait_gone_text("split right");
+    ui.prefix("\x0c"); // ctrl+l
+    ui.wait_for("REPOS");
+    // Detach: the client leaves, the server (and its panes) stay.
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.prefix("d");
+    ui.wait_for("detached");
+    env.until("its pane still there", || env.json(&repo, &["panes", "--json"]).as_array().unwrap().len() == 1);
+    let ui = env.attach(&repo);
+    ui.wait_for("app › base · shell");
+}
+
+// (`cat -v` shows the byte it got.)
+#[cfg(unix)]
+#[test]
+fn the_prefix_twice_reaches_the_program() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.line("cat -v");
+    ui.prefix("\x01");
+    ui.send(b"\r");
+    ui.wait_for("^A");
+}
+
+#[test]
+fn quitting_asks_first() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.prefix("Q");
+    ui.wait_for("stop the server?");
+    ui.send(b"n");
+    ui.wait_gone_text("stop the server?");
+    assert!(env.velmux(&repo, &["panes", "--json"]).status.success(), "still running");
+    ui.prefix("Q");
+    ui.wait_for("stop the server?");
+    ui.send(b"y");
+    env.until("the server to stop", || !env.velmux(&repo, &["panes", "--json"]).status.success());
+}
+
+#[test]
+fn restarting_from_the_keys_keeps_the_panes() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    ui.line("echo before-restart");
+    ui.wait_for("before-restart");
+    let pane = env.json(&repo, &["panes", "--json"])[0]["pane"].clone();
+    ui.prefix("\x12"); // ctrl+r
+    ui.wait_for("restarted");
+    assert_eq!(env.json(&repo, &["panes", "--json"])[0]["pane"], pane, "the same pane, still running");
+    ui.line("echo after-restart");
+    ui.wait_for("after-restart");
+}
+
+#[test]
+fn a_scratch_session_opens_from_the_keys() {
+    let env = Env::new();
+    let repo = env.repo("app");
+    let ui = env.attach(&repo);
+    ui.prefix("S");
+    ui.wait_for("scratch");
+    ui.wait_for(PROMPT);
+    ui.prefix("S");
+    ui.wait_for("scratch-2");
+}
