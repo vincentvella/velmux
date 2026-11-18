@@ -885,6 +885,58 @@ mod tests {
     }
 
     #[test]
+    fn history_saved_at_one_width_rewraps_at_another() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(4), nz(10), 100, Term::default());
+        p.process(b"abcdefghijklmnop\r\nshort\r\n$ ");
+        let dump = history_formatted(&mut p, true);
+        let mut q = vt100::Parser::new_with_callbacks(nz(4), nz(30), 100, Term::default());
+        replay_history(&mut q, &dump, None);
+        let text = history_text(&mut q);
+        assert!(text.contains("abcdefghijklmnop\nshort\n"), "the wrapped line is whole again:\n{text}");
+    }
+
+    #[test]
+    fn wide_characters_rewrap_without_losing_or_adding_any() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(4), nz(9), 100, Term::default());
+        let mut q = vt100::Parser::new_with_callbacks(nz(4), nz(10), 100, Term::default());
+        q.process("漢字漢字漢字ok".as_bytes());
+        reflow(&mut q, 4, 20);
+        assert_eq!(screen_lines(&q)[0], "漢字漢字漢字ok");
+        reflow(&mut q, 4, 6);
+        assert_eq!(screen_lines(&q)[..3], ["漢字漢", "字漢字", "ok"]);
+        // At 9 columns the fifth doesn't fit and wraps with a column left over,
+        // which vt100 (like tmux) doesn't mark as a wrap: it stays a line break,
+        // but nothing is lost or added.
+        p.process("漢字漢字漢字ok".as_bytes());
+        reflow(&mut p, 4, 20);
+        assert_eq!(screen_lines(&p)[..2], ["漢字漢字", "漢字ok"]);
+    }
+
+    #[test]
+    fn the_cursor_keeps_its_place_with_lines_below_it() {
+        // An agent's input box above a status line: the cursor isn't on the last line.
+        let mut p = vt100::Parser::new_with_callbacks(nz(6), nz(20), 100, Term::default());
+        p.process(b"output line\r\n> typing here\r\nstatus: idle\x1b[2;9H");
+        reflow(&mut p, 6, 8);
+        let lines = screen_lines(&p);
+        assert_eq!(lines[..5], ["output l", "ine", "> typing", " here", "status:"]);
+        assert_eq!(p.screen().cursor_position(), (3, 0), "still just after \"> typing\"");
+        reflow(&mut p, 6, 20);
+        assert_eq!(p.screen().cursor_position(), (1, 8));
+    }
+
+    #[test]
+    fn coloured_backgrounds_survive_a_reflow() {
+        let mut p = vt100::Parser::new_with_callbacks(nz(4), nz(20), 100, Term::default());
+        // A highlighted bar: blanks with a background still count.
+        p.process(b"\x1b[44m bar   \x1b[m\r\n$ ");
+        reflow(&mut p, 4, 10);
+        reflow(&mut p, 4, 20);
+        assert_eq!(p.screen().cell(0, 5).unwrap().bgcolor(), vt100::Color::Idx(4));
+        assert_eq!(p.screen().cell(0, 7).unwrap().bgcolor(), vt100::Color::Default);
+    }
+
+    #[test]
     fn answers_terminal_queries() {
         assert_eq!(term(b"\x1b[3;7H\x1b[6n"), b"\x1b[3;7R");
         assert_eq!(term(b"\x1b[5n"), b"\x1b[0n");
