@@ -1843,3 +1843,134 @@ fn a_scratch_session_opens_from_the_keys() {
     ui.prefix("S");
     ui.wait_for("scratch-2");
 }
+
+#[test]
+fn a_slots_pr_opens_its_checks_copies_its_link_and_sends_failures_to_claude() {
+    let env = Env::new();
+    let app = env.repo("app");
+    env.run_in(&app, "git remote add origin https://github.com/acme/app.git");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    let prs = r#"[{"headRefName":"feat/a","number":11,"url":"https://github.com/acme/app/pull/11","state":"OPEN","isDraft":false,
+      "statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}]"#;
+    std::fs::write(env.root.join("prs.json"), prs).unwrap();
+    let ui = env.attach(&app);
+    // Away from a slot there's no PR to open.
+    ui.prefix("P");
+    ui.wait_for("focus a slot");
+    // A Claude claims the slot (and works there).
+    ui.prefix("a");
+    ui.claude_id();
+    ui.line("claim feat/a --no-fetch --no-install");
+    ui.wait_for("#11✗");
+    let opened = env.root.join("opened.txt");
+    let opened_has = |s: &str| std::fs::read_to_string(&opened).unwrap_or_default().contains(s);
+    let menu = |item: &str| {
+        ui.click_on("feat/a", true);
+        ui.click_on(item, false);
+    };
+    menu("open checks");
+    env.until("its checks to open", || opened_has("acme/app/pull/11/checks"));
+    menu("copy PR link");
+    ui.wait_for("PR link copied");
+    menu("open in browser");
+    env.until("its port to open", || opened_has("http://localhost:"));
+    // The failures go to the slot's Claude, as a prompt.
+    menu("send failures to Claude");
+    ui.wait_for("CI failed on PR #11 (lint)");
+    // P: the PR itself.
+    ui.prefix("P");
+    env.until("the PR to open", || opened_has("acme/app/pull/11\n"));
+}
+
+#[test]
+fn a_branch_without_a_pr_is_pushed_for_one() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let bare = env.root.join("remotes/app.git");
+    env.run_in(&app, &format!("git clone -q --bare . '{0}' && git remote add origin '{0}' && git fetch -q origin", bare.display()));
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/n", "--no-fetch", "--no-install"]).status.success());
+    let slot = env.slot(&app, "slot-1");
+    env.run_in(Path::new(slot["path"].as_str().unwrap()), "echo n > n && git add n && git commit -qm n");
+    let ui = env.attach(&app);
+    ui.click_on("feat/n", false);
+    ui.wait_for("app › slot-1");
+    ui.prefix("P");
+    ui.wait_for("pushed feat/n");
+    let out = Command::new("git").args(["ls-remote", "--heads"]).arg(&bare).arg("feat/n").output().unwrap();
+    assert!(!out.stdout.is_empty(), "the branch is on the remote");
+}
+
+#[test]
+fn velmux_move_puts_a_pane_where_you_say() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/m", "--no-fetch", "--no-install"]).status.success());
+    let slot_path = env.slot(&app, "slot-1")["path"].as_str().unwrap().to_string();
+    let ui = env.attach(&app);
+    ui.prefix("c");
+    ui.wait_for(PROMPT);
+    let place = || env.json(&app, &["panes", "--json"])[0]["place"].as_str().unwrap_or_default().to_string();
+    // A branch a slot has, the repo, repo/slot, a path in a slot, the repo's path.
+    for (to, want) in [("feat/m", "slot-1"), ("app", "base"), ("app/slot-1", "slot-1"), ("app", "base"), (slot_path.as_str(), "slot-1"), (app.to_str().unwrap(), "base")] {
+        ui.line(&format!("velmux move '{to}'"));
+        env.until(&format!("the pane to move to {want} (velmux move {to})"), || place().contains(want));
+    }
+    ui.line("velmux move nowhere");
+    ui.wait_for("no place \"nowhere\"");
+    // Claiming a branch a slot already has: the pane goes there.
+    ui.line("velmux claim feat/m --no-fetch");
+    env.until("the pane in feat/m's slot", || place().contains("slot-1"));
+    assert_eq!(env.slot(&app, "slot-2")["status"], "free", "no second slot for it");
+}
+
+#[test]
+fn a_slot_syncs_from_its_keys_and_all_slots_from_the_repos_menu() {
+    let env = Env::new();
+    let app = env.repo("app");
+    assert!(env.velmux(&app, &["init"]).status.success());
+    for branch in ["feat/x", "feat/y"] {
+        assert!(env.velmux(&app, &["claim", branch, "--no-fetch", "--no-install"]).status.success());
+    }
+    let ui = env.attach(&app);
+    ui.prefix("u");
+    ui.wait_for("focus a slot");
+    env.run_in(&app, "echo more > more.txt && git add -A && git commit -qm more");
+    env.until("both slots behind", || env.slot(&app, "slot-1")["behind"] == 1 && env.slot(&app, "slot-2")["behind"] == 1);
+    // u in a slot syncs that one…
+    ui.click_on("feat/x", false);
+    ui.wait_for("app › slot-1");
+    ui.prefix("u");
+    env.until("slot-1 synced", || env.slot(&app, "slot-1")["behind"] == 0);
+    assert_eq!(env.slot(&app, "slot-2")["behind"], 1, "only that one");
+    // …and the repo's menu syncs every slot that's behind.
+    env.run_in(&app, "echo again > again.txt && git add -A && git commit -qm again");
+    env.until("both behind again", || env.slot(&app, "slot-1")["behind"] == 1 && env.slot(&app, "slot-2")["behind"] == 2);
+    ui.wait_for("↓2");
+    ui.click_on(" app", true);
+    ui.click_on("sync all slots", false);
+    env.until("both synced", || env.slot(&app, "slot-1")["behind"] == 0 && env.slot(&app, "slot-2")["behind"] == 0);
+}
+
+#[test]
+fn a_fetch_that_fast_forwards_the_checkout_says_which_slots_fell_behind() {
+    let env = Env::new();
+    let app = env.repo("app");
+    let bare = env.root.join("remotes/app.git");
+    env.run_in(&app, &format!("git clone -q --bare . '{0}' && git remote add origin '{0}' && git fetch -q origin && git branch -q -u origin/main", bare.display()));
+    let config = env.root.join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replace("fetch_every = 0", "fetch_every = 1")).unwrap();
+    assert!(env.velmux(&app, &["init"]).status.success());
+    assert!(env.velmux(&app, &["claim", "feat/f", "--no-fetch", "--no-install"]).status.success());
+    // Someone else pushes to main.
+    let other = env.root.join("other");
+    env.run_in(&env.root, &format!("git clone -q '{}' '{}'", bare.display(), other.display()));
+    env.run_in(&other, "git -c user.name=o -c user.email=o@o commit -q --allow-empty -m theirs && git push -q origin HEAD:main");
+    // The first fetch, when velmux starts, brings the checkout up to date.
+    let ui = env.attach(&app);
+    ui.wait_for("fast-forwarded 1 commit");
+    env.until("the checkout to have it", || env.run_in(&app, "git log -1 --format=%s").trim() == "theirs");
+    ui.wait_for("slot-1 is behind");
+}
