@@ -778,7 +778,8 @@ fn a_workstream_groups_slots_from_several_repos() {
     env.until("its CLAUDE.md to list the slot", || std::fs::read_to_string(dir.join("CLAUDE.md")).is_ok_and(|t| t.contains("## app/")));
     // Its one Claude started with it; it claims a slot in another repo into it.
     ui.claude_id();
-    ui.line(&format!("sh velmux claim feat/b --repo {} --no-fetch", api.display()));
+    // (Forward slashes: `sh` would eat a Windows path's backslashes.)
+    ui.line(&format!("sh velmux claim feat/b --repo {} --no-fetch", api.display().to_string().replace('\\', "/")));
     ui.wait_for("into the workstream checkout");
     ui.wait_for("@1 api");
     let api_slot = env.slot(&api, "slot-1");
